@@ -1,0 +1,1800 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API 客户端 - Web 界面</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+        }
+
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        body.dark-theme {
+            background: #1a1a2e;
+        }
+
+        .app-container {
+            width: 100%;
+            max-width: 1200px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 40px);
+        }
+
+        .dark-theme .app-container {
+            background: #2d3748;
+            color: #e2e8f0;
+        }
+
+        .header {
+            background: linear-gradient(90deg, #4f46e5, #7c3aed);
+            color: white;
+            padding: 20px 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .dark-theme .header {
+            background: linear-gradient(90deg, #2d3748, #4a5568);
+        }
+
+        .header h1 {
+            font-size: 24px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .header-controls {
+            display: flex;
+            gap: 10px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-1px);
+        }
+
+        .dark-theme .btn {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .mode-btn {
+            background: rgba(255, 255, 255, 0.3);
+            font-weight: 600;
+        }
+
+        .mode-btn.active {
+            background: rgba(255, 255, 255, 0.5);
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.3);
+        }
+
+        .main-content {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+        }
+
+        .chat-container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            padding: 20px;
+            overflow: hidden;
+        }
+
+        .messages-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            margin-bottom: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .dark-theme .messages-container {
+            background: #1a202c;
+        }
+
+        .message {
+            max-width: 90%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            position: relative;
+            animation: fadeIn 0.3s ease;
+            word-wrap: break-word;
+            word-break: break-word;
+            overflow-wrap: break-word;
+            line-height: 1.5;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message-user {
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+
+        .dark-theme .message-user {
+            background: linear-gradient(135deg, #2d3748, #4a5568);
+        }
+
+        .message-response {
+            background: #f0f9ff;
+            color: #1a365d;
+            border: 1px solid #bee3f8;
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+        }
+
+        .dark-theme .message-response {
+            background: #2d4362;
+            color: #ebf8ff;
+            border-color: #4a5568;
+        }
+
+        .message-error {
+            background: #fee2e2;
+            color: #dc2626;
+            border: 1px solid #fca5a5;
+            align-self: flex-start;
+        }
+
+        .dark-theme .message-error {
+            background: #742a2a;
+            color: #feb2b2;
+            border-color: #9b2c2c;
+        }
+
+        .message-header {
+            font-size: 11px;
+            opacity: 0.8;
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .message-content {
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-wrap: break-word;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .message-content pre {
+            margin: 0;
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-wrap: break-word;
+        }
+
+        /* 流式响应样式 */
+        .streaming-response {
+            min-height: 20px;
+            position: relative;
+        }
+
+        .cursor {
+            display: inline-block;
+            width: 2px;
+            height: 1em;
+            background-color: #4f46e5;
+            margin-left: 2px;
+            animation: blink 1s infinite;
+            vertical-align: middle;
+        }
+
+        .dark-theme .cursor {
+            background-color: #63b3ed;
+        }
+
+        @keyframes blink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
+
+        /* 流式内容容器 */
+        .stream-content {
+            display: inline;
+            word-break: break-word;
+            white-space: pre-wrap;
+        }
+
+        /* 指标测量样式 */
+        .metrics-container {
+            background: #f8f9fa;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 15px;
+        }
+
+        .dark-theme .metrics-container {
+            background: #1a202c;
+            border-color: #4a5568;
+        }
+
+        .metrics-container h4 {
+            color: #4f46e5;
+            font-size: 14px;
+            margin-bottom: 10px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .dark-theme .metrics-container h4 {
+            color: #90cdf4;
+        }
+
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+
+        .metric-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .metric-label {
+            font-size: 10px;
+            color: #6b7280;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .dark-theme .metric-label {
+            color: #a0aec0;
+        }
+
+        .metric-value {
+            font-size: 13px;
+            color: #1f2937;
+            font-weight: 600;
+            font-family: 'Monaco', 'Menlo', monospace;
+            padding: 2px 0;
+        }
+
+        .dark-theme .metric-value {
+            color: #e2e8f0;
+        }
+
+        .metric-unit {
+            font-size: 10px;
+            color: #9ca3af;
+            margin-left: 2px;
+        }
+
+        .dark-theme .metric-unit {
+            color: #a0aec0;
+        }
+
+        .input-container {
+            display: flex;
+            gap: 10px;
+            padding: 15px;
+            background: white;
+            border-top: 1px solid #e5e7eb;
+        }
+
+        .dark-theme .input-container {
+            background: #2d3748;
+            border-top-color: #4a5568;
+        }
+
+        .input-wrapper {
+            flex: 1;
+            position: relative;
+        }
+
+        #command-input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            font-size: 14px;
+            font-family: 'Monaco', 'Menlo', monospace;
+            resize: none;
+            outline: none;
+            transition: border-color 0.3s;
+            min-height: 56px;
+            max-height: 120px;
+            background: white;
+            color: #333;
+        }
+
+        .dark-theme #command-input {
+            background: #1a202c;
+            color: #e2e8f0;
+            border-color: #4a5568;
+        }
+
+        #command-input:focus {
+            border-color: #4f46e5;
+        }
+
+        .dark-theme #command-input:focus {
+            border-color: #63b3ed;
+        }
+
+        .chat-input {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        }
+
+        .chat-input::placeholder {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        }
+
+        #send-button {
+            padding: 0 25px;
+            background: linear-gradient(135deg, #4f46e5, #7c3aed);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: 600;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        #send-button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(79, 70, 229, 0.4);
+        }
+
+        #send-button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .dark-theme #send-button {
+            background: linear-gradient(135deg, #2d3748, #4a5568);
+        }
+
+        .sidebar {
+            width: 300px;
+            background: white;
+            border-left: 1px solid #e5e7eb;
+            padding: 20px;
+            overflow-y: auto;
+        }
+
+        .dark-theme .sidebar {
+            background: #2d3748;
+            border-left-color: #4a5568;
+        }
+
+        .sidebar-section {
+            margin-bottom: 25px;
+        }
+
+        .dark-theme .sidebar-section h3 {
+            color: #e2e8f0;
+            border-bottom-color: #4a5568;
+        }
+
+        .sidebar-section h3 {
+            color: #4f46e5;
+            font-size: 16px;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid #e5e7eb;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .example-item {
+            background: #f8f9fa;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .example-item:hover {
+            background: #eef2ff;
+            border-color: #4f46e5;
+            transform: translateX(3px);
+        }
+
+        .dark-theme .example-item {
+            background: #1a202c;
+            border-color: #4a5568;
+            color: #e2e8f0;
+        }
+
+        .dark-theme .example-item:hover {
+            background: #2d3748;
+            border-color: #63b3ed;
+        }
+
+        .example-item h4 {
+            color: #4f46e5;
+            font-size: 13px;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+
+        .dark-theme .example-item h4 {
+            color: #90cdf4;
+        }
+
+        .example-item p {
+            font-size: 11px;
+            color: #6b7280;
+            margin-bottom: 8px;
+            line-height: 1.4;
+        }
+
+        .dark-theme .example-item p {
+            color: #a0aec0;
+        }
+
+        .example-item pre {
+            background: #1e293b;
+            color: #e2e8f0;
+            padding: 8px;
+            border-radius: 6px;
+            font-size: 11px;
+            overflow-x: auto;
+            margin: 0;
+            font-family: 'Monaco', 'Menlo', monospace;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        /* 参数设置样式 */
+        .param-form {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .param-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .param-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+
+        .param-label {
+            font-size: 12px;
+            color: #4f46e5;
+            font-weight: 500;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            width: 100%;
+        }
+
+        .dark-theme .param-label {
+            color: #90cdf4;
+        }
+
+        .param-value {
+            font-size: 11px;
+            color: #6b7280;
+            background: #f3f4f6;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        .dark-theme .param-value {
+            color: #a0aec0;
+            background: #374151;
+        }
+
+        .param-input {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 13px;
+            background: white;
+            color: #333;
+            outline: none;
+        }
+
+        .dark-theme .param-input {
+            background: #1a202c;
+            color: #e2e8f0;
+            border-color: #4a5568;
+        }
+
+        .param-input:focus {
+            border-color: #4f46e5;
+            box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.1);
+        }
+
+        .dark-theme .param-input:focus {
+            border-color: #63b3ed;
+        }
+
+        .param-select {
+            width: 100%;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 13px;
+            background: white;
+            color: #333;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .dark-theme .param-select {
+            background: #1a202c;
+            color: #e2e8f0;
+            border-color: #4a5568;
+        }
+
+        .checkbox-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 4px;
+        }
+
+        .checkbox-input {
+            width: 16px;
+            height: 16px;
+            cursor: pointer;
+        }
+
+        .checkbox-label {
+            font-size: 12px;
+            color: #4f46e5;
+            font-weight: 500;
+            cursor: pointer;
+        }
+
+        .dark-theme .checkbox-label {
+            color: #90cdf4;
+        }
+
+        .checkbox-description {
+            font-size: 11px;
+            color: #6b7280;
+            margin-left: 24px;
+            margin-bottom: 4px;
+        }
+
+        .dark-theme .checkbox-description {
+            color: #a0aec0;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #10b981;
+            margin-right: 5px;
+        }
+
+        .status-indicator.idle {
+            background: #6b7280;
+        }
+
+        .status-indicator.processing {
+            background: #f59e0b;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .typing-indicator {
+            display: flex;
+            gap: 4px;
+            padding: 15px;
+            background: white;
+            border: 1px solid #e5e7eb;
+            border-radius: 12px;
+            align-self: flex-start;
+        }
+
+        .dark-theme .typing-indicator {
+            background: #2d3748;
+            border-color: #4a5568;
+        }
+
+        .typing-dot {
+            width: 8px;
+            height: 8px;
+            background: #9ca3af;
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing-dot:nth-child(2) { animation-delay: 0.2s; }
+        .typing-dot:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-10px); }
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #9ca3af;
+            display: block;
+        }
+
+        .dark-theme .empty-state {
+            color: #a0aec0;
+        }
+
+        .empty-state i {
+            font-size: 48px;
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+
+        .empty-state h3 {
+            font-size: 18px;
+            margin-bottom: 10px;
+            color: #4f46e5;
+        }
+
+        .dark-theme .empty-state h3 {
+            color: #90cdf4;
+        }
+
+        .empty-state p {
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        /* 模式指示器 */
+        .mode-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            font-size: 11px;
+            margin-left: 8px;
+        }
+
+        .dark-theme .mode-indicator {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        /* 输入验证样式 */
+        .param-input.valid {
+            border-color: #10b981;
+        }
+
+        .param-input.invalid {
+            border-color: #dc2626;
+            box-shadow: 0 0 0 2px rgba(220, 38, 38, 0.1);
+        }
+
+        .error-message {
+            color: #dc2626;
+            font-size: 11px;
+            margin-top: 2px;
+            display: none;
+        }
+
+        .dark-theme .error-message {
+            color: #fca5a5;
+        }
+
+        /* 滚动条样式 */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 4px;
+        }
+
+        .dark-theme ::-webkit-scrollbar-track {
+            background: #2d3748;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+
+        .dark-theme ::-webkit-scrollbar-thumb {
+            background: #4a5568;
+        }
+
+        .dark-theme ::-webkit-scrollbar-thumb:hover {
+            background: #718096;
+        }
+
+        @media (max-width: 768px) {
+            .main-content {
+                flex-direction: column;
+            }
+
+            .sidebar {
+                width: 100%;
+                border-left: none;
+                border-top: 1px solid #e5e7eb;
+            }
+
+            .dark-theme .sidebar {
+                border-top-color: #4a5568;
+            }
+
+            .message {
+                max-width: 95%;
+            }
+
+            .metrics-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="app-container">
+        <div class="header">
+            <h1>
+                <i class="fas fa-terminal"></i>
+                API 客户端 - Web 界面
+                <span id="mode-indicator" class="mode-indicator">
+                    <i class="fas fa-comment"></i> 聊天模式
+                </span>
+            </h1>
+            <div class="header-controls">
+                <button class="btn" id="mode-toggle">
+                    <i class="fas fa-code"></i>
+                    切换到控制台模式
+                </button>
+                <button class="btn" id="clear-btn">
+                    <i class="fas fa-trash-alt"></i>
+                    清空历史
+                </button>
+                <button class="btn" id="theme-btn">
+                    <i class="fas fa-moon"></i>
+                    暗色模式
+                </button>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div class="chat-container">
+                <div class="messages-container" id="messages-container">
+                    <div class="empty-state" id="empty-state">
+                        <i class="fas fa-comments"></i>
+                        <h3>欢迎使用 API 客户端</h3>
+                        <p id="empty-state-desc">在下方输入您的问题开始对话，右侧可配置参数</p>
+                    </div>
+                </div>
+
+                <div class="input-container">
+                    <div class="input-wrapper">
+                        <textarea
+                            id="command-input"
+                            placeholder="请输入您的问题或对话内容..."
+                            rows="3"
+                            class="chat-input"
+                        ></textarea>
+                    </div>
+                    <button id="send-button">
+                        <i class="fas fa-paper-plane"></i>
+                        发送
+                        <span id="status-indicator" class="status-indicator idle"></span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="sidebar">
+                <!-- 控制台模式侧边栏内容 -->
+                <div id="console-sidebar" class="sidebar-content" style="display: none;">
+                    <div class="sidebar-section">
+                        <h3><i class="fas fa-lightbulb"></i> 示例命令</h3>
+                        <div id="examples-container"></div>
+                    </div>
+
+                    <div class="sidebar-section">
+                        <h3><i class="fas fa-info-circle"></i> 使用说明</h3>
+                        <div class="example-item">
+                            <h4>命令格式</h4>
+                            <p>URL 必须在第一个位置，支持 -H 添加头部，-d 添加数据</p>
+                            <pre>URL -H "Header: Value" -d '{"json": "data"}'</pre>
+                        </div>
+                        <div class="example-item">
+                            <h4>快捷操作</h4>
+                            <p>• Enter: 发送命令 (Shift+Enter 换行)</p>
+                            <p>• Ctrl+↑/↓: 历史命令导航</p>
+                            <p>• 点击示例: 自动填充命令</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 聊天模式侧边栏内容 -->
+                <div id="chat-sidebar" class="sidebar-content">
+                    <div class="sidebar-section">
+                        <h3><i class="fas fa-sliders-h"></i> 参数配置</h3>
+                        <form id="params-form" class="param-form">
+                            <div class="param-group">
+                                <label class="param-label">
+                                    <span>模型路径</span>
+                                </label>
+                                <input type="text" id="model-input" class="param-input" value="/workspace/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B">
+                                <div class="checkbox-description">填写模型的完整路径</div>
+                            </div>
+
+                            <div class="param-group">
+                                <label class="param-label">
+                                    <span>API服务器地址</span>
+                                </label>
+                                <input type="text" id="server-url" class="param-input" value="http://127.0.0.1:5000">
+                                <div class="checkbox-description">API服务器的地址和端口</div>
+                            </div>
+
+                            <div class="param-group">
+                                <label class="param-label">
+                                    <span>请求模式</span>
+                                </label>
+                                <div class="radio-group">
+                                    <label class="radio-label">
+                                        <input type="radio" name="chat-mode" value="chat" checked class="radio-input">
+                                        <span>Chat 模式</span>
+                                    </label>
+                                    <label class="radio-label">
+                                        <input type="radio" name="chat-mode" value="completions" class="radio-input">
+                                        <span>Completions 模式</span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="param-group">
+                                <label class="param-label">
+                                    <span>流式传输</span>
+                                </label>
+                                <div class="radio-group">
+                                    <label class="radio-label">
+                                        <input type="radio" name="stream" value="True" class="radio-input">
+                                        <span>启用</span>
+                                    </label>
+                                    <label class="radio-label">
+                                        <input type="radio" name="stream" value="False" checked class="radio-input">
+                                        <span>禁用</span>
+                                    </label>
+                                </div>
+                                <div class="checkbox-description">仅Chat模式支持流式传输</div>
+                            </div>
+
+                            <div class="param-group">
+                                <div class="checkbox-group">
+                                    <input type="checkbox" id="use-temperature" class="checkbox-input" checked>
+                                    <label for="use-temperature" class="checkbox-label">温度 (Temperature)</label>
+                                </div>
+                                <input type="number" id="temp-input" class="param-input" value="0.7" min="0" max="2" step="0.1" style="margin-left: 24px;">
+                                <div class="checkbox-description">控制随机性，值越高输出越随机 (0-2)</div>
+                                <div id="temp-error" class="error-message">温度值必须在0到2之间</div>
+                            </div>
+
+                            <div class="param-group">
+                                <div class="checkbox-group">
+                                    <input type="checkbox" id="use-top-p" class="checkbox-input" checked>
+                                    <label for="use-top-p" class="checkbox-label">Top-P 采样</label>
+                                </div>
+                                <input type="number" id="top-p-input" class="param-input" value="1.0" min="0" max="1" step="0.05" style="margin-left: 24px;">
+                                <div class="checkbox-description">核采样概率阈值，与温度二选一使用 (0-1)</div>
+                                <div id="top-p-error" class="error-message">Top P值必须在0到1之间</div>
+                            </div>
+
+                            <div class="param-group">
+                                <div class="checkbox-group">
+                                    <input type="checkbox" id="use-max-tokens" class="checkbox-input" checked>
+                                    <label for="use-max-tokens" class="checkbox-label">最大 Token 数</label>
+                                </div>
+                                <input type="number" id="max-tokens-input" class="param-input" value="64" min="1" max="4096" step="1" style="margin-left: 24px;">
+                                <div class="checkbox-description">生成的最大token数 (1-4096)</div>
+                                <div id="max-tokens-error" class="error-message">Token数必须在1到4096之间</div>
+                            </div>
+                        </form>
+                    </div>
+
+
+
+                    <div class="sidebar-section">
+                        <h3><i class="fas fa-info-circle"></i> 使用说明</h3>
+                        <div class="example-item">
+                            <h4>聊天模式</h4>
+                            <p>只需输入问题或对话内容，系统会自动封装为完整的API请求</p>
+                        </div>
+                        <div class="example-item">
+                            <h4>流式响应</h4>
+                            <p>启用流式传输后，响应会像ChatGPT一样逐字显示</p>
+                        </div>
+                        <div class="example-item">
+                            <h4>快捷操作</h4>
+                            <p>• Enter: 发送消息 (Shift+Enter 换行)</p>
+                            <p>• 调整参数: 右侧边栏实时配置</p>
+                            <p>• 模式切换: 可随时切换控制台/聊天模式</p>
+                        </div>
+                    </div>
+
+                    <div class="sidebar-section">
+                        <h3><i class="fas fa-chart-line"></i> 性能指标</h3>
+                        <div class="metrics-container" id="metrics-container">
+                            <div class="metrics-grid">
+                                <div class="metric-item">
+                                    <div class="metric-label">总时间</div>
+                                    <div class="metric-value">0<span class="metric-unit">ms</span></div>
+                                </div>
+                                <div class="metric-item">
+                                    <div class="metric-label">TTFT</div>
+                                    <div class="metric-value">0<span class="metric-unit">ms</span></div>
+                                </div>
+                                <div class="metric-item">
+                                    <div class="metric-label">TPOT</div>
+                                    <div class="metric-value">0<span class="metric-unit">ms/token</span></div>
+                                </div>
+                                <div class="metric-item">
+                                    <div class="metric-label">输入 Token</div>
+                                    <div class="metric-value">0</div>
+                                </div>
+                                <div class="metric-item">
+                                    <div class="metric-label">输出 Token</div>
+                                    <div class="metric-value">0</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let messageHistory = [];
+        let commandHistory = [];
+        let currentHistoryIndex = -1;
+        let isProcessing = false;
+        let currentEventSource = null;
+        const userId = 'user_' + Math.random().toString(36).substr(2, 9);
+
+        // 当前模式：初始为聊天模式
+        let currentMode = 'chat';
+
+        // DOM 元素
+        const messagesContainer = document.getElementById('messages-container');
+        const commandInput = document.getElementById('command-input');
+        const sendButton = document.getElementById('send-button');
+        const statusIndicator = document.getElementById('status-indicator');
+        const emptyState = document.getElementById('empty-state');
+        const emptyStateDesc = document.getElementById('empty-state-desc');
+        const examplesContainer = document.getElementById('examples-container');
+        const clearBtn = document.getElementById('clear-btn');
+        const themeBtn = document.getElementById('theme-btn');
+        const modeToggle = document.getElementById('mode-toggle');
+        const modeIndicator = document.getElementById('mode-indicator');
+        const consoleSidebar = document.getElementById('console-sidebar');
+        const chatSidebar = document.getElementById('chat-sidebar');
+        const metricsContainer = document.getElementById('metrics-container');
+
+        // 参数表单元素
+        const paramsForm = document.getElementById('params-form');
+        const modelInput = document.getElementById('model-input');
+        const serverUrlInput = document.getElementById('server-url');
+        const useTemperatureCheckbox = document.getElementById('use-temperature');
+        const tempInput = document.getElementById('temp-input');
+        const tempError = document.getElementById('temp-error');
+        const useTopPCheckbox = document.getElementById('use-top-p');
+        const topPInput = document.getElementById('top-p-input');
+        const topPError = document.getElementById('top-p-error');
+        const useMaxTokensCheckbox = document.getElementById('use-max-tokens');
+        const maxTokensInput = document.getElementById('max-tokens-input');
+        const maxTokensError = document.getElementById('max-tokens-error');
+
+        // 指标元素
+        const metricElements = {
+            totalTime: metricsContainer.querySelector('.metric-item:nth-child(1) .metric-value'),
+            ttft: metricsContainer.querySelector('.metric-item:nth-child(2) .metric-value'),
+            tpot: metricsContainer.querySelector('.metric-item:nth-child(3) .metric-value'),
+            inputTokens: metricsContainer.querySelector('.metric-item:nth-child(4) .metric-value'),
+            outputTokens: metricsContainer.querySelector('.metric-item:nth-child(5) .metric-value')
+        };
+
+        // 示例命令
+        const examples = [
+            {
+                'title': '对话模式 流式传输',
+                'command': 'http://127.0.0.1:5000/v1/chat/completions -H "Content-Type: application/json" -d \'{"model":"/workspace/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B","messages":[{"role":"user","content":"What is DeepSeek"}],"temperature":0.7,"max_tokens":64,"stream":"True"}\'',
+                'description': '发送一个简单的聊天请求，使用流式传输'
+            },
+            {
+                'title': '对话模式 非流式传输',
+                'command': 'http://127.0.0.1:5000/v1/chat/completions -H "Content-Type: application/json" -d \'{"model":"/workspace/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B","messages":[{"role":"user","content":"What is DeepSeek"}],"temperature":0.7,"max_tokens":64,"stream":"False"}\'',
+                'description': '发送一个简单的聊天请求，使用非流式传输'
+            },
+            {
+                'title': '补全模式 非流式传输',
+                'command': 'http://127.0.0.1:5000/v1/completions -H "Authorization: Bearer token123" -d \'{"model":"/workspace/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B","prompt":"What is DeepSeek","temperature":0.7,"max_tokens":64}\'',
+                'description': '发送一个文本补全请求，非流式传输'
+            },
+            {
+                'title': '启用知识注入 对话非流式',
+                'command': 'http://127.0.0.1:5000/v1/chat/completions -H "Content-Type: application/json" -d \'{"model": "/workspace/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B","messages": [{"role": "user", "content": "What is DeepSeek"}],"max_tokens": 64,"stream":"False","RAG":"True"}\'',
+                'description': '启用RAG知识注入，发送一个非流式聊天请求'
+            }
+        ];
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('页面加载完成，初始化...');
+            loadExamples();
+            loadHistory();
+            setupParamListeners();
+
+            // 初始化聊天模式
+            initChatMode();
+
+            // 事件监听
+            sendButton.addEventListener('click', sendCommand);
+            clearBtn.addEventListener('click', clearHistory);
+            themeBtn.addEventListener('click', toggleTheme);
+            modeToggle.addEventListener('click', toggleMode);
+
+            // 输入框事件监听
+            commandInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    sendCommand();
+                }
+
+                // 历史命令导航（仅控制台模式）
+                if (currentMode === 'console') {
+                    if (e.key === 'ArrowUp' && e.ctrlKey) {
+                        e.preventDefault();
+                        navigateHistory(-1);
+                    }
+                    if (e.key === 'ArrowDown' && e.ctrlKey) {
+                        e.preventDefault();
+                        navigateHistory(1);
+                    }
+                }
+            });
+
+            // 输入框高度自适应
+            commandInput.addEventListener('input', function() {
+                this.style.height = 'auto';
+                this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+            });
+
+            console.log('初始化完成，当前模式:', currentMode);
+        });
+
+        // 初始化聊天模式
+        function initChatMode() {
+            console.log('初始化聊天模式');
+            currentMode = 'chat';
+            modeToggle.innerHTML = '<i class="fas fa-code"></i> 切换到控制台模式';
+            modeIndicator.innerHTML = '<i class="fas fa-comment"></i> 聊天模式';
+            commandInput.placeholder = '请输入您的问题或对话内容...';
+            commandInput.className = 'chat-input';
+            consoleSidebar.style.display = 'none';
+            chatSidebar.style.display = 'block';
+            emptyStateDesc.textContent = '在下方输入您的问题开始对话，右侧可配置参数';
+        }
+
+        // 设置参数监听器
+        function setupParamListeners() {
+            // 温度输入验证
+            tempInput.addEventListener('input', function() {
+                validateTemperature();
+            });
+
+            // Top P输入验证
+            topPInput.addEventListener('input', function() {
+                validateTopP();
+            });
+
+            // 最大Token数输入验证
+            maxTokensInput.addEventListener('input', function() {
+                validateMaxTokens();
+            });
+
+            // 复选框状态变化时启用/禁用输入框
+            useTemperatureCheckbox.addEventListener('change', function() {
+                tempInput.disabled = !this.checked;
+                if (this.checked) validateTemperature();
+            });
+
+            useTopPCheckbox.addEventListener('change', function() {
+                topPInput.disabled = !this.checked;
+                if (this.checked) validateTopP();
+            });
+
+            useMaxTokensCheckbox.addEventListener('change', function() {
+                maxTokensInput.disabled = !this.checked;
+                if (this.checked) validateMaxTokens();
+            });
+
+            // 初始化禁用状态
+            tempInput.disabled = !useTemperatureCheckbox.checked;
+            topPInput.disabled = !useTopPCheckbox.checked;
+            maxTokensInput.disabled = !useMaxTokensCheckbox.checked;
+        }
+
+        // 验证温度输入
+        function validateTemperature() {
+            const value = parseFloat(tempInput.value);
+            if (isNaN(value) || value < 0 || value > 2) {
+                tempInput.classList.add('invalid');
+                tempInput.classList.remove('valid');
+                tempError.style.display = 'block';
+                return false;
+            } else {
+                tempInput.classList.add('valid');
+                tempInput.classList.remove('invalid');
+                tempError.style.display = 'none';
+                return true;
+            }
+        }
+
+        // 验证Top P输入
+        function validateTopP() {
+            const value = parseFloat(topPInput.value);
+            if (isNaN(value) || value < 0 || value > 1) {
+                topPInput.classList.add('invalid');
+                topPInput.classList.remove('valid');
+                topPError.style.display = 'block';
+                return false;
+            } else {
+                topPInput.classList.add('valid');
+                topPInput.classList.remove('invalid');
+                topPError.style.display = 'none';
+                return true;
+            }
+        }
+
+        // 验证最大Token数输入
+        function validateMaxTokens() {
+            const value = parseInt(maxTokensInput.value);
+            if (isNaN(value) || value < 1 || value > 4096) {
+                maxTokensInput.classList.add('invalid');
+                maxTokensInput.classList.remove('valid');
+                maxTokensError.style.display = 'block';
+                return false;
+            } else {
+                maxTokensInput.classList.add('valid');
+                maxTokensInput.classList.remove('invalid');
+                maxTokensError.style.display = 'none';
+                return true;
+            }
+        }
+
+        // 更新指标显示
+        function updateMetricsDisplay(metrics) {
+            console.log('更新指标:', metrics);
+
+            if (metrics.total_time !== undefined) {
+                metricElements.totalTime.innerHTML = `${metrics.total_time.toFixed(2)}<span class="metric-unit">ms</span>`;
+            }
+            if (metrics.ttft !== undefined) {
+                metricElements.ttft.innerHTML = `${metrics.ttft.toFixed(2)}<span class="metric-unit">ms</span>`;
+            }
+            if (metrics.tpot !== undefined) {
+                metricElements.tpot.innerHTML = `${metrics.tpot.toFixed(2)}<span class="metric-unit">ms/token</span>`;
+            }
+            if (metrics.input_tokens !== undefined) {
+                metricElements.inputTokens.textContent = metrics.input_tokens;
+            }
+            if (metrics.output_tokens !== undefined) {
+                metricElements.outputTokens.textContent = metrics.output_tokens;
+            }
+        }
+
+        // 重置指标显示
+        function resetMetricsDisplay() {
+            metricElements.totalTime.innerHTML = '0<span class="metric-unit">ms</span>';
+            metricElements.ttft.innerHTML = '0<span class="metric-unit">ms</span>';
+            metricElements.tpot.innerHTML = '0<span class="metric-unit">ms/token</span>';
+            metricElements.inputTokens.textContent = '0';
+            metricElements.outputTokens.textContent = '0';
+        }
+
+        // 发送命令/消息
+        async function sendCommand() {
+            const content = commandInput.value.trim();
+            console.log('发送内容:', content, '模式:', currentMode);
+
+            if (!content) {
+                alert(currentMode === 'console' ? '请输入命令' : '请输入消息内容');
+                return;
+            }
+            if (isProcessing) {
+                console.log('正在处理中，忽略请求');
+                return;
+            }
+
+            // 如果是聊天模式，验证参数
+            if (currentMode === 'chat') {
+                if (useTemperatureCheckbox.checked && !validateTemperature()) {
+                    alert('请修正温度参数');
+                    return;
+                }
+                if (useTopPCheckbox.checked && !validateTopP()) {
+                    alert('请修正Top P参数');
+                    return;
+                }
+                if (useMaxTokensCheckbox.checked && !validateMaxTokens()) {
+                    alert('请修正最大Token数参数');
+                    return;
+                }
+            }
+
+            // 重置指标显示
+            resetMetricsDisplay();
+
+            // 添加到历史
+            if (currentMode === 'console') {
+                commandHistory.push(content);
+                currentHistoryIndex = commandHistory.length;
+            }
+
+            // 添加用户消息
+            addMessage('user', content);
+            commandInput.value = '';
+            commandInput.style.height = 'auto';
+            setProcessing(true);
+
+            try {
+                console.log('发送请求到服务器...');
+
+                // 准备请求数据
+                const requestData = {
+                    command: content,
+                    user_id: userId,
+                    mode: currentMode
+                };
+
+                // 如果是聊天模式，添加参数
+                if (currentMode === 'chat') {
+                    const params = getChatParams();
+                    requestData.params = params;
+
+                    // 检查是否是流式请求（仅chat模式支持）
+                    const chatMode = params.chat_mode;
+                    const isStreaming = params.stream === 'True' && chatMode === 'chat';
+                    console.log('是否流式请求:', isStreaming, '聊天模式:', chatMode);
+
+                    if (isStreaming) {
+                        // 流式请求，使用后端流式接口
+                        handleStreamingRequest(requestData);
+                        return;
+                    }
+                }
+
+                // 非流式请求
+                const response = await fetch('/api/send_command', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(requestData)
+                });
+
+                const data = await response.json();
+                console.log('服务器响应:', data);
+
+                if (response.ok) {
+                    if (data.response) {
+                        console.log('显示响应');
+                        addMessage('response', data.response);
+
+                        // 更新指标
+                        if (data.metrics) {
+                            updateMetricsDisplay(data.metrics);
+                        }
+                    }
+                } else {
+                    console.log('错误:', data.error);
+                    addMessage('error', data.error || '发送命令时发生错误');
+                }
+
+            } catch (error) {
+                console.error('请求错误:', error);
+                addMessage('error', '网络错误: ' + error.message);
+            } finally {
+                setProcessing(false);
+            }
+        }
+
+        // 处理流式请求
+        // 处理流式请求
+        function handleStreamingRequest(requestData) {
+            console.log('开始流式请求...');
+
+            // 创建响应消息容器
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message message-response';
+
+            const timestamp = new Date().toLocaleTimeString();
+            const messageId = 'streaming-response-' + Date.now();
+
+            // 创建完整的消息结构
+            messageDiv.innerHTML = `
+                <div class="message-header">
+                    <span>
+                        <i class="fas fa-server"></i>
+                        服务器响应
+                    </span>
+                    <span>${timestamp}</span>
+                </div>
+                <div class="message-content" id="${messageId}-content">
+                    <span class="stream-content" id="${messageId}-text"></span>
+                    <span class="cursor" id="${messageId}-cursor"></span>
+                </div>
+            `;
+
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+            // 获取内容元素
+            const contentElement = document.getElementById(`${messageId}-text`);
+            const cursorElement = document.getElementById(`${messageId}-cursor`);
+
+            let fullContent = '';
+
+            // 发送POST请求并处理流式响应
+            fetch('/api/send_command', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(requestData)
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP错误! 状态码: ${response.status}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                function readStream() {
+                    reader.read().then(({ done, value }) => {
+                        if (done) {
+                            console.log('流式响应结束');
+                            // 移除光标
+                            cursorElement.style.display = 'none';
+                            contentElement.innerHTML = escapeHtml(fullContent);
+
+                            // 添加到历史
+                            messageHistory.push({
+                                'type': 'response',
+                                'content': fullContent,
+                                'timestamp': new Date().toISOString()
+                            });
+
+                            setProcessing(false);
+                            return;
+                        }
+
+                        // 解码数据
+                        const chunk = decoder.decode(value, { stream: true });
+                        console.log('收到流式数据:', chunk);
+
+                        // 处理SSE格式数据
+                        const lines = chunk.split('\n');
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                const dataStr = line.substring(6);
+                                if (dataStr.trim() === '') continue;
+
+                                try {
+                                    const data = JSON.parse(dataStr);
+                                    if (data.type === 'chunk' && data.content) {
+                                        // 逐字显示内容
+                                        fullContent += data.content;
+                                        contentElement.innerHTML = escapeHtml(fullContent);
+                                        cursorElement.style.display = 'inline-block';
+                                        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                                    } else if (data.type === 'metrics' && data.metrics) {
+                                        // 更新性能指标显示
+                                        console.log('收到性能指标:', data.metrics);
+                                        updateMetricsDisplay(data.metrics);
+                                    } else if (data.type === 'done') {
+                                        // 流式响应结束
+                                        console.log('收到结束信号');
+                                        cursorElement.style.display = 'none';
+                                        contentElement.innerHTML = escapeHtml(fullContent);
+                                        // 继续读取剩余数据
+                                        readStream();
+                                        return;
+                                    } else if (data.type === 'error') {
+                                        console.error('流式响应错误:', data.content);
+                                        cursorElement.style.display = 'none';
+                                        contentElement.innerHTML = escapeHtml(fullContent) + '<br/><span style="color: red;">错误: ' + escapeHtml(data.content) + '</span>';
+                                        setProcessing(false);
+                                        return;
+                                    }
+                                } catch (e) {
+                                    console.error('解析流式数据失败:', e, '数据:', dataStr);
+                                }
+                            }
+                        }
+
+                        // 继续读取
+                        readStream();
+                    })
+                    .catch(error => {
+                        console.error('读取流式数据失败:', error);
+                        cursorElement.style.display = 'none';
+                        contentElement.innerHTML = escapeHtml(fullContent) + '<br/><span style="color: red;">流式响应错误: ' + escapeHtml(error.message) + '</span>';
+                        setProcessing(false);
+                    });
+                }
+
+                // 开始读取流
+                readStream();
+            })
+            .catch(error => {
+                console.error('发送流式请求失败:', error);
+                contentElement.innerHTML = '流式请求错误: ' + escapeHtml(error.message);
+                setProcessing(false);
+            });
+        }
+
+        // 估算token数（与后端相同的逻辑）
+        function estimateTokens(text) {
+            // 计算中文字符数量
+            const chineseChars = (text.match(/[\u4e00-\u9fff]/g) || []).length;
+            // 计算非中文字符数量
+            const nonChineseChars = text.length - chineseChars;
+            // 估算token数
+            return Math.max(1, Math.floor(chineseChars * 0.75 + nonChineseChars / 4));
+        }
+
+        // 获取聊天模式参数
+        function getChatParams() {
+            const chatMode = document.querySelector('input[name="chat-mode"]:checked').value;
+            const stream = document.querySelector('input[name="stream"]:checked').value;
+
+            const params = {
+                model: modelInput.value,
+                server_url: serverUrlInput.value,
+                chat_mode: chatMode,
+                stream: stream,
+                use_temperature: useTemperatureCheckbox.checked,
+                use_top_p: useTopPCheckbox.checked,
+                use_max_tokens: useMaxTokensCheckbox.checked
+            };
+
+            if (useTemperatureCheckbox.checked) {
+                params.temperature = parseFloat(tempInput.value);
+            }
+            if (useTopPCheckbox.checked) {
+                params.top_p = parseFloat(topPInput.value);
+            }
+            if (useMaxTokensCheckbox.checked) {
+                params.max_tokens = parseInt(maxTokensInput.value);
+            }
+
+            return params;
+        }
+
+        // 添加消息到界面
+        function addMessage(type, content) {
+            console.log('添加消息:', type, content);
+
+            // 隐藏空状态提示
+            if (emptyState.style.display !== 'none') {
+                emptyState.style.display = 'none';
+            }
+
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message message-${type}`;
+
+            const timestamp = new Date().toLocaleTimeString();
+
+            let displayContent = '';
+            if (type === 'response') {
+                // 聊天模式下，直接显示内容
+                displayContent = escapeHtml(content);
+            } else if (type === 'error') {
+                displayContent = escapeHtml(content);
+            } else {
+                // 用户命令
+                displayContent = escapeHtml(content);
+            }
+
+            messageDiv.innerHTML = `
+                <div class="message-header">
+                    <span>
+                        <i class="fas fa-${type === 'user' ? 'user' : type === 'error' ? 'exclamation-circle' : 'server'}"></i>
+                        ${type === 'user' ? '您' : type === 'error' ? '错误' : '服务器响应'}
+                    </span>
+                    <span>${timestamp}</span>
+                </div>
+                <div class="message-content">${displayContent}</div>
+            `;
+
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        // 设置处理状态
+        function setProcessing(processing) {
+            console.log('设置处理状态:', processing);
+            isProcessing = processing;
+            sendButton.disabled = processing;
+
+            if (processing) {
+                statusIndicator.className = 'status-indicator processing';
+                statusIndicator.title = '正在处理...';
+
+                // 显示正在输入指示器
+                const typingIndicator = document.createElement('div');
+                typingIndicator.className = 'typing-indicator';
+                typingIndicator.id = 'typing-indicator';
+                typingIndicator.innerHTML = `
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                    <div class="typing-dot"></div>
+                `;
+                messagesContainer.appendChild(typingIndicator);
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            } else {
+                statusIndicator.className = 'status-indicator idle';
+                statusIndicator.title = '就绪';
+
+                // 移除正在输入指示器
+                const typingIndicator = document.getElementById('typing-indicator');
+                if (typingIndicator) {
+                    typingIndicator.remove();
+                }
+            }
+        }
+
+        // 切换模式
+        function toggleMode() {
+            console.log('切换模式，当前:', currentMode);
+
+            // 关闭现有的EventSource
+            if (currentEventSource) {
+                currentEventSource.close();
+                currentEventSource = null;
+            }
+
+            if (currentMode === 'console') {
+                // 切换到聊天模式
+                currentMode = 'chat';
+                modeToggle.innerHTML = '<i class="fas fa-code"></i> 切换到控制台模式';
+                modeIndicator.innerHTML = '<i class="fas fa-comment"></i> 聊天模式';
+                commandInput.placeholder = '请输入您的问题或对话内容...';
+                commandInput.className = 'chat-input';
+                consoleSidebar.style.display = 'none';
+                chatSidebar.style.display = 'block';
+                emptyStateDesc.textContent = '在下方输入您的问题开始对话，右侧可配置参数';
+
+                // 重置历史导航索引
+                currentHistoryIndex = commandHistory.length;
+            } else {
+                // 切换到控制台模式
+                currentMode = 'console';
+                modeToggle.innerHTML = '<i class="fas fa-exchange-alt"></i> 切换到聊天模式';
+                modeIndicator.innerHTML = '<i class="fas fa-code"></i> 控制台模式';
+                commandInput.placeholder = '输入命令,例如:http://127.0.0.1:5000/v1/chat/completions -H \'Content-Type:application/json\' -d \'{"model":"模型型号","messages":[{"role":"user","content":"你的问题"}]}\'';
+                commandInput.className = 'console-input';
+                chatSidebar.style.display = 'none';
+                consoleSidebar.style.display = 'block';
+                emptyStateDesc.textContent = '在下方输入命令开始对话，或从右侧选择示例';
+            }
+
+            console.log('模式切换完成，新模式:', currentMode);
+        }
+
+        // 加载示例
+        function loadExamples() {
+            console.log('加载示例命令');
+            examplesContainer.innerHTML = '';
+            examples.forEach(example => {
+                const exampleDiv = document.createElement('div');
+                exampleDiv.className = 'example-item';
+                exampleDiv.onclick = () => {
+                    commandInput.value = example.command;
+                    commandInput.focus();
+                    commandInput.style.height = 'auto';
+                    commandInput.style.height = Math.min(commandInput.scrollHeight, 120) + 'px';
+                };
+
+                exampleDiv.innerHTML = `
+                    <h4>${escapeHtml(example.title)}</h4>
+                    <p>${escapeHtml(example.description)}</p>
+                    <pre>${escapeHtml(example.command)}</pre>
+                `;
+
+                examplesContainer.appendChild(exampleDiv);
+            });
+        }
+
+        // 加载历史
+        async function loadHistory() {
+            try {
+                console.log('加载历史记录...');
+                const response = await fetch(`/api/get_history?user_id=${userId}`);
+                const data = await response.json();
+                console.log('历史记录:', data);
+
+                if (data.history && data.history.length > 0) {
+                    emptyState.style.display = 'none';
+                    messageHistory = data.history;
+
+                    data.history.forEach(msg => {
+                        if (msg.type === 'command') {
+                            addMessage('user', msg.content);
+                        } else if (msg.type === 'response') {
+                            addMessage('response', msg.content);
+                        } else if (msg.type === 'error') {
+                            addMessage('error', msg.content);
+                        }
+                    });
+                } else {
+                    emptyState.style.display = 'block';
+                }
+            } catch (error) {
+                console.error('加载历史失败:', error);
+            }
+        }
+
+        // 清空历史
+        async function clearHistory() {
+            if (!confirm('确定要清空所有对话历史吗？')) return;
+
+            try {
+                console.log('清空历史记录...');
+                const response = await fetch('/api/clear_history', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        user_id: userId
+                    })
+                });
+
+                const data = await response.json();
+                console.log('清空结果:', data);
+
+                if (data.success) {
+                    while (messagesContainer.firstChild) {
+                        messagesContainer.removeChild(messagesContainer.firstChild);
+                    }
+
+                    messagesContainer.appendChild(emptyState);
+                    emptyState.style.display = 'block';
+
+                    messageHistory = [];
+                    commandHistory = [];
+                    currentHistoryIndex = -1;
+
+                    // 重置指标显示
+                    resetMetricsDisplay();
+
+                    console.log('历史记录已清空');
+                } else {
+                    alert('清空历史失败');
+                }
+            } catch (error) {
+                console.error('清空历史失败:', error);
+                alert('清空历史失败: ' + error.message);
+            }
+        }
+
+        // 导航历史命令（仅控制台模式）
+        function navigateHistory(direction) {
+            if (commandHistory.length === 0) return;
+
+            currentHistoryIndex += direction;
+
+            if (currentHistoryIndex < 0) {
+                currentHistoryIndex = 0;
+            } else if (currentHistoryIndex >= commandHistory.length) {
+                currentHistoryIndex = commandHistory.length;
+                commandInput.value = '';
+                return;
+            }
+
+            commandInput.value = commandHistory[currentHistoryIndex];
+            commandInput.focus();
+        }
+
+        // 切换主题
+        function toggleTheme() {
+            console.log('切换主题');
+            const body = document.body;
+            if (body.classList.contains('dark-theme')) {
+                body.classList.remove('dark-theme');
+                themeBtn.innerHTML = '<i class="fas fa-moon"></i> 暗色模式';
+            } else {
+                body.classList.add('dark-theme');
+                themeBtn.innerHTML = '<i class="fas fa-sun"></i> 亮色模式';
+            }
+        }
+
+        // HTML 转义
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>

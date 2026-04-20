@@ -1,0 +1,17 @@
+ chunk_size: 32
+
+ local_cpu: false
+ max_local_cpu_size: 80.0
+
+ remote_url: "redis://172.18.0.170:6378"
+ #remote_url: null
+ remote_serde: "cachegen"
+
+ local_disk: null
+ max_local_disk_size: 0
+
+ save_decode_cache: false
+ cache_policy: "LRU"
+ numa_mode: null
+ 
+ #use_layerwise: true

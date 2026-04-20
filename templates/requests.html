@@ -1,0 +1,1671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>vLLM Scheduler - Request Monitor</title>
+    <style>
+        /* CSS变量定义 - 与拓扑图页面保持一致 */
+        :root {
+            /* 基础颜色 */
+            --color-bg-primary: #ffffff;
+            --color-bg-secondary: #f8fafc;
+            --color-bg-tertiary: #f1f5f9;
+            --color-bg-card: #ffffff;
+            --color-bg-tooltip: rgba(255, 255, 255, 0.98);
+            --color-bg-overlay: rgba(0, 0, 0, 0.5);
+
+            /* 文本颜色 */
+            --color-text-primary: #0f172a;
+            --color-text-secondary: #475569;
+            --color-text-muted: #64748b;
+            --color-text-light: #94a3b8;
+
+            /* 强调色 */
+            --color-accent-primary: #3b82f6;
+            --color-accent-secondary: #10b981;
+            --color-accent-danger: #ef4444;
+            --color-accent-warning: #f59e0b;
+            --color-accent-info: #06b6d4;
+
+            /* 请求状态颜色 */
+            --color-status-running: #10b981;
+            --color-status-waiting: #f59e0b;
+            --color-status-completed: #3b82f6;
+            --color-status-error: #ef4444;
+            --color-status-unknown: #94a3b8;
+
+            /* 边框和阴影 */
+            --color-border-light: rgba(226, 232, 240, 0.8);
+            --color-border-medium: rgba(203, 213, 225, 0.6);
+            --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+            --shadow-card-hover: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
+            --shadow-tooltip: 0 20px 40px rgba(0, 0, 0, 0.15), 0 10px 20px rgba(0, 0, 0, 0.1);
+            --shadow-table: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+
+            /* 圆角 */
+            --radius-sm: 6px;
+            --radius-md: 10px;
+            --radius-lg: 14px;
+            --radius-xl: 18px;
+            --radius-2xl: 24px;
+
+            /* 间距 */
+            --spacing-xs: 4px;
+            --spacing-sm: 8px;
+            --spacing-md: 12px;
+            --spacing-lg: 16px;
+            --spacing-xl: 24px;
+            --spacing-2xl: 32px;
+        }
+
+        /* 暗色主题 */
+        [data-theme="dark"] {
+            /* 基础颜色 */
+            --color-bg-primary: #0f172a;
+            --color-bg-secondary: #1e293b;
+            --color-bg-tertiary: #334155;
+            --color-bg-card: rgba(30, 41, 59, 0.9);
+            --color-bg-tooltip: rgba(15, 23, 42, 0.98);
+            --color-bg-overlay: rgba(0, 0, 0, 0.7);
+
+            /* 文本颜色 */
+            --color-text-primary: #f8fafc;
+            --color-text-secondary: #cbd5e1;
+            --color-text-muted: #94a3b8;
+            --color-text-light: #64748b;
+
+            /* 边框和阴影 */
+            --color-border-light: rgba(100, 116, 139, 0.3);
+            --color-border-medium: rgba(148, 163, 184, 0.4);
+            --shadow-card: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+            --shadow-card-hover: 0 20px 25px -5px rgba(0, 0, 0, 0.2), 0 10px 10px -5px rgba(0, 0, 0, 0.1);
+            --shadow-table: 0 4px 6px -1px rgba(0, 0, 0, 0.2), 0 2px 4px -1px rgba(0, 0, 0, 0.15);
+        }
+
+        /* 基础样式 */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background-color: var(--color-bg-primary);
+            color: var(--color-text-primary);
+            min-height: 100vh;
+            padding: var(--spacing-xl);
+            line-height: 1.5;
+            transition: background-color 0.3s ease, color 0.3s ease;
+        }
+
+        .container {
+            max-width: 1800px;
+            margin: 0 auto;
+        }
+
+        /* 头部样式 */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: var(--spacing-2xl);
+            padding-bottom: var(--spacing-xl);
+            border-bottom: 1px solid var(--color-border-light);
+        }
+
+        .header-content {
+            flex: 1;
+        }
+
+        .header h1 {
+            font-size: 2.25rem;
+            font-weight: 700;
+            margin-bottom: var(--spacing-sm);
+            background: linear-gradient(135deg, var(--color-accent-primary), var(--color-accent-secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            letter-spacing: -0.025em;
+        }
+
+        .header p {
+            font-size: 1.125rem;
+            color: var(--color-text-secondary);
+            max-width: 600px;
+        }
+
+        .theme-switcher {
+            position: relative;
+        }
+
+        .theme-toggle {
+            background-color: var(--color-bg-card);
+            border: 1px solid var(--color-border-light);
+            border-radius: var(--radius-xl);
+            padding: var(--spacing-md) var(--spacing-lg);
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: var(--color-text-primary);
+            font-weight: 500;
+            font-size: 0.875rem;
+        }
+
+        .theme-toggle:hover {
+            border-color: var(--color-accent-primary);
+            box-shadow: var(--shadow-card);
+            transform: translateY(-1px);
+        }
+
+        .theme-icon {
+            font-size: 1.125rem;
+        }
+
+        /* 统计卡片 */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: var(--spacing-xl);
+            margin-bottom: var(--spacing-2xl);
+        }
+
+        .stat-card {
+            background-color: var(--color-bg-card);
+            border: 1px solid var(--color-border-light);
+            border-radius: var(--radius-xl);
+            padding: var(--spacing-xl);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            box-shadow: var(--shadow-card);
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, var(--color-accent-primary), var(--color-accent-secondary));
+            border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--color-accent-primary);
+            box-shadow: var(--shadow-card-hover);
+        }
+
+        .stat-card.total::before {
+            background: linear-gradient(90deg, var(--color-accent-primary), #60a5fa);
+        }
+
+        .stat-card.prefill-pools::before {
+            background: linear-gradient(90deg, var(--color-accent-warning), #fbbf24);
+        }
+
+        .stat-card.decode-pools::before {
+            background: linear-gradient(90deg, var(--color-accent-info), #22d3ee);
+        }
+
+        .stat-card.requests::before {
+            background: linear-gradient(90deg, var(--color-accent-secondary), #34d399);
+        }
+
+        .stat-card-header {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-lg);
+            margin-bottom: var(--spacing-md);
+        }
+
+        .stat-icon {
+            width: 40px;
+            height: 40px;
+            border-radius: var(--radius-lg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.125rem;
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .stat-card.total .stat-icon {
+            background: rgba(59, 130, 246, 0.1);
+        }
+
+        .stat-card.prefill-pools .stat-icon {
+            background: rgba(245, 158, 11, 0.1);
+        }
+
+        .stat-card.decode-pools .stat-icon {
+            background: rgba(6, 182, 212, 0.1);
+        }
+
+        .stat-card.requests .stat-icon {
+            background: rgba(16, 185, 129, 0.1);
+        }
+
+        .stat-card-title {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--color-text-secondary);
+        }
+
+        .stat-card-value {
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1;
+            margin-bottom: var(--spacing-xs);
+            color: var(--color-text-primary);
+        }
+
+        .stat-card-subtitle {
+            font-size: 0.75rem;
+            color: var(--color-text-muted);
+        }
+
+        /* 请求表格容器 */
+        .requests-container {
+            background-color: var(--color-bg-card);
+            border: 1px solid var(--color-border-light);
+            border-radius: var(--radius-xl);
+            padding: var(--spacing-2xl);
+            margin-bottom: var(--spacing-2xl);
+            box-shadow: var(--shadow-card);
+            overflow: hidden;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: var(--spacing-xl);
+            padding-bottom: var(--spacing-lg);
+            border-bottom: 1px solid var(--color-border-light);
+        }
+
+        .section-title {
+            font-size: 1.125rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-md);
+        }
+
+        .section-badge {
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--color-accent-primary);
+            padding: var(--spacing-xs) var(--spacing-md);
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        /* 表格样式 */
+        .requests-table-container {
+            overflow-x: auto;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--color-border-light);
+        }
+
+        .requests-table {
+            width: 100%;
+            border-collapse: collapse;
+            min-width: 1200px;
+        }
+
+        .requests-table thead {
+            background-color: var(--color-bg-secondary);
+        }
+
+        .requests-table th {
+            padding: var(--spacing-lg) var(--spacing-md);
+            text-align: left;
+            font-weight: 600;
+            font-size: 0.875rem;
+            color: var(--color-text-secondary);
+            border-bottom: 2px solid var(--color-border-light);
+            white-space: nowrap;
+        }
+
+        .requests-table th.sortable {
+            cursor: pointer;
+            user-select: none;
+            transition: color 0.2s ease;
+        }
+
+        .requests-table th.sortable:hover {
+            color: var(--color-accent-primary);
+        }
+
+        .sort-indicator {
+            margin-left: var(--spacing-xs);
+            opacity: 0.5;
+        }
+
+        .requests-table tbody tr {
+            border-bottom: 1px solid var(--color-border-light);
+            transition: background-color 0.2s ease;
+            cursor: pointer;
+        }
+
+        .requests-table tbody tr:last-child {
+            border-bottom: none;
+        }
+
+        .requests-table tbody tr:hover {
+            background-color: var(--color-bg-secondary);
+        }
+
+        .requests-table td {
+            padding: var(--spacing-md);
+            font-size: 0.875rem;
+            vertical-align: middle;
+        }
+
+        /* 请求ID样式 */
+        .request-id {
+            font-family: 'JetBrains Mono', 'SF Mono', monospace;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--color-text-primary);
+            background: var(--color-bg-tertiary);
+            padding: var(--spacing-xs) var(--spacing-sm);
+            border-radius: var(--radius-sm);
+            display: inline-block;
+        }
+
+        /* 请求类型徽章 */
+        .request-type-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: var(--spacing-xs) var(--spacing-md);
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        .request-type-badge.request {
+            background-color: rgba(59, 130, 246, 0.15);
+            color: var(--color-accent-primary);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .request-type-badge.control {
+            background-color: rgba(245, 158, 11, 0.15);
+            color: var(--color-accent-warning);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .request-type-badge.update {
+            background-color: rgba(16, 185, 129, 0.15);
+            color: var(--color-accent-secondary);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .request-type-badge.unknown {
+            background-color: rgba(148, 163, 184, 0.15);
+            color: var(--color-text-muted);
+            border: 1px solid rgba(148, 163, 184, 0.3);
+        }
+
+        /* 池地址样式 */
+        .pool-address {
+            font-family: 'JetBrains Mono', 'SF Mono', monospace;
+            font-size: 0.75rem;
+            word-break: break-all;
+            max-width: 200px;
+        }
+
+        .pool-address.prefill {
+            color: var(--color-accent-warning);
+            background: rgba(245, 158, 11, 0.1);
+            padding: var(--spacing-xs) var(--spacing-sm);
+            border-radius: var(--radius-sm);
+            border: 1px solid rgba(245, 158, 11, 0.2);
+        }
+
+        .pool-address.decode {
+            color: var(--color-accent-info);
+            background: rgba(6, 182, 212, 0.1);
+            padding: var(--spacing-xs) var(--spacing-sm);
+            border-radius: var(--radius-sm);
+            border: 1px solid rgba(6, 182, 212, 0.2);
+        }
+
+        /* 模型标签 */
+        .model-tag {
+            background: rgba(139, 92, 246, 0.1);
+            color: #8b5cf6;
+            padding: var(--spacing-xs) var(--spacing-sm);
+            border-radius: var(--radius-sm);
+            font-size: 0.75rem;
+            font-weight: 500;
+            border: 1px solid rgba(139, 92, 246, 0.2);
+        }
+
+        /* 布尔值徽章 */
+        .bool-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: var(--spacing-xs) var(--spacing-sm);
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .bool-badge.true {
+            background-color: rgba(16, 185, 129, 0.15);
+            color: var(--color-accent-secondary);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .bool-badge.false {
+            background-color: rgba(239, 68, 68, 0.15);
+            color: var(--color-accent-danger);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        /* 流式徽章 */
+        .stream-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: var(--spacing-xs) var(--spacing-sm);
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .stream-badge.true {
+            background-color: rgba(6, 182, 212, 0.15);
+            color: var(--color-accent-info);
+            border: 1px solid rgba(6, 182, 212, 0.3);
+        }
+
+        .stream-badge.false {
+            background-color: rgba(148, 163, 184, 0.15);
+            color: var(--color-text-muted);
+            border: 1px solid rgba(148, 163, 184, 0.3);
+        }
+
+        /* 空状态 */
+        .empty-state {
+            text-align: center;
+            padding: var(--spacing-2xl) var(--spacing-lg);
+            color: var(--color-text-muted);
+        }
+
+        .empty-state-icon {
+            font-size: 2.5rem;
+            margin-bottom: var(--spacing-lg);
+            opacity: 0.5;
+        }
+
+        .empty-state h3 {
+            font-size: 1.125rem;
+            margin-bottom: var(--spacing-sm);
+            color: var(--color-text-secondary);
+        }
+
+        .empty-state p {
+            font-size: 0.875rem;
+            color: var(--color-text-muted);
+        }
+
+        /* 控制面板 */
+        .control-panel {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background-color: var(--color-bg-card);
+            border: 1px solid var(--color-border-light);
+            border-radius: var(--radius-xl);
+            padding: var(--spacing-xl);
+            margin-top: var(--spacing-2xl);
+            box-shadow: var(--shadow-card);
+        }
+
+        .update-info {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-lg);
+        }
+
+        .update-time {
+            font-size: 0.875rem;
+            color: var(--color-text-secondary);
+        }
+
+        .update-time strong {
+            color: var(--color-text-primary);
+            font-weight: 600;
+        }
+
+        .control-actions {
+            display: flex;
+            gap: var(--spacing-md);
+        }
+
+        .btn {
+            padding: var(--spacing-md) var(--spacing-lg);
+            border-radius: var(--radius-md);
+            font-weight: 500;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: none;
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--color-accent-primary);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+        }
+
+        .btn:hover {
+            background: rgba(59, 130, 246, 0.2);
+            border-color: rgba(59, 130, 246, 0.4);
+            transform: translateY(-1px);
+            box-shadow: var(--shadow-card);
+        }
+
+        .btn-primary {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--color-accent-secondary);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .btn-primary:hover {
+            background: rgba(16, 185, 129, 0.2);
+            border-color: rgba(16, 185, 129, 0.4);
+        }
+
+        /* 筛选器 */
+        .filters {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-md);
+            margin-bottom: var(--spacing-xl);
+            flex-wrap: wrap;
+        }
+
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+        }
+
+        .filter-label {
+            font-size: 0.875rem;
+            color: var(--color-text-secondary);
+            white-space: nowrap;
+        }
+
+        .filter-select {
+            padding: var(--spacing-sm) var(--spacing-md);
+            border-radius: var(--radius-md);
+            border: 1px solid var(--color-border-light);
+            background-color: var(--color-bg-card);
+            color: var(--color-text-primary);
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            min-width: 120px;
+        }
+
+        .filter-select:hover {
+            border-color: var(--color-accent-primary);
+        }
+
+        .filter-select:focus {
+            outline: none;
+            border-color: var(--color-accent-primary);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+        }
+
+        /* 模态框样式 */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--color-bg-overlay);
+            z-index: 999;
+            display: none;
+            animation: fadeIn 0.2s ease;
+        }
+
+        .modal-overlay.visible {
+            display: block;
+        }
+
+        .request-details-modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: var(--color-bg-tooltip);
+            border: 1px solid var(--color-border-medium);
+            border-radius: var(--radius-lg);
+            padding: var(--spacing-xl);
+            width: 800px;
+            max-width: 90vw;
+            max-height: 85vh;
+            z-index: 1000;
+            box-shadow: var(--shadow-tooltip);
+            backdrop-filter: blur(10px);
+            overflow-y: auto;
+            display: none;
+            animation: slideIn 0.3s ease;
+            border-top: 4px solid var(--color-accent-primary);
+        }
+
+        .request-details-modal.visible {
+            display: block;
+        }
+
+        .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: var(--spacing-lg);
+            padding-bottom: var(--spacing-md);
+            border-bottom: 1px solid var(--color-border-light);
+        }
+
+        .modal-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--color-text-primary);
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-sm);
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: var(--color-text-muted);
+            line-height: 1;
+            padding: var(--spacing-xs);
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: var(--radius-sm);
+            transition: all 0.2s ease;
+        }
+
+        .modal-close:hover {
+            background-color: var(--color-bg-tertiary);
+            color: var(--color-text-primary);
+        }
+
+        .details-container {
+            display: flex;
+            flex-direction: column;
+            gap: var(--spacing-xl);
+        }
+
+        .details-section {
+            display: flex;
+            flex-direction: column;
+            gap: var(--spacing-md);
+        }
+
+        .details-section-title {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            color: var(--color-text-muted);
+            letter-spacing: 0.5px;
+            padding-bottom: var(--spacing-xs);
+            border-bottom: 1px solid var(--color-border-light);
+        }
+
+        .details-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .details-table tr {
+            border-bottom: 1px solid var(--color-border-light);
+        }
+
+        .details-table tr:last-child {
+            border-bottom: none;
+        }
+
+        .details-table td {
+            padding: var(--spacing-sm) var(--spacing-xs);
+            vertical-align: top;
+        }
+
+        .detail-key {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--color-text-secondary);
+            white-space: nowrap;
+            padding-right: var(--spacing-lg);
+            width: 180px;
+        }
+
+        .detail-value {
+            font-size: 13px;
+            color: var(--color-text-primary);
+            word-break: break-word;
+        }
+
+        .detail-value.numeric {
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .detail-value.monospace {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 12px;
+        }
+
+        .detail-value.prefill {
+            color: var(--color-accent-warning);
+        }
+
+        .detail-value.decode {
+            color: var(--color-accent-info);
+        }
+
+        .raw-data-section {
+            background: var(--color-bg-secondary);
+            border-radius: var(--radius-sm);
+            padding: var(--spacing-md);
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 11px;
+            overflow-x: auto;
+            white-space: pre;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        /* 动画 */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+            }
+            to {
+                opacity: 1;
+            }
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translate(-50%, -60%);
+            }
+            to {
+                opacity: 1;
+                transform: translate(-50%, -50%);
+            }
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        /* 响应式调整 */
+        @media (max-width: 768px) {
+            body {
+                padding: var(--spacing-lg);
+            }
+
+            .header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: var(--spacing-lg);
+            }
+
+            .header h1 {
+                font-size: 1.75rem;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+                gap: var(--spacing-lg);
+            }
+
+            .stat-card {
+                padding: var(--spacing-lg);
+            }
+
+            .stat-card-value {
+                font-size: 1.75rem;
+            }
+
+            .requests-container {
+                padding: var(--spacing-xl);
+            }
+
+            .control-panel {
+                flex-direction: column;
+                gap: var(--spacing-lg);
+                align-items: stretch;
+            }
+
+            .control-actions {
+                width: 100%;
+            }
+
+            .btn {
+                flex: 1;
+                justify-content: center;
+            }
+
+            .filters {
+                flex-direction: column;
+                align-items: stretch;
+            }
+
+            .filter-group {
+                width: 100%;
+            }
+
+            .filter-select {
+                flex: 1;
+            }
+
+            .request-details-modal {
+                width: 95vw;
+                padding: var(--spacing-lg);
+            }
+        }
+
+        /* 滚动条样式 */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--color-bg-secondary);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--color-bg-tertiary);
+            border-radius: 3px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--color-accent-primary);
+        }
+    </style>
+
+    <!-- 字体 -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- 头部 -->
+        <div class="header">
+            <div class="header-content">
+                <h1>vLLM Scheduler - Request Monitor</h1>
+                <p>Monitor all inference requests and their assigned compute pools</p>
+            </div>
+            <div class="theme-switcher">
+                <button class="theme-toggle" id="themeToggle">
+                    <span class="theme-icon" id="themeIcon">🌙</span>
+                    <span id="themeText">Dark Mode</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- 统计卡片 -->
+        <div class="stats-grid">
+            <div class="stat-card total">
+                <div class="stat-card-header">
+                    <div class="stat-icon">📊</div>
+                    <div>
+                        <div class="stat-card-title">Total Requests</div>
+                    </div>
+                </div>
+                <div class="stat-card-value" id="totalRequests">{{ requests_data.total_requests }}</div>
+                <div class="stat-card-subtitle">Active and pending requests</div>
+            </div>
+
+            <div class="stat-card prefill-pools">
+                <div class="stat-card-header">
+                    <div class="stat-icon">⚡</div>
+                    <div>
+                        <div class="stat-card-title">Prefill Pools</div>
+                    </div>
+                </div>
+                <div class="stat-card-value" id="prefillPoolsCount">{{ requests_data.unique_prefill_pools }}</div>
+                <div class="stat-card-subtitle">Unique prefill pools in use</div>
+            </div>
+
+            <div class="stat-card decode-pools">
+                <div class="stat-card-header">
+                    <div class="stat-icon">🌀</div>
+                    <div>
+                        <div class="stat-card-title">Decode Pools</div>
+                    </div>
+                </div>
+                <div class="stat-card-value" id="decodePoolsCount">{{ requests_data.unique_decode_pools }}</div>
+                <div class="stat-card-subtitle">Unique decode pools in use</div>
+            </div>
+
+            <div class="stat-card requests">
+                <div class="stat-card-header">
+                    <div class="stat-icon">📝</div>
+                    <div>
+                        <div class="stat-card-title">Request Types</div>
+                    </div>
+                </div>
+                <div class="stat-card-value" id="requestTypesCount">{{ requests_data.type_counts|length }}</div>
+                <div class="stat-card-subtitle">Different request types</div>
+            </div>
+        </div>
+
+        <!-- 请求列表 -->
+        <div class="requests-container">
+            <div class="section-header">
+                <div class="section-title">
+                    <span>All Requests</span>
+                    <span class="section-badge">{{ requests_data.total_requests }} requests</span>
+                </div>
+            </div>
+
+            <!-- 筛选器 -->
+            <div class="filters">
+                <div class="filter-group">
+                    <label class="filter-label">Request Type:</label>
+                    <select class="filter-select" id="typeFilter">
+                        <option value="all">All Types</option>
+                        {% for req_type in requests_data.type_counts.keys() %}
+                        <option value="{{ req_type }}">{{ req_type }} ({{ requests_data.type_counts[req_type] }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">Prefill Pool:</label>
+                    <select class="filter-select" id="prefillFilter">
+                        <option value="all">All Prefill Pools</option>
+                        {% for pool, count in requests_data.prefill_pools.items() %}
+                        <option value="{{ pool }}">{{ pool }} ({{ count }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">Decode Pool:</label>
+                    <select class="filter-select" id="decodeFilter">
+                        <option value="all">All Decode Pools</option>
+                        {% for pool, count in requests_data.decode_pools.items() %}
+                        <option value="{{ pool }}">{{ pool }} ({{ count }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label">Sort by:</label>
+                    <select class="filter-select" id="sortFilter">
+                        <option value="index">Index</option>
+                        <option value="id">Request ID</option>
+                        <option value="type">Request Type</option>
+                        <option value="prefill">Prefill Pool</option>
+                        <option value="decode">Decode Pool</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- 请求表格 -->
+            <div class="requests-table-container">
+                <table class="requests-table" id="requestsTable">
+                    <thead>
+                        <tr>
+                            <th class="sortable" data-sort="index">#</th>
+                            <th class="sortable" data-sort="id">Request ID</th>
+                            <th class="sortable" data-sort="type">Request Type</th>
+                            <th class="sortable" data-sort="model">Model</th>
+                            <th class="sortable" data-sort="prefill">Prefill Pool</th>
+                            <th class="sortable" data-sort="decode">Decode Pool</th>
+                            <th class="sortable" data-sort="pd">PD Disaggregation</th>
+                            <th class="sortable" data-sort="stream">Stream</th>
+                            <th class="sortable" data-sort="tokens">Tokens</th>
+                        </tr>
+                    </thead>
+                    <tbody id="requestsTableBody">
+                        {% if requests_data.has_requests %}
+                            {% for req in requests_data.requests %}
+                            <tr class="request-row"
+                                data-index="{{ req.index }}"
+                                data-id="{{ req.request_id }}"
+                                data-type="{{ req.request_type }}"
+                                data-model="{{ req.model }}"
+                                data-prefill="{{ req.prefill_pool }}"
+                                data-decode="{{ req.decode_pool }}"
+                                data-pd="{{ req.enable_pd_disaggregation }}"
+                                data-stream="{{ req.stream }}"
+                                data-tokens="{{ req.token_length }}"
+                                data-json="{{ req|tojson|forceescape }}">
+                                <td class="request-index">{{ req.index }}</td>
+                                <td>
+                                    <div class="request-id">{{ req.request_id }}</div>
+                                </td>
+                                <td>
+                                    <span class="request-type-badge {{ req.request_type }}">
+                                        {{ req.request_type }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <div class="model-tag">{{ req.model }}</div>
+                                </td>
+                                <td>
+                                    <div class="pool-address prefill">{{ req.prefill_pool }}</div>
+                                </td>
+                                <td>
+                                    <div class="pool-address decode">{{ req.decode_pool }}</div>
+                                </td>
+                                <td>
+                                    <span class="bool-badge {{ req.enable_pd_disaggregation|lower }}">
+                                        {{ req.enable_pd_disaggregation }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="stream-badge {{ req.stream|lower }}">
+                                        {{ req.stream }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="detail-value numeric">{{ req.token_length }}</span>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr>
+                                <td colspan="9">
+                                    <div class="empty-state">
+                                        <div class="empty-state-icon">📭</div>
+                                        <h3>No Requests Found</h3>
+                                        <p>Waiting for new inference requests to arrive...</p>
+                                    </div>
+                                </td>
+                            </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 控制面板 -->
+        <div class="control-panel">
+            <div class="update-info">
+                <div class="update-time">
+                    Last updated: <strong id="updateTime">{{ requests_data.update_time }}</strong>
+                </div>
+            </div>
+            <div class="control-actions">
+                <button class="btn" id="autoRefreshBtn">
+                    <span>🔁</span>
+                    <span>Auto Refresh (10s)</span>
+                </button>
+                <button class="btn btn-primary" id="refreshBtn">
+                    <span>🔄</span>
+                    <span>Refresh Now</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 遮罩层 -->
+    <div class="modal-overlay" id="modalOverlay"></div>
+
+    <!-- 请求详情模态框 -->
+    <div class="request-details-modal" id="requestDetailsModal">
+        <div class="modal-header">
+            <div class="modal-title" id="modalTitle">
+                <span>Request Details</span>
+            </div>
+            <button class="modal-close" id="modalCloseBtn">×</button>
+        </div>
+        <div class="details-container" id="detailsContainer">
+            <!-- 动态内容 -->
+        </div>
+    </div>
+
+    <script>
+        // 主题切换功能
+        function initTheme() {
+            const savedTheme = localStorage.getItem('theme');
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+            let theme = 'light';
+            if (savedTheme) {
+                theme = savedTheme;
+            } else if (prefersDark) {
+                theme = 'dark';
+            }
+
+            document.documentElement.setAttribute('data-theme', theme);
+            updateThemeButton();
+        }
+
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'light' ? 'dark' : 'light';
+
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            updateThemeButton();
+
+            showNotification(`Switched to ${newTheme} mode`, 'info');
+        }
+
+        function updateThemeButton() {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const themeIcon = document.getElementById('themeIcon');
+            const themeText = document.getElementById('themeText');
+
+            if (currentTheme === 'dark') {
+                themeIcon.textContent = '☀️';
+                themeText.textContent = 'Light Mode';
+            } else {
+                themeIcon.textContent = '🌙';
+                themeText.textContent = 'Dark Mode';
+            }
+        }
+
+        // 显示通知
+        function showNotification(message, type = 'info') {
+            // 创建通知元素
+            const notification = document.createElement('div');
+            notification.style.cssText = `
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                padding: 12px 20px;
+                border-radius: 8px;
+                font-size: 14px;
+                font-weight: 500;
+                z-index: 1001;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+                transition: all 0.3s ease;
+                transform: translateY(-10px);
+                opacity: 0;
+            `;
+
+            // 根据类型设置颜色
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            if (type === 'success') {
+                notification.style.backgroundColor = currentTheme === 'dark' ? 'rgba(16, 185, 129, 0.9)' : 'rgba(16, 185, 129, 0.95)';
+                notification.style.color = 'white';
+                notification.style.border = '1px solid rgba(16, 185, 129, 1)';
+            } else if (type === 'error') {
+                notification.style.backgroundColor = currentTheme === 'dark' ? 'rgba(239, 68, 68, 0.9)' : 'rgba(239, 68, 68, 0.95)';
+                notification.style.color = 'white';
+                notification.style.border = '1px solid rgba(239, 68, 68, 1)';
+            } else {
+                notification.style.backgroundColor = currentTheme === 'dark' ? 'rgba(59, 130, 246, 0.9)' : 'rgba(59, 130, 246, 0.95)';
+                notification.style.color = 'white';
+                notification.style.border = '1px solid rgba(59, 130, 246, 1)';
+            }
+
+            notification.textContent = message;
+            document.body.appendChild(notification);
+
+            // 触发动画
+            setTimeout(() => {
+                notification.style.transform = 'translateY(0)';
+                notification.style.opacity = '1';
+            }, 10);
+
+            // 3秒后移除
+            setTimeout(() => {
+                notification.style.transform = 'translateY(-10px)';
+                notification.style.opacity = '0';
+                setTimeout(() => notification.remove(), 300);
+            }, 3000);
+        }
+
+        // 刷新功能
+        function refreshDashboard() {
+            const refreshBtn = document.getElementById('refreshBtn');
+            const originalText = refreshBtn.innerHTML;
+
+            refreshBtn.innerHTML = '<span>⏳</span><span>Refreshing...</span>';
+            refreshBtn.disabled = true;
+
+            setTimeout(() => {
+                location.reload();
+            }, 500);
+        }
+
+        // 自动刷新功能
+        let autoRefreshInterval = null;
+        let autoRefreshEnabled = false;
+
+        function toggleAutoRefresh() {
+            const autoBtn = document.getElementById('autoRefreshBtn');
+
+            if (autoRefreshEnabled) {
+                stopAutoRefresh();
+                autoBtn.innerHTML = '<span>▶️</span><span>Start Auto Refresh</span>';
+                autoBtn.style.opacity = '0.8';
+                showNotification('Auto refresh disabled', 'info');
+            } else {
+                startAutoRefresh();
+                autoBtn.innerHTML = '<span>🔁</span><span>Auto Refresh (10s)</span>';
+                autoBtn.style.opacity = '1';
+                showNotification('Auto refresh enabled', 'success');
+            }
+
+            autoRefreshEnabled = !autoRefreshEnabled;
+        }
+
+        function startAutoRefresh() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+            }
+            autoRefreshInterval = setInterval(refreshDashboard, 10000); // 10秒刷新
+        }
+
+        function stopAutoRefresh() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+            }
+        }
+
+        // 表格排序功能
+        let currentSort = { column: 'index', direction: 'asc' };
+
+        function sortTable(column) {
+            const table = document.getElementById('requestsTable');
+            const tbody = table.querySelector('tbody');
+            const rows = Array.from(tbody.querySelectorAll('tr:not(.empty-state)'));
+
+            if (rows.length === 0) return;
+
+            // 如果是相同的列，切换排序方向
+            if (currentSort.column === column) {
+                currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSort.column = column;
+                currentSort.direction = 'asc';
+            }
+
+            // 排序行
+            rows.sort((a, b) => {
+                let aValue = a.dataset[column];
+                let bValue = b.dataset[column];
+
+                // 处理数字排序
+                if (column === 'index' || column === 'tokens') {
+                    aValue = parseInt(aValue) || 0;
+                    bValue = parseInt(bValue) || 0;
+                }
+
+                // 处理布尔值排序
+                if (column === 'pd' || column === 'stream') {
+                    aValue = aValue.toLowerCase() === 'true' ? 1 : 0;
+                    bValue = bValue.toLowerCase() === 'true' ? 1 : 0;
+                }
+
+                // 比较值
+                let comparison = 0;
+                if (aValue < bValue) comparison = -1;
+                if (aValue > bValue) comparison = 1;
+
+                // 应用排序方向
+                return currentSort.direction === 'asc' ? comparison : -comparison;
+            });
+
+            // 重新插入行
+            rows.forEach(row => tbody.appendChild(row));
+
+            // 更新表头指示器
+            updateSortIndicators();
+
+            showNotification(`Sorted by ${column} (${currentSort.direction})`, 'info');
+        }
+
+        function updateSortIndicators() {
+            const headers = document.querySelectorAll('.sortable');
+            headers.forEach(header => {
+                header.classList.remove('sorted-asc', 'sorted-desc');
+                if (header.dataset.sort === currentSort.column) {
+                    header.classList.add(`sorted-${currentSort.direction}`);
+                }
+            });
+        }
+
+        // 筛选功能
+        function filterTable() {
+            const typeFilter = document.getElementById('typeFilter').value;
+            const prefillFilter = document.getElementById('prefillFilter').value;
+            const decodeFilter = document.getElementById('decodeFilter').value;
+            const rows = document.querySelectorAll('.request-row');
+
+            let visibleCount = 0;
+
+            rows.forEach(row => {
+                const type = row.dataset.type.toLowerCase();
+                const prefill = row.dataset.prefill;
+                const decode = row.dataset.decode;
+
+                let shouldShow = true;
+
+                // 应用类型筛选
+                if (typeFilter !== 'all' && type !== typeFilter.toLowerCase()) {
+                    shouldShow = false;
+                }
+
+                // 应用Prefill池筛选
+                if (prefillFilter !== 'all' && prefill !== prefillFilter) {
+                    shouldShow = false;
+                }
+
+                // 应用Decode池筛选
+                if (decodeFilter !== 'all' && decode !== decodeFilter) {
+                    shouldShow = false;
+                }
+
+                // 显示/隐藏行
+                row.style.display = shouldShow ? '' : 'none';
+                if (shouldShow) visibleCount++;
+            });
+
+            // 如果没有匹配的行，显示空状态
+            const emptyState = document.querySelector('.empty-state');
+            if (emptyState) {
+                emptyState.parentElement.parentElement.style.display = visibleCount === 0 ? '' : 'none';
+            }
+
+            // 更新统计信息
+            updateFilterStats(visibleCount, rows.length);
+        }
+
+        function updateFilterStats(visible, total) {
+            const badge = document.querySelector('.section-badge');
+            if (badge && total > 0) {
+                if (visible === total) {
+                    badge.textContent = `${total} requests`;
+                } else {
+                    badge.textContent = `${visible} of ${total} requests`;
+                }
+            }
+        }
+
+        // 请求详情模态框功能
+        function showRequestDetails(row) {
+            try {
+                const requestJson = row.dataset.json;
+                const requestData = JSON.parse(requestJson);
+
+                const detailsContainer = document.getElementById('detailsContainer');
+                const modalTitle = document.getElementById('modalTitle');
+
+                // 更新标题
+                modalTitle.innerHTML = `<span>Request Details: ${requestData.request_id}</span>`;
+
+                // 构建详情内容
+                let detailsHtml = '';
+
+                // 基础信息部分
+                detailsHtml += `
+                    <div class="details-section">
+                        <div class="details-section-title">Basic Information</div>
+                        <table class="details-table">
+                            <tr>
+                                <td class="detail-key">Request ID</td>
+                                <td class="detail-value monospace">${requestData.request_id}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Request Type</td>
+                                <td class="detail-value">${requestData.request_type}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Create Time</td>
+                                <td class="detail-value">${requestData.create_time || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">User Address</td>
+                                <td class="detail-value monospace">${requestData.user_addr || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">User URL Path</td>
+                                <td class="detail-value monospace">${requestData.user_url_path || 'N/A'}</td>
+                            </tr>
+                        </table>
+                    </div>
+                `;
+
+                // 计算池信息部分
+                detailsHtml += `
+                    <div class="details-section">
+                        <div class="details-section-title">Compute Pool Assignment</div>
+                        <table class="details-table">
+                            <tr>
+                                <td class="detail-key">Prefill Pool</td>
+                                <td class="detail-value prefill monospace">${requestData.prefill_pool}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Decode Pool</td>
+                                <td class="detail-value decode monospace">${requestData.decode_pool}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Prefill Instance</td>
+                                <td class="detail-value monospace">${requestData.prefill_instance || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Decode Instance</td>
+                                <td class="detail-value monospace">${requestData.decode_instance || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Batch Order</td>
+                                <td class="detail-value numeric">${requestData.batch_order || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">PD Disaggregation</td>
+                                <td class="detail-value">${requestData.enable_pd_disaggregation}</td>
+                            </tr>
+                        </table>
+                    </div>
+                `;
+
+                // Prompt信息部分
+                detailsHtml += `
+                    <div class="details-section">
+                        <div class="details-section-title">Prompt Information</div>
+                        <table class="details-table">
+                            <tr>
+                                <td class="detail-key">Model</td>
+                                <td class="detail-value">${requestData.model || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Token Length</td>
+                                <td class="detail-value numeric">${requestData.token_length || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Batch Size</td>
+                                <td class="detail-value numeric">${requestData.bs || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Max Tokens</td>
+                                <td class="detail-value numeric">${requestData.max_tokens || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Stream</td>
+                                <td class="detail-value">${requestData.stream}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Temperature</td>
+                                <td class="detail-value numeric">${requestData.temperature || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Top P</td>
+                                <td class="detail-value numeric">${requestData.top_p || 'N/A'}</td>
+                            </tr>
+                        </table>
+                    </div>
+                `;
+
+                // Service信息部分
+                detailsHtml += `
+                    <div class="details-section">
+                        <div class="details-section-title">Service Configuration</div>
+                        <table class="details-table">
+                            <tr>
+                                <td class="detail-key">Knowledge Injection</td>
+                                <td class="detail-value">${requestData.enable_know_injection || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Compression Enabled</td>
+                                <td class="detail-value">${requestData.enable_compress || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Compression Factor</td>
+                                <td class="detail-value numeric">${requestData.compress_factor || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">SLO TTFT (ms)</td>
+                                <td class="detail-value numeric">${requestData.slo_ttft || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">SLO E2E (ms)</td>
+                                <td class="detail-value numeric">${requestData.slo_e2e || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">SLO TPOT (ms)</td>
+                                <td class="detail-value numeric">${requestData.slo_tpot || 'N/A'}</td>
+                            </tr>
+                            <tr>
+                                <td class="detail-key">Endpoint Type</td>
+                                <td class="detail-value">${requestData.endpoint_type || 'N/A'}</td>
+                            </tr>
+                        </table>
+                    </div>
+                `;
+
+                // 原始数据部分
+                detailsHtml += `
+                    <div class="details-section">
+                        <div class="details-section-title">Raw Data</div>
+                        <div class="raw-data-section">${JSON.stringify(requestData, null, 2)}</div>
+                    </div>
+                `;
+
+                detailsContainer.innerHTML = detailsHtml;
+
+                // 显示模态框
+                const modal = document.getElementById('requestDetailsModal');
+                const overlay = document.getElementById('modalOverlay');
+
+                modal.classList.add('visible');
+                overlay.classList.add('visible');
+
+            } catch (error) {
+                console.error('Error showing request details:', error);
+                showNotification('Failed to display request details', 'error');
+            }
+        }
+
+        function hideRequestDetails() {
+            const modal = document.getElementById('requestDetailsModal');
+            const overlay = document.getElementById('modalOverlay');
+
+            modal.classList.remove('visible');
+            overlay.classList.remove('visible');
+        }
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', function() {
+            // 初始化主题
+            initTheme();
+
+            // 绑定主题切换按钮
+            const themeToggle = document.getElementById('themeToggle');
+            themeToggle.addEventListener('click', toggleTheme);
+
+            // 绑定刷新按钮
+            const refreshBtn = document.getElementById('refreshBtn');
+            refreshBtn.addEventListener('click', refreshDashboard);
+
+            // 绑定自动刷新按钮
+            const autoRefreshBtn = document.getElementById('autoRefreshBtn');
+            autoRefreshBtn.addEventListener('click', toggleAutoRefresh);
+
+            // 绑定筛选器
+            const typeFilter = document.getElementById('typeFilter');
+            const prefillFilter = document.getElementById('prefillFilter');
+            const decodeFilter = document.getElementById('decodeFilter');
+            const sortFilter = document.getElementById('sortFilter');
+
+            typeFilter.addEventListener('change', filterTable);
+            prefillFilter.addEventListener('change', filterTable);
+            decodeFilter.addEventListener('change', filterTable);
+            sortFilter.addEventListener('change', function() {
+                sortTable(this.value);
+            });
+
+            // 绑定表格排序
+            const sortableHeaders = document.querySelectorAll('.sortable');
+            sortableHeaders.forEach(header => {
+                header.addEventListener('click', function() {
+                    sortTable(this.dataset.sort);
+                });
+            });
+
+            // 绑定请求行点击事件
+            const requestRows = document.querySelectorAll('.request-row');
+            requestRows.forEach(row => {
+                row.addEventListener('click', function() {
+                    showRequestDetails(this);
+                });
+            });
+
+            // 绑定模态框关闭按钮
+            const modalCloseBtn = document.getElementById('modalCloseBtn');
+            modalCloseBtn.addEventListener('click', hideRequestDetails);
+
+            // 绑定遮罩层点击事件
+            const overlay = document.getElementById('modalOverlay');
+            overlay.addEventListener('click', hideRequestDetails);
+
+            // ESC键关闭模态框
+            document.addEventListener('keydown', function(event) {
+                if (event.key === 'Escape') {
+                    hideRequestDetails();
+                }
+            });
+
+            // 初始排序和筛选
+            sortTable('index');
+            filterTable();
+
+            // 显示初始通知
+            setTimeout(() => {
+                const totalRequests = {{ requests_data.total_requests }};
+                if (totalRequests > 0) {
+                    showNotification(`Loaded ${totalRequests} requests`, 'success');
+                }
+            }, 1000);
+        });
+    </script>
+</body>
+</html>

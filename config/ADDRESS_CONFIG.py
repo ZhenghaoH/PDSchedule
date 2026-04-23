@@ -25,17 +25,49 @@ CONFIG_GATEWAY_D_PORT = 8082
 # ==================================================
 #                    P Instance代理
 # ==================================================
-CONFIG_INSTANCE_P_IP = '172.18.0.169'
-CONFIG_INSTANCE_P_PORT = 7001
-CONFIG_VLLM_P_PORT = 8001
+CONFIG_INSTANCE_P_POOL = [
+    {
+        "ip": "172.18.0.169",
+        "port": 7001,
+        "vllm_port": 8001,
+    },
+    {
+        "ip": "172.18.0.169",
+        "port": 7002,
+        "vllm_port": 8002,
+    },
+]
+CONFIG_INSTANCE_P_ADDRS = [
+    f"{item['ip']}:{item['port']}" for item in CONFIG_INSTANCE_P_POOL
+]
+
+CONFIG_INSTANCE_P_IP = CONFIG_INSTANCE_P_POOL[0]["ip"] if CONFIG_INSTANCE_P_POOL else None
+CONFIG_INSTANCE_P_PORT = CONFIG_INSTANCE_P_POOL[0]["port"] if CONFIG_INSTANCE_P_POOL else None
+CONFIG_VLLM_P_PORT = CONFIG_INSTANCE_P_POOL[0]["vllm_port"] if CONFIG_INSTANCE_P_POOL else None
 
 
 # ==================================================
 #                    D Instance代理
 # ==================================================
-CONFIG_INSTANCE_D_IP = '172.18.0.169'
-CONFIG_INSTANCE_D_PORT = 7002
-CONFIG_VLLM_D_PORT = 8002
+CONFIG_INSTANCE_D_POOL = [
+    {
+        "ip": "172.18.0.169",
+        "port": 7003,
+        "vllm_port": 8003,
+    },
+    {
+        "ip": "172.18.0.169",
+        "port": 7004,
+        "vllm_port": 8004,
+    },
+]
+CONFIG_INSTANCE_D_ADDRS = [
+    f"{item['ip']}:{item['port']}" for item in CONFIG_INSTANCE_D_POOL
+]
+
+CONFIG_INSTANCE_D_IP = CONFIG_INSTANCE_D_POOL[0]["ip"] if CONFIG_INSTANCE_D_POOL else None
+CONFIG_INSTANCE_D_PORT = CONFIG_INSTANCE_D_POOL[0]["port"] if CONFIG_INSTANCE_D_POOL else None
+CONFIG_VLLM_D_PORT = CONFIG_INSTANCE_D_POOL[0]["vllm_port"] if CONFIG_INSTANCE_D_POOL else None
 
 
 # ==================================================

@@ -13,7 +13,7 @@ from store.controller.network import NetworkManager, Network
 # --- 导入调度算法 ---
 from .scheduler_PSO import PSO_Scheduler
 from .scheduler_Random import Random_Scheduler
-from .scheduler_RoundRobin import RoundRobin_Scheduler
+from .scheduler_RoundRobin import PairedRoundRobin_Scheduler, RoundRobin_Scheduler
 from .scheduler_LeastLoad import LeastLoad_Scheduler
 
 # --- 导入请求 ---
@@ -44,6 +44,7 @@ class GlobalScheduler:
             "pso": PSO_Scheduler(num_particles=20, max_iterations=15),
             "random": Random_Scheduler(),
             "round_robin": RoundRobin_Scheduler(),
+            "paired_round_robin": PairedRoundRobin_Scheduler(),
             "least_load": LeastLoad_Scheduler()
         }
         self.current_mode: str = "least_load" # 默认策略

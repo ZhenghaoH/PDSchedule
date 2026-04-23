@@ -3,7 +3,7 @@
 
     Usage:
         from tokenizer_registry import estimate_tokens
-        n = estimate_tokens("你好，世界", tokenizer_type="qwen1.5b")
+        n = estimate_tokens("你好，世界", model_name="qwen1.5b")
 
     Workflow
         名字中包含 "qwen" → 走 Qwen
@@ -87,7 +87,7 @@ class TokenizerRegistry:
         """
         根据模型名/类型推断属于哪个族：qwen / llama / deepseek / gpt / other
         """
-        name = tokenizer_type.lower()
+        name = (tokenizer_type or "").lower()
 
         if "qwen" in name:
             return "qwen"
@@ -123,7 +123,13 @@ class TokenizerRegistry:
             except Exception:
                 pass
 
-        # 3) fallback：原样
+        # 3) family 映射：让 LOCAL_PATH_MAP 真正生效
+        family = cls.detect_family(model_name)
+        mapped_path = cls.LOCAL_PATH_MAP.get(family)
+        if mapped_path and cls._is_local_model_dir(mapped_path):
+            return mapped_path
+
+        # 4) fallback：原样
         return model_name
 
     # ---------------- GPT 系列（tiktoken） ----------------

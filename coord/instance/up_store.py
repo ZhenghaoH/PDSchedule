@@ -29,35 +29,35 @@ def metric_update(monitor: Optional[ThroughputMonitor] = None):
             if prometheus_metrics:
                 running_reqs = int(prometheus_metrics['vllm:num_requests_running']['samples'][0]['value'])
                 waiting_reqs = int(prometheus_metrics['vllm:num_requests_waiting']['samples'][0]['value'])
-                logging.info(
-                    "[Instance] running_reqs=%s waiting_reqs=%s",
-                    running_reqs,
-                    waiting_reqs,
-                )
-                logging.info(
-                    "[Instance] gpu_index=%s device=%s memory_util_percent=%.2f gpu_util_percent=%.2f source=%s",
-                    gpu_bandwidth_metrics["gpu_index"],
-                    gpu_bandwidth_metrics["device_name"],
-                    gpu_bandwidth_metrics["memory_util_percent"],
-                    gpu_bandwidth_metrics["gpu_util_percent"],
-                    gpu_bandwidth_metrics["source"],
-                )
+                # logging.info(
+                #     "[Instance] running_reqs=%s waiting_reqs=%s",
+                #     running_reqs,
+                #     waiting_reqs,
+                # )
+                # logging.info(
+                #     "[Instance] gpu_index=%s device=%s memory_util_percent=%.2f gpu_util_percent=%.2f source=%s",
+                #     gpu_bandwidth_metrics["gpu_index"],
+                #     gpu_bandwidth_metrics["device_name"],
+                #     gpu_bandwidth_metrics["memory_util_percent"],
+                #     gpu_bandwidth_metrics["gpu_util_percent"],
+                #     gpu_bandwidth_metrics["source"],
+                # )
             else:
                 running_reqs = 0
                 waiting_reqs = 0
-                logging.info(
-                    "[Instance] running_reqs=%s waiting_reqs=%s",
-                    running_reqs,
-                    waiting_reqs,
-                )
-                logging.info(
-                    "[Instance] gpu_index=%s device=%s memory_util_percent=%.2f gpu_util_percent=%.2f source=%s",
-                    gpu_bandwidth_metrics["gpu_index"],
-                    gpu_bandwidth_metrics["device_name"],
-                    gpu_bandwidth_metrics["memory_util_percent"],
-                    gpu_bandwidth_metrics["gpu_util_percent"],
-                    gpu_bandwidth_metrics["source"],
-                )
+                # logging.info(
+                #     "[Instance] running_reqs=%s waiting_reqs=%s",
+                #     running_reqs,
+                #     waiting_reqs,
+                # )
+                # logging.info(
+                #     "[Instance] gpu_index=%s device=%s memory_util_percent=%.2f gpu_util_percent=%.2f source=%s",
+                #     gpu_bandwidth_metrics["gpu_index"],
+                #     gpu_bandwidth_metrics["device_name"],
+                #     gpu_bandwidth_metrics["memory_util_percent"],
+                #     gpu_bandwidth_metrics["gpu_util_percent"],
+                #     gpu_bandwidth_metrics["source"],
+                # )
 
             if monitor:
                 prompt_throughput, generate_throughput = monitor.get_prometheus_throughput()

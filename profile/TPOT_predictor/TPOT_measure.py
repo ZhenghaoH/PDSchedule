@@ -72,7 +72,7 @@ async def measure_generation_performance(
         "temperature": 0.0,
     }
 
-    tokenizer_path = "/home/dell/vLLM/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B/"
+    tokenizer_path = vllm_config.get("tokenizer_path")
 
     start_time = time.perf_counter()
     ttft = 0.0
@@ -118,7 +118,7 @@ async def measure_generation_performance(
         end_time = time.perf_counter()
         total_request_time = end_time - start_time
 
-        if full_response_text:
+        if full_response_text and tokenizer_path:
             tokenizer = get_tokenizer(tokenizer_path)
             if tokenizer:
                 try:

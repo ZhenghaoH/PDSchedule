@@ -1,5 +1,7 @@
 import asyncio
 from collections import defaultdict
+from pathlib import Path
+import pickle
 from typing import Dict, List, Tuple
 
 import aiohttp
@@ -11,7 +13,7 @@ from transformers import AutoTokenizer
 if __package__:
     from .request_generator import generate_prompt_with_tokens, measure_ttft
 else:
-    from profile.TTFT_predictor.request_generator import generate_prompt_with_tokens, measure_ttft
+    from request_generator import generate_prompt_with_tokens, measure_ttft
 
 
 class PrefillTimeRegressor:
@@ -21,11 +23,12 @@ class PrefillTimeRegressor:
         self.model = LinearRegression(fit_intercept=True)
         self.scaler = StandardScaler()
         self._is_fitted = False
-        self._coeffs = {"a": 0.0, "b": 0.0, "c": 0.0, "d": 0.0}
+        self._coeffs = {"tokens": 0.0, "d": 0.0}
         self._training_data: List[Tuple[int, int, float]] = []
 
     def _transform_features(self, batchsize: int, prompt_length: int) -> np.ndarray:
-        return np.array([[batchsize * prompt_length, prompt_length, batchsize]])
+        total_tokens = max(0, int(batchsize)) * max(0, int(prompt_length))
+        return np.array([[total_tokens]])
 
     def fit(self):
         """Fit the regression model using the currently collected samples."""
@@ -70,18 +73,11 @@ class PrefillTimeRegressor:
         raw_coeffs = raw_coeffs_scaled / scale
         intercept = intercept_scaled - np.sum(raw_coeffs * mean)
 
-        self._coeffs = {
-            "a": raw_coeffs[0],
-            "b": raw_coeffs[1],
-            "c": raw_coeffs[2],
-            "d": intercept,
-        }
+        self._coeffs = {"tokens": raw_coeffs[0], "d": intercept}
 
         print("[Regressor] Model fitted successfully.")
         print(
-            f"   Coeffs: a={self._coeffs['a']:.2e}, "
-            f"b={self._coeffs['b']:.2e}, "
-            f"c={self._coeffs['c']:.2e}, "
+            f"   Coeffs: tokens={self._coeffs['tokens']:.2e}, "
             f"d={self._coeffs['d']:.3f}"
         )
 
@@ -90,6 +86,52 @@ class PrefillTimeRegressor:
 
     def clear_data(self):
         self._training_data = []
+
+    def _cluster_ttfts(self, ttfts: List[float]) -> List[List[float]]:
+        clusters: List[List[float]] = []
+        for ttft in sorted(ttfts):
+            if not clusters:
+                clusters.append([ttft])
+                continue
+
+            current_cluster = clusters[-1]
+            cluster_mean = float(np.mean(current_cluster))
+            threshold = max(0.02, cluster_mean * 0.15)
+            if ttft - current_cluster[-1] <= threshold:
+                current_cluster.append(ttft)
+            else:
+                clusters.append([ttft])
+        return clusters
+
+    def _add_split_batch_samples(self, batch_size: int, prompt_length: int, ttfts: List[float]):
+        """
+        Group warmup TTFT samples into inferred vLLM batches before fitting.
+
+        Samples in the same time cluster are treated as one batch. Later
+        clusters include the waiting time of earlier batches, so fit the time
+        delta between cluster means.
+        """
+        valid_ttfts = [ttft for ttft in ttfts if ttft is not None and 0.001 <= ttft <= 60.0]
+        if not valid_ttfts:
+            return [], None
+
+        clusters = self._cluster_ttfts(valid_ttfts)
+        batch_infos = []
+        previous_mean = 0.0
+
+        for cluster in clusters:
+            cluster_bs = len(cluster)
+            cluster_mean = float(np.mean(cluster))
+            batch_time = cluster_mean - previous_mean
+            previous_mean = cluster_mean
+
+            if not 0.001 <= batch_time <= 60.0:
+                continue
+
+            self.add_data(cluster_bs, prompt_length, batch_time)
+            batch_infos.append((cluster_bs, batch_time))
+
+        return valid_ttfts, batch_infos
 
     async def trigger_warmup_requests(
         self,
@@ -129,11 +171,7 @@ class PrefillTimeRegressor:
                     ]
                     try:
                         results = await asyncio.gather(*tasks)
-                        valid_ttfts = []
-                        for ttft in results:
-                            if ttft is not None and 0.001 <= ttft <= 60.0:
-                                self.add_data(bs, pl, ttft)
-                                valid_ttfts.append(ttft)
+                        valid_ttfts, split_info = self._add_split_batch_samples(bs, pl, results)
 
                         if valid_ttfts:
                             details = ", ".join(
@@ -141,6 +179,12 @@ class PrefillTimeRegressor:
                                 for idx, ttft in enumerate(valid_ttfts)
                             )
                             print(f"      Repeat TTFTs -> {details}")
+                            if split_info:
+                                batch_details = ", ".join(
+                                    f"bs={cluster_bs}:{batch_time * 1000:.2f}ms"
+                                    for cluster_bs, batch_time in split_info
+                                )
+                                print(f"      Clustered batches -> {batch_details}")
                         else:
                             print("      Repeat TTFTs -> no valid samples")
 
@@ -165,3 +209,43 @@ class PrefillTimeRegressor:
 
     def get_coefficients(self) -> dict:
         return self._coeffs
+
+    def save_to_file(self, file_path: str) -> None:
+        """Persist the fitted regressor state for reuse after gateway restart."""
+        path = Path(file_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        state = {
+            "model": self.model,
+            "scaler": self.scaler,
+            "is_fitted": self._is_fitted,
+            "coeffs": self._coeffs,
+            "training_data": self._training_data,
+        }
+        with path.open("wb") as f:
+            pickle.dump(state, f)
+
+    def load_from_file(self, file_path: str) -> bool:
+        """Load a persisted regressor state. Returns False if no state exists."""
+        path = Path(file_path)
+        if not path.exists():
+            return False
+
+        with path.open("rb") as f:
+            state = pickle.load(f)
+
+        scaler = state["scaler"]
+        if getattr(scaler, "n_features_in_", 1) != 1:
+            return False
+
+        self.model = state["model"]
+        self.scaler = scaler
+        self._is_fitted = bool(state.get("is_fitted", False))
+        coeffs = state.get("coeffs", {"tokens": 0.0, "d": 0.0})
+        if "tokens" not in coeffs:
+            coeffs = {
+                "tokens": coeffs.get("a", 0.0) + coeffs.get("b", 0.0),
+                "d": coeffs.get("d", 0.0),
+            }
+        self._coeffs = coeffs
+        self._training_data = state.get("training_data", [])
+        return self._is_fitted

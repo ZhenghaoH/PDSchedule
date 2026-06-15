@@ -42,5 +42,7 @@ class PrefillPool(BasePool):
 
 @dataclass
 class DecodePool(BasePool):
-    """Decode 节点特有属性: mem_bandwidth"""
+    """Decode 节点特有属性: mem_bandwidth 与请求数容量"""
     mem_bandwidth: float = 0.0
+    running_reqs: int = 0
+    max_decode_req_num: int = 128

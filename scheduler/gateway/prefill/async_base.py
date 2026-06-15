@@ -1,6 +1,3 @@
-import random
-from typing import List, Tuple, Callable
-
 from store.gateway.manager import GatewayStoreManager
 from core.schemas.request import BaseRequest
 
@@ -13,19 +10,24 @@ class AsyncBaseScheduler:
         else:
             self.storage = GatewayStoreManager()
 
-    def random(self, decode_proxy):
-        links = self.storage.link_table
-        prefill_instances = [k for k, v in links.items() if v.decode_proxy == decode_proxy]
-        return random.choice(prefill_instances)
+    def lowest_prompt_throughput(self) -> str:
+        prefill_instances = self.storage.active_prefill_objs
+        if not prefill_instances:
+            return ""
 
-    def schedule(self, request: BaseRequest, tag: str = "prefill", strategy: str = "random", **kwargs) -> str:
+        instances = self.storage.instance_table
+        return min(
+            prefill_instances,
+            key=lambda instance_ip: instances.get(instance_ip).prompt_throughput if instances.get(instance_ip) else 0.0
+        )
+
+    def schedule(self, request: BaseRequest, tag: str = "prefill", strategy: str = "lowest_prompt_throughput", **kwargs) -> str:
         if tag == "prefill":
-            decode_proxy = request.Task.D_proxy_addr + ":" + str(request.Task.D_proxy_port)
-            if strategy == "random":
-                return self.random(decode_proxy)
+            if strategy == "lowest_prompt_throughput":
+                return self.lowest_prompt_throughput()
             else:
                 print("Strategy not found.")
-                return self.random(decode_proxy)
+                return self.lowest_prompt_throughput()
         elif tag == "decode":
             return request.Task.D_proxy_addr + ":" + str(request.Task.D_proxy_port)
         else:

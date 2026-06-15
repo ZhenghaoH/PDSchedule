@@ -41,11 +41,11 @@ class PoolManager:
             normalized_load = max(0.0, float(load))
             pool.current_load = max(0.0, pool.current_load + normalized_load)
             pool.last_updated = time.time()
-            print(
-                f"[Manager] Decode Pool {pool_id} add_load: "
-                f"load={normalized_load:.4f}, "
-                f"effective={pool.current_load:.4f}"
-            )
+            # print(
+            #     f"[Manager] Decode Pool {pool_id} add_load: "
+            #     f"load={normalized_load:.4f}, "
+            #     f"effective={pool.current_load:.4f}"
+            # )
             return True
 
     def sub_decode_load(self, pool_id: int, load: float) -> bool:
@@ -106,7 +106,8 @@ class PoolManager:
                       ip: str,
                       port: int,
                       capacity: float,
-                      max_prompt_throughput: float = None) -> int:
+                      max_prompt_throughput: float = None,
+                      max_decode_req_num: int = 128) -> int:
         """
         注册或更新资源池
         返回分配的池ID
@@ -132,6 +133,7 @@ class PoolManager:
                     print(f"[Manager] Info: {type_key} Pool {existing_pool_id} flops updated to {capacity}.")
                 elif Pool_type == PoolType.DECODE:
                     pool_obj.mem_bandwidth = capacity
+                    pool_obj.max_decode_req_num = max(1, int(max_decode_req_num))
                     print(f"[Manager] Info: {type_key} Pool {existing_pool_id} mem_bandwidth updated to {capacity}.")
                 
                 return existing_pool_id
@@ -159,7 +161,8 @@ class PoolManager:
             elif Pool_type == PoolType.DECODE:
                 new_Pool = DecodePool(
                     pool_id=new_pool_id, proxy_ip_address=ip, proxy_port=port,
-                    last_updated=current_time, mem_bandwidth=capacity
+                    last_updated=current_time, mem_bandwidth=capacity,
+                    max_decode_req_num=max(1, int(max_decode_req_num))
                 )
             else:
                 return -1
@@ -195,6 +198,42 @@ class PoolManager:
             Pool.last_updated = time.time()
 
             # print(f"[Manager] {type_key} Pool {pool_id} heartbeat: load={load}")
+            return True
+
+    def update_decode_running_reqs(self, pool_id: int, running_reqs: int, max_decode_req_num: int) -> bool:
+        """按 Decode 池 running requests 数归一化更新负载。"""
+        with self.db_lock:
+            target_storage = self._pools[PoolType.DECODE.value]
+            if pool_id not in target_storage:
+                print(f"[Manager] Error: decode Pool {pool_id} not registered.")
+                return False
+
+            pool = target_storage[pool_id]
+            safe_running_reqs = max(0, int(running_reqs))
+            safe_max_decode_req_num = max(1, int(max_decode_req_num))
+            normalized_load = min(max(safe_running_reqs / safe_max_decode_req_num, 0.0), 1.0)
+
+            pool.running_reqs = safe_running_reqs
+            pool.max_decode_req_num = safe_max_decode_req_num
+            pool.current_load = normalized_load
+            pool.last_updated = time.time()
+            return True
+
+    def unregister_Pool(self, Pool_type: PoolType, pool_id: int) -> bool:
+        """注销资源池，只删除对应类型和 ID 的池记录。"""
+        type_key = Pool_type.value
+
+        with self.db_lock:
+            target_storage = self._pools[type_key]
+            if pool_id not in target_storage:
+                print(f"[Manager] Error: {type_key} Pool {pool_id} not registered.")
+                return False
+
+            pool = target_storage.pop(pool_id)
+            index_key = (type_key, pool.proxy_ip_address, pool.proxy_port)
+            if self._ip_index.get(index_key) == pool_id:
+                del self._ip_index[index_key]
+            print(f"[Manager] {type_key.capitalize()} Pool {pool_id} unregistered.")
             return True
 
     # ==========================================

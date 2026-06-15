@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from pathlib import Path
 from typing import Dict, Optional
 
 import numpy as np
@@ -7,7 +8,7 @@ import numpy as np
 if __package__:
     from .prefill_regressor import PrefillTimeRegressor
 else:
-    from profile.TTFT_predictor.prefill_regressor import PrefillTimeRegressor
+    from prefill_regressor import PrefillTimeRegressor
 
 
 VLLM_CONFIG_DEFAULT = {
@@ -17,8 +18,12 @@ VLLM_CONFIG_DEFAULT = {
     "tokenizer_path": "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B/",
 }
 
+DEFAULT_MODEL_FILE = str(
+    Path(__file__).resolve().parent / "artifacts" / "prefill_ttft_regressor.pkl"
+)
+
 BATCH_SIZES_TO_TEST = range(1, 9)
-TOKEN_LENGTHS_TO_TEST = range(64, 2048, 64)
+TOKEN_LENGTHS_TO_TEST = range(64, 1024, 64)
 
 WARM_UP_CONFIGS_DEFAULT = [
     (bs, pl)
@@ -39,10 +44,10 @@ async def get_regressor() -> PrefillTimeRegressor:
             _regressor = PrefillTimeRegressor()
             dummy_data = [
                 (1, 100, 0.04),
-                (1, 1000, 0.22),
-                (8, 100, 0.06),
-                (8, 1000, 0.35),
-                (4, 500, 0.12),
+                (1, 1000, 0.20),
+                (1, 2000, 0.36),
+                (1, 4000, 0.68),
+                (1, 8000, 1.32),
             ]
             print("[TTFT Predictor] Seeding with dummy data for fast start...")
             try:
@@ -56,12 +61,48 @@ async def get_regressor() -> PrefillTimeRegressor:
 
 async def predict_ttft(batch_size: int, prompt_length: int) -> float:
     regressor = await get_regressor()
+    total_tokens = max(0, int(batch_size)) * max(0, int(prompt_length))
     if not regressor._is_fitted:
-        return 0.02 * batch_size + 0.0002 * prompt_length
+        return 0.0002 * total_tokens
     return max(0.001, regressor.predict(batch_size, prompt_length))
 
 
-async def perform_detailed_warmup(vllm_config: Dict = VLLM_CONFIG_DEFAULT, repeats: int = 3):
+async def load_ttft_model(model_file: str = DEFAULT_MODEL_FILE) -> bool:
+    regressor = await get_regressor()
+    try:
+        loaded = regressor.load_from_file(model_file)
+    except Exception as exc:
+        logging.warning(f"[TTFT Predictor] Failed to load model from {model_file}: {exc}")
+        return False
+
+    if loaded:
+        logging.info(f"[TTFT Predictor] Loaded fitted model from {model_file}")
+    else:
+        logging.info(f"[TTFT Predictor] No fitted model found at {model_file}")
+    return loaded
+
+
+async def save_ttft_model(model_file: str = DEFAULT_MODEL_FILE) -> bool:
+    regressor = await get_regressor()
+    if not regressor._is_fitted:
+        logging.warning("[TTFT Predictor] Skip saving model: regressor is not fitted.")
+        return False
+
+    try:
+        regressor.save_to_file(model_file)
+    except Exception as exc:
+        logging.warning(f"[TTFT Predictor] Failed to save model to {model_file}: {exc}")
+        return False
+
+    logging.info(f"[TTFT Predictor] Saved fitted model to {model_file}")
+    return True
+
+
+async def perform_detailed_warmup(
+    vllm_config: Dict = VLLM_CONFIG_DEFAULT,
+    repeats: int = 3,
+    model_file: Optional[str] = None,
+):
     """
     Run warmup tests step by step and fit the model after all collected points.
     Ctrl+C / cancellation should stop the loop immediately.
@@ -107,12 +148,13 @@ async def perform_detailed_warmup(vllm_config: Dict = VLLM_CONFIG_DEFAULT, repea
         print(f"\n[Detailed Warmup] All tests finished. Total points: {final_count}. Fitting model...")
         regressor.fit()
 
+        if model_file:
+            await save_ttft_model(model_file)
+
         coeffs = regressor.get_coefficients()
         print("\n[Detailed Warmup] Model calibrated.")
-        print(f"   a (B*L) = {coeffs['a']:.2e}")
-        print(f"   b (L)   = {coeffs['b']:.2e}")
-        print(f"   c (B)   = {coeffs['c']:.2e}")
-        print(f"   d (Int) = {coeffs['d']:.3f}")
+        print(f"   tokens = {coeffs['tokens']:.2e}")
+        print(f"   d      = {coeffs['d']:.3f}")
         print("=" * 50 + "\n")
 
     except asyncio.CancelledError:

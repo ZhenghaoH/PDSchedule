@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Callable, Awaitable
 import threading
 from copy import deepcopy
 import os
@@ -46,11 +46,37 @@ class GatewayStoreManager:
                     self.SYN_TIMEOUT = 1  # 同步设置 等待时间 秒
 
                     self.TRIGGER_MODE = "ARRIVAL"
-                    self.PROFILE_MODE = True
+                    self.PROFILE_MODE = False
+                    self.SCHEDULER_STRATEGY = "pso"
+                    self.DECODE_SCHEDULER_STRATEGY = "slo_tpot_admission"
+                    self.ENABLE_ADAPTIVE_SWITCH = False
+                    
+                    self.TTFT_WARMUP_ENABLED = False
+                    self.TTFT_WARMUP_REPEATS = 3
+                    self.TTFT_TARGET: Optional[str] = None
+                    self.TTFT_MODEL_ID: Optional[str] = None
+                    self.TTFT_TOKENIZER_PATH: Optional[str] = None
+                    self.TTFT_MODEL_FILE: Optional[str] = None
+                    self.TTFT_PREDICTOR_READY = False
+                    self.TTFT_PREDICT_FUNC: Optional[Callable[[int, int], Awaitable[float]]] = None
+
+                    self.TPOT_WARMUP_ENABLED = False
+                    self.TPOT_WARMUP_REPEATS = 2
+                    self.TPOT_TARGET: Optional[str] = None
+                    self.TPOT_MODEL_ID: Optional[str] = None
+                    self.TPOT_TOKENIZER_PATH: Optional[str] = None
+                    self.TPOT_MODEL_FILE: Optional[str] = None
+                    self.TPOT_PREDICTOR_READY = False
+                    self.TPOT_PREDICT_FUNC: Optional[Callable[[int, int, int], Awaitable[float]]] = None
+                    self.TPOT_STEP_PREDICTOR_READY = False
+                    self.TPOT_STEP_PREDICT_FUNC: Optional[Callable[[int, int], Awaitable[float]]] = None
+                    self._decode_active_batches: Dict[str, Dict[str, Dict[str, Any]]] = {}
+                    self._decode_round_robin_index = 0
 
                     self.KDN_BASE_URL = "http://172.18.0.169:9101"  # FIXME: 值传递有问题，记得修复
 
-                    self.LOOP_TASK_TIME = 0.1  # 轮询上报任务时间
+                    self.LOOP_TASK_TIME = 0.03  # 轮询上报任务时间
+                    self.MAX_DECODE_REQ_NUM = int(os.getenv("MY_MAX_DECODE_REQ_NUM", 128))
 
                     self._initialized = True  # 确保不重复初始化
 
@@ -62,6 +88,117 @@ class GatewayStoreManager:
     def get_pool_id(self):
         with self._data_lock:
             return self._pool_id
+
+    def register_ttft_predictor(self, predict_func: Callable[[int, int], Awaitable[float]]):
+        """Register the in-process TTFT predictor used by synchronous scheduling."""
+        with self._data_lock:
+            self.TTFT_PREDICT_FUNC = predict_func
+            self.TTFT_PREDICTOR_READY = True
+
+    def clear_ttft_predictor(self):
+        """Mark the in-process TTFT predictor as unavailable."""
+        with self._data_lock:
+            self.TTFT_PREDICT_FUNC = None
+            self.TTFT_PREDICTOR_READY = False
+
+    def get_ttft_predictor(self):
+        """Return the registered in-process TTFT predictor function, if ready."""
+        with self._data_lock:
+            if not self.TTFT_PREDICTOR_READY:
+                return None
+            return self.TTFT_PREDICT_FUNC
+
+    def register_tpot_predictor(self, predict_func: Callable[[int, int, int], Awaitable[float]]):
+        """Register the in-process TPOT predictor used by decode proxy lifecycle."""
+        with self._data_lock:
+            self.TPOT_PREDICT_FUNC = predict_func
+            self.TPOT_PREDICTOR_READY = True
+
+    def clear_tpot_predictor(self):
+        """Mark the in-process TPOT predictor as unavailable."""
+        with self._data_lock:
+            self.TPOT_PREDICT_FUNC = None
+            self.TPOT_PREDICTOR_READY = False
+
+    def get_tpot_predictor(self):
+        """Return the registered in-process TPOT predictor function, if ready."""
+        with self._data_lock:
+            if not self.TPOT_PREDICTOR_READY:
+                return None
+            return self.TPOT_PREDICT_FUNC
+
+    def register_tpot_step_predictor(self, predict_func: Callable[[int, int], Awaitable[float]]):
+        """Register the in-process single-step TPOT predictor."""
+        with self._data_lock:
+            self.TPOT_STEP_PREDICT_FUNC = predict_func
+            self.TPOT_STEP_PREDICTOR_READY = True
+
+    def clear_tpot_step_predictor(self):
+        """Mark the in-process single-step TPOT predictor as unavailable."""
+        with self._data_lock:
+            self.TPOT_STEP_PREDICT_FUNC = None
+            self.TPOT_STEP_PREDICTOR_READY = False
+
+    def get_tpot_step_predictor(self):
+        """Return the registered single-step TPOT predictor function, if ready."""
+        with self._data_lock:
+            if not self.TPOT_STEP_PREDICTOR_READY:
+                return None
+            return self.TPOT_STEP_PREDICT_FUNC
+
+    def add_decode_active_request(self, instance_ip: str, request: Any):
+        """Track a request currently admitted to a Decode instance."""
+        if not instance_ip or request is None:
+            return
+        request_id = str(getattr(request, "Request_ID", ""))
+        if not request_id:
+            return
+        prompt = getattr(request, "Prompt", None)
+        service = getattr(request, "Service", None)
+        with self._data_lock:
+            active_batch = self._decode_active_batches.setdefault(instance_ip, {})
+            prompt_tokens = int(getattr(prompt, "token_length", 0) or 0)
+            active_batch[request_id] = {
+                "request_id": request_id,
+                "prompt_tokens": prompt_tokens,
+                "max_tokens": int(getattr(prompt, "max_tokens", 0) or 0),
+                "slo_tpot_ms": float(getattr(service, "SLO_TPOT", 0) or 0),
+                "current_context_len": prompt_tokens,
+                "start_time": time.time(),
+            }
+
+    def remove_decode_active_request(self, instance_ip: str, request_id: Any):
+        """Remove a Decode active request when its stream finishes."""
+        if not instance_ip:
+            return
+        request_key = str(request_id)
+        with self._data_lock:
+            active_batch = self._decode_active_batches.get(instance_ip)
+            if not active_batch:
+                return
+            active_batch.pop(request_key, None)
+            if not active_batch:
+                self._decode_active_batches.pop(instance_ip, None)
+
+    def get_decode_active_batch(self, instance_ip: str) -> List[Dict[str, Any]]:
+        """Return a snapshot of currently active Decode requests for an instance."""
+        with self._data_lock:
+            active_batch = self._decode_active_batches.get(instance_ip, {})
+            return [dict(item) for item in active_batch.values()]
+
+    def next_decode_round_robin(self) -> str:
+        """Return the next active Decode instance using round-robin order."""
+        with self._data_lock:
+            active_instances = [
+                instance_ip for instance_ip in self._decode_objs
+                if self._instance_table.get(instance_ip)
+                and self._instance_table[instance_ip].online
+            ]
+            if not active_instances:
+                return ""
+            index = self._decode_round_robin_index % len(active_instances)
+            self._decode_round_robin_index = (index + 1) % len(active_instances)
+            return active_instances[index]
 
     @property
     def network_register_table(self) -> List[str]:
@@ -91,6 +228,24 @@ class GatewayStoreManager:
         with self._data_lock:
             return self._decode_objs.copy()
 
+    def _active_instances(self, instances: List[str]) -> List[str]:
+        with self._data_lock:
+            return [
+                instance_ip for instance_ip in instances
+                if self._instance_table.get(instance_ip)
+                and self._instance_table[instance_ip].online
+            ]
+
+    @property
+    def active_prefill_objs(self) -> List[str]:
+        """获取当前在线的 prefill 实例列表。"""
+        return self._active_instances(self._prefill_objs)
+
+    @property
+    def active_decode_objs(self) -> List[str]:
+        """获取当前在线的 decode 实例列表。"""
+        return self._active_instances(self._decode_objs)
+
     def set_config(self, prefills: Optional[List[str]] = None, decodes: Optional[List[str]] = None):
         """线程安全的配置设置方法"""
         with self._data_lock:
@@ -114,6 +269,28 @@ class GatewayStoreManager:
         with self._data_lock:
             self._instance_table[key] = deepcopy(value)
 
+    def has_instance(self, instance_ip: str) -> bool:
+        with self._data_lock:
+            return instance_ip in self._instance_table
+
+    def mark_instance_offline(self, instance_ip: str) -> bool:
+        with self._data_lock:
+            if instance_ip not in self._instance_table:
+                return False
+
+            instance = self._instance_table[instance_ip]
+            instance.online = False
+            instance.running_reqs = 0
+            instance.waiting_reqs = 0
+            instance.prompt_throughput = 0.0
+            instance.generate_throughput = 0.0
+            instance.kv_cache_usage_percent = 0.0
+            instance.gpu_util_percent = 0.0
+            instance.gpu_memory_util_percent = 0.0
+            instance.last_updated = time.time()
+            self._remove_instance_links_locked(instance_ip)
+            return True
+
     @property
     def link_table(self) -> Dict[str, Any]:
         """获取links的深拷贝"""
@@ -130,6 +307,20 @@ class GatewayStoreManager:
         with self._data_lock:
             if key in self._link_table:
                 del self._link_table[key]
+
+    def _remove_instance_links_locked(self, instance_ip: str):
+        keys_to_delete = [
+            key for key, link in self._link_table.items()
+            if key == instance_ip
+            or getattr(link, "prefill_instance", "") == instance_ip
+            or getattr(link, "decode_instance", "") == instance_ip
+        ]
+        for key in keys_to_delete:
+            del self._link_table[key]
+
+    def remove_instance_links(self, instance_ip: str):
+        with self._data_lock:
+            self._remove_instance_links_locked(instance_ip)
 
     def get_compute_params(self):
         """获取 GPUtype & FLOPS & memBandwidth & max_prompt_throughput，理论上一个池里每个实例都是一样的"""
@@ -151,8 +342,17 @@ class GatewayStoreManager:
         return load
 
     def get_decode_load(self):
-        """Decode current_load 已切到控制器调度侧维护，网关侧暂不再负责计算。"""
-        return 0.0
+        """获取 Decode 池当前 running requests 总数。"""
+        running_reqs = 0
+        for instance_ip in self.active_decode_objs:
+            instance = self.instance_table.get(instance_ip)
+            if instance:
+                running_reqs += int(instance.running_reqs)
+        return running_reqs
+
+    def get_max_decode_req_num(self):
+        """获取 Decode 池级最大 running requests 数。"""
+        return max(1, int(self.MAX_DECODE_REQ_NUM))
 
     def get_peer_links(self):
         """给出本推理池（Prefill）和对端的推理池（Decode）之间的所有连接"""
@@ -173,24 +373,46 @@ class GatewayStoreManager:
                 peer_links[peer_addr]["count"] += 1
         return peer_links
 
-    def get_availability(self, instance_ip: str) -> float:
-        """获取实例预计可用时间"""
+    def get_predicted_availability(self, instance_ip: str) -> float:
+        """Get the scheduler's predicted available time for an instance."""
         with self._lock:
-            if instance_ip in self._instance_table.keys():
-                instance = self._instance_table[instance_ip]
-                return instance.last_updated
-            else:
+            instance = self._instance_table.get(instance_ip)
+            if not instance:
                 return 0.0
+            return instance.predicted_available_time
 
-    def update_availability(self, instance_ip: str, actual_finish_time: float):
+    def update_predicted_availability(self, instance_ip: str, predicted_time: float):
+        """Update the scheduler-owned predicted availability timeline."""
+        with self._lock:
+            instance = self._instance_table.get(instance_ip)
+            if not instance:
+                return False
+            instance.predicted_available_time = predicted_time
+            instance.last_updated = time.time()
+            return True
+
+    def get_real_availability(self, instance_ip: str) -> float:
+        """Get the latest observed real available time for an instance."""
+        with self._lock:
+            instance = self._instance_table.get(instance_ip)
+            if not instance:
+                return 0.0
+            return instance.real_available_time
+
+    def update_real_availability(self, instance_ip: str, real_time: float):
         """
-        更新实例可用时间。
-        如果实例不存在（例如动态扩容或端口变化），则自动注册它。
+        Update the observed real availability.
+
+        If reality is later than the predicted timeline, push prediction forward.
+        If reality is earlier, keep the predicted timeline so planned batches are
+        not accidentally marked as free.
         """
         with self._lock:
-            if instance_ip not in self._instance_table.keys():
-                # logging.info(f"Registered new instance: {instance_ip}")
-                self.prefill_objs.append(instance_ip)
-                self._instance_table[instance_ip] = Instance(instance_ip=instance_ip)
-            else:
-                self._instance_table[instance_ip].last_updated = actual_finish_time
+            instance = self._instance_table.get(instance_ip)
+            if not instance:
+                return False
+            instance.real_available_time = real_time
+            if real_time > instance.predicted_available_time:
+                instance.predicted_available_time = real_time
+            instance.last_updated = time.time()
+            return True

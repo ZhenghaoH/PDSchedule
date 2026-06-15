@@ -60,6 +60,28 @@ def prefill_compute_update():
         logging.error(f"[Node] 心跳错误: {e}")
 
 
+def prefill_compute_unregister():
+    """向 Scheduler 注销 Prefill 节点"""
+    endpoint = "prefill_pool/unregister"
+    storage = GatewayStoreManager()
+    target_url = f"http://{storage.controller}/{endpoint}"
+    pool_id = storage.get_pool_id()
+    if pool_id is None:
+        return False
+
+    try:
+        resp = requests.post(target_url, json={"pool_id": pool_id})
+        if resp.status_code == 200:
+            storage.set_pool_id(None)
+            logging.info(f"[Node] 注销成功: Prefill Pool {pool_id}")
+            return True
+        logging.warning(f"[Node] 注销异常: {resp.status_code} - {resp.text}")
+        return False
+    except Exception as e:
+        logging.warning(f"[Node] 注销错误: {e}")
+        return False
+
+
 def decode_compute_register():
     """向 Scheduler 注册 Decode 节点"""
     endpoint = "decode_pool/register"
@@ -67,11 +89,13 @@ def decode_compute_register():
     target_url = f"http://{storage.controller}/{endpoint}"
 
     gpu_type, _, mem_bandwidth, _ = storage.get_compute_params()
+    max_decode_req_num = storage.get_max_decode_req_num()
     payload = {
         "proxy_ip_address": storage.host,
         "proxy_port": storage.port,
         "mem_bandwidth": mem_bandwidth,
-        "GPU_type": gpu_type
+        "GPU_type": gpu_type,
+        "max_decode_req_num": max_decode_req_num,
     }
 
     logging.info(f"[Node] 正在发起注册...")
@@ -97,10 +121,14 @@ def decode_compute_update():
     target_url = f"http://{storage.controller}/{endpoint}"
 
     pool_id = storage.get_pool_id()
-    load = storage.get_decode_load()
+    running_reqs = storage.get_decode_load()
+    max_decode_req_num = storage.get_max_decode_req_num()
+    load = running_reqs / max_decode_req_num if max_decode_req_num > 0 else 0.0
     payload = {
         "pool_id": pool_id,
-        "current_load": load
+        "current_load": load,
+        "running_reqs": running_reqs,
+        "max_decode_req_num": max_decode_req_num,
     }
 
     try:
@@ -112,6 +140,28 @@ def decode_compute_update():
             logging.warning(f"[Node] 心跳异常: {resp.status_code}")
     except Exception as e:
         logging.error(f"[Node] 心跳错误: {e}")
+
+
+def decode_compute_unregister():
+    """向 Scheduler 注销 Decode 节点"""
+    endpoint = "decode_pool/unregister"
+    storage = GatewayStoreManager()
+    target_url = f"http://{storage.controller}/{endpoint}"
+    pool_id = storage.get_pool_id()
+    if pool_id is None:
+        return False
+
+    try:
+        resp = requests.post(target_url, json={"pool_id": pool_id})
+        if resp.status_code == 200:
+            storage.set_pool_id(None)
+            logging.info(f"[Node] 注销成功: Decode Pool {pool_id}")
+            return True
+        logging.warning(f"[Node] 注销异常: {resp.status_code} - {resp.text}")
+        return False
+    except Exception as e:
+        logging.warning(f"[Node] 注销错误: {e}")
+        return False
 
 
 def network_register():

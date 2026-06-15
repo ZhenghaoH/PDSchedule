@@ -14,8 +14,8 @@ class AsyncBaseScheduler:
             self.storage = GatewayStoreManager()
 
     def random(self):
-        if self.storage.prefill_objs:
-            return random.choice(self.storage.prefill_objs)
+        if self.storage.active_prefill_objs:
+            return random.choice(self.storage.active_prefill_objs)
         else:
             return ""
 

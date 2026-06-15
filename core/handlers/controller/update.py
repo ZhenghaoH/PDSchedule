@@ -15,6 +15,42 @@ def _is_same_machine(prefill_pool, decode_pool) -> bool:
     )
 
 
+async def _unregister_pool(request: FastAPIRequest, pool_type: PoolType):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"detail": "Invalid JSON format"})
+
+    pool_id = body.get("pool_id")
+    if pool_id is None:
+        return JSONResponse(status_code=422, content={"detail": "Missing required field: 'pool_id'"})
+
+    try:
+        pool_id = int(pool_id)
+    except ValueError:
+        return JSONResponse(status_code=422, content={"detail": "Data type error: 'pool_id' must be int"})
+
+    pool_mgr = request.app.state.pool_manager
+    net_mgr = request.app.state.network_manager
+    success = pool_mgr.unregister_Pool(pool_type, pool_id)
+    if not success:
+        return JSONResponse(
+            status_code=404,
+            content={"detail": f"{pool_type.value} Pool {pool_id} not registered."}
+        )
+    net_mgr.remove_connections_for_pool(pool_id, pool_type)
+
+    return {"status": "success"}
+
+
+async def unregister_decode_pool(request: FastAPIRequest):
+    return await _unregister_pool(request, PoolType.DECODE)
+
+
+async def unregister_prefill_pool(request: FastAPIRequest):
+    return await _unregister_pool(request, PoolType.PREFILL)
+
+
 async def update_decode_pool_status(request: FastAPIRequest):
     """
     接收 Decode 池的定期上报。
@@ -37,35 +73,53 @@ async def update_decode_pool_status(request: FastAPIRequest):
 
     pool_id = body.get("pool_id")
     current_load = body.get("current_load")
+    running_reqs = body.get("running_reqs")
+    max_decode_req_num = body.get("max_decode_req_num")
 
-    if pool_id is None or current_load is None:
+    if pool_id is None or (current_load is None and running_reqs is None):
         return JSONResponse(
             status_code=422,
-            content={"detail": "Missing required fields: 'pool_id' or 'current_load'"}
+            content={"detail": "Missing required fields: 'pool_id' and one of 'running_reqs' or 'current_load'"}
         )
 
     try:
         pool_id = int(pool_id)
-        current_load = float(current_load)
+        current_load = float(current_load) if current_load is not None else None
+        running_reqs = int(running_reqs) if running_reqs is not None else None
+        max_decode_req_num = int(max_decode_req_num) if max_decode_req_num is not None else None
     except ValueError:
         return JSONResponse(
             status_code=422,
-            content={"detail": "Data type error: 'pool_id' must be int, 'current_load' must be float/int"}
+            content={
+                "detail": "Data type error: 'pool_id' must be int, "
+                          "'current_load' must be float/int, 'running_reqs' and "
+                          "'max_decode_req_num' must be int"
+            }
         )
 
     # 2. 进行资源更新
     pool_mgr = request.app.state.pool_manager
-    # Decode current_load 现改由全局调度器侧按请求账本维护，
-    # 暂时保留旧的实例上报写负载逻辑，但先注释掉不删除：
-    # success = pool_mgr.update_Pool_status(
-    #     Pool_type=PoolType.DECODE,
-    #     pool_id=pool_id,
-    #     load=current_load
-    # )
-    success = pool_mgr.touch_pool(
-        pool_type=PoolType.DECODE,
-        pool_id=pool_id
-    )
+    if running_reqs is not None:
+        pool = pool_mgr.get_pool_by_id(PoolType.DECODE, pool_id)
+        if not pool:
+            return JSONResponse(
+                status_code=404,
+                content={"detail": f"Decode Pool {pool_id} not registered. Please call /register first."}
+            )
+        if max_decode_req_num is None:
+            max_decode_req_num = getattr(pool, "max_decode_req_num", 128)
+        success = pool_mgr.update_decode_running_reqs(
+            pool_id=pool_id,
+            running_reqs=running_reqs,
+            max_decode_req_num=max_decode_req_num,
+        )
+    else:
+        # 兼容旧客户端：没有 running_reqs 时才接受旧 current_load 口径。
+        success = pool_mgr.update_Pool_status(
+            Pool_type=PoolType.DECODE,
+            pool_id=pool_id,
+            load=min(max(current_load or 0.0, 0.0), 1.0),
+        )
 
     # 3. 处理结果
     if not success:
@@ -114,6 +168,7 @@ async def register_decode_pool(request: FastAPIRequest):
     proxy_port = body.get("proxy_port")
     mem_bandwidth = body.get("mem_bandwidth")
     gpu_type = body.get("GPU_type", "")
+    max_decode_req_num = body.get("max_decode_req_num", 128)
 
     # 自动获取 IP (如果客户端未传)
     if proxy_ip is None and request.client:
@@ -131,10 +186,11 @@ async def register_decode_pool(request: FastAPIRequest):
         proxy_port = int(proxy_port)
         mem_bandwidth = float(mem_bandwidth)
         proxy_ip = str(proxy_ip)
+        max_decode_req_num = max(1, int(max_decode_req_num))
     except ValueError:
         return JSONResponse(
             status_code=422,
-            content={"detail": "Data type error: port must be int, bandwidth must be float"}
+            content={"detail": "Data type error: port and max_decode_req_num must be int, bandwidth must be float"}
         )
 
     # 2. 注册并获取分配的 ID
@@ -145,7 +201,8 @@ async def register_decode_pool(request: FastAPIRequest):
         Pool_type=PoolType.DECODE,
         ip=proxy_ip,
         port=proxy_port,
-        capacity=mem_bandwidth
+        capacity=mem_bandwidth,
+        max_decode_req_num=max_decode_req_num,
     )
 
     if new_pool_id == -1:

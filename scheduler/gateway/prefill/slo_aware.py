@@ -1,6 +1,7 @@
 import time
 import asyncio
 import heapq
+import logging
 import math
 import random
 from collections import defaultdict
@@ -69,10 +70,29 @@ def calculate_batch_nnvp(batch_reqs: List[SchedulableRequest], finish_time: floa
     return total
 
 
+def calculate_batch_token_goodput(batch_reqs: List[SchedulableRequest], finish_time: float) -> int:
+    """Return prompt tokens completed before each request's TTFT deadline."""
+    goodput_tokens = 0
+    for r in batch_reqs:
+        if finish_time <= r.deadline:
+            goodput_tokens += r.prompt_length
+    return goodput_tokens
+
+
+def calculate_batch_lateness_penalty(batch_reqs: List[SchedulableRequest], finish_time: float) -> float:
+    """Small tie-breaker for plans with equal token-level goodput."""
+    penalty = 0.0
+    for r in batch_reqs:
+        lateness = max(0.0, finish_time - r.deadline)
+        if lateness > 0:
+            penalty += lateness / max(0.001, r.ttft_slo_sec)
+    return penalty
+
+
 class SLOAwarePrefillScheduler:
     def __init__(self, storage=None):
         self.storage = storage if storage else global_storage
-        self._prediction_cache: Dict[Tuple[int, int], float] = {}
+        self._prediction_cache: Dict[int, float] = {}
 
         # PSO 算法超参数
         self.pso_particles = 30  # 种群规模
@@ -84,32 +104,45 @@ class SLOAwarePrefillScheduler:
     def _get_instance_heap(self):
         """获取实例可用时间的最小堆，用于寻找最早空闲的GPU"""
         heap = []
-        if not hasattr(self.storage, 'prefill_objs') or not self.storage.prefill_objs:
+        if not hasattr(self.storage, 'active_prefill_objs') or not self.storage.active_prefill_objs:
             return heap
-        for ip in self.storage.prefill_objs:
+        for ip in self.storage.active_prefill_objs:
             if not ip: continue
-            avail_time = self.storage.get_availability(ip)
+            avail_time = self.storage.get_predicted_availability(ip)
             heapq.heappush(heap, (avail_time, ip))
         return heap
 
     async def _get_prediction(self, session, batch_size, prompt_length):
         """异步请求预测服务器，带本地缓存以加速PSO搜索过程"""
         if batch_size == 0: return 0.0
-        key = (batch_size, prompt_length)
+        total_tokens = max(0, int(batch_size)) * max(0, int(prompt_length))
+        key = total_tokens
         if key in self._prediction_cache: return self._prediction_cache[key]
+
+        predict_func = None
+        if hasattr(self.storage, "get_ttft_predictor"):
+            predict_func = self.storage.get_ttft_predictor()
+        if predict_func is not None:
+            try:
+                val = await predict_func(1, total_tokens)
+                if val is not None and math.isfinite(val) and val > 0:
+                    self._prediction_cache[key] = val
+                    return val
+            except Exception as exc:
+                logging.warning(f"[SLOAwarePrefillScheduler] In-process TTFT predictor failed: {exc}")
 
         try:
             url = "http://localhost:9000/predict"
-            async with session.post(url, json={"batch_size": batch_size, "prompt_length": prompt_length}) as resp:
+            async with session.post(url, json={"total_tokens": total_tokens}) as resp:
                 if resp.status == 200:
                     val = (await resp.json()).get("predicted_ttft_seconds")
-                    if val is not None:
+                    if val is not None and math.isfinite(val) and val > 0:
                         self._prediction_cache[key] = val
                         return val
-        except:
-            pass
+        except Exception as exc:
+            logging.debug(f"[SLOAwarePrefillScheduler] HTTP TTFT predictor unavailable: {exc}")
         # 无法连接时使用悲观线性预测作为兜底
-        return 0.02 * batch_size + 0.0002 * prompt_length
+        return 0.0002 * total_tokens
 
     # ==========================================
     # 核心评估逻辑：将PSO位置向量解码为批次方案并评分
@@ -146,9 +179,13 @@ class SLOAwarePrefillScheduler:
         sorted_batch_ids = sorted(batches_map.keys())
 
         schedule_plan = []
-        total_cost = 0.0
+        total_goodput_tokens = 0
+        lateness_tie_breaker = 0.0
+        latency_tie_breaker = 0.0
         current_time = start_time
-        MAX_TOKENS = 32000  # vLLM Prefill 显存保护阈值
+        MAX_TOKENS = 10240  # vLLM Prefill 显存保护阈值
+        LATENESS_WEIGHT = 0.001
+        LATENCY_WEIGHT = 0.000001
 
         for bid in sorted_batch_ids:
             raw_batch = batches_map[bid]
@@ -171,13 +208,16 @@ class SLOAwarePrefillScheduler:
 
             # --- 模拟执行并计算代价 ---
             for batch in sub_batches:
-                max_len = max(r.prompt_length for r in batch)
-                t_pred = await self._get_prediction(session, len(batch), max_len)
+                batch_tokens = sum(r.prompt_length for r in batch)
+                t_pred = await self._get_prediction(session, 1, batch_tokens)
                 if t_pred is None: t_pred = 0.1
 
                 finish_time = current_time + t_pred
-                cost = calculate_batch_nnvp(batch, finish_time)
-                total_cost += cost
+                goodput_tokens = calculate_batch_token_goodput(batch, finish_time)
+                total_goodput_tokens += goodput_tokens
+                lateness_penalty = calculate_batch_lateness_penalty(batch, finish_time)
+                lateness_tie_breaker += lateness_penalty
+                latency_tie_breaker += len(batch) * max(0.0, finish_time - start_time)
 
                 # 记录该批次的详细情况
                 schedule_plan.append((batch, finish_time, t_pred))
@@ -196,11 +236,17 @@ class SLOAwarePrefillScheduler:
                     # print(f"        [Order Check] Slacks: {slacks}")
                     # print(f"        [Order Check] OrigIdx:{orig_indices}")
                     print(
-                        f"      > Batch: size={len(batch)}, tokens={sum(lens)}, dur={t_pred:.4f}s, cost={cost:.2f}, prompt_lens={lens}, IDs={ids}")
+                        f"      > Batch: size={len(batch)}, tokens={batch_tokens}, goodput={goodput_tokens}, "
+                        f"dur={t_pred:.4f}s, lateness_penalty={lateness_penalty:.4f}, prompt_lens={lens}, IDs={ids}")
 
                 current_time = finish_time  # 串行执行批次，更新时间轴
 
-        return total_cost, schedule_plan
+        score = (
+            -float(total_goodput_tokens)
+            + LATENESS_WEIGHT * lateness_tie_breaker
+            + LATENCY_WEIGHT * latency_tie_breaker
+        )
+        return score, schedule_plan
 
     # --- 启发式解生成：给PSO一个高质量的起点 ---
     async def _generate_heuristic_particle(self, session, requests, sort_key, start_time):
@@ -302,19 +348,19 @@ class SLOAwarePrefillScheduler:
             # 专家 1: LST (最少松弛时间优先)
             pos_lst = await self._generate_heuristic_particle(session, reqs, lambda r: r.slack, start_time)
             print("   [Baseline: LST]")
-            cost_lst, _ = await self._evaluate_particle(session, reqs, pos_lst, start_time, verbose=True)
+            await self._evaluate_particle(session, reqs, pos_lst, start_time, verbose=True)
             swarm.append(Particle(dim, bounds, pos_lst))
 
             # 专家 2: SJF (短作业优先)
             pos_sjf = await self._generate_heuristic_particle(session, reqs, lambda r: r.prompt_length, start_time)
             print("   [Baseline: SJF]")
-            cost_sjf, _ = await self._evaluate_particle(session, reqs, pos_sjf, start_time, verbose=True)
+            await self._evaluate_particle(session, reqs, pos_sjf, start_time, verbose=True)
             swarm.append(Particle(dim, bounds, pos_sjf))
 
             # 专家 3: FCFS (先来先服务 / 保持输入原序)
             pos_fcfs = await self._generate_heuristic_particle(session, reqs, lambda r: 0, start_time)
             print("   [Baseline: FCFS]")
-            cost_fcfs, _ = await self._evaluate_particle(session, reqs, pos_fcfs, start_time, verbose=True)
+            await self._evaluate_particle(session, reqs, pos_fcfs, start_time, verbose=True)
             swarm.append(Particle(dim, bounds, pos_fcfs))
 
             # 填充随机粒子以增强搜索多样性
@@ -335,16 +381,16 @@ class SLOAwarePrefillScheduler:
 
                 for p in swarm:
                     # 仅在评估过程中计算，不开启 verbose
-                    cost, plan = await self._evaluate_particle(session, reqs, p.position, start_time)
+                    score, plan = await self._evaluate_particle(session, reqs, p.position, start_time)
 
-                    if cost < p.best_score:
-                        p.best_score = cost
+                    if score < p.best_score:
+                        p.best_score = score
                         p.best_position = list(p.position)
 
-                    if cost < global_best_score:
-                        global_best_score = cost
+                    if score < global_best_score:
+                        global_best_score = score
                         global_best_plan = plan
-                        print(f"   >>> Iter {iter_idx}: New Global Best NNVP = {cost:.4f}")
+                        print(f"   >>> Iter {iter_idx}: New Global Best Token Goodput Score = {score:.4f}")
                         # 发现新的最优方案时，打印其详细拆解
                         await self._evaluate_particle(session, reqs, p.position, start_time, verbose=True)
 
@@ -364,16 +410,20 @@ class SLOAwarePrefillScheduler:
             # 4. 确认结果
             if not global_best_plan: return []
 
-            print(f"\n[Result] PSO Final Best NNVP Cost: {global_best_score:.4f}")
+            print(f"\n[Result] PSO Final Best Token Goodput Score: {global_best_score:.4f}")
             final_requests = []
             real_batch_order = 1
             for batch_reqs, f_time, dur in global_best_plan:
                 rid_strs = [str(r.request_id)[-4:] for r in batch_reqs]
+                batch_tokens = sum(r.prompt_length for r in batch_reqs)
+                goodput_tokens = calculate_batch_token_goodput(batch_reqs, f_time)
                 print(
-                    f"  -> Committed Batch {real_batch_order}: Size={len(batch_reqs)} | Dur={dur:.3f}s | Finish={f_time:.3f} | IDs={rid_strs}")
+                    f"  -> Committed Batch {real_batch_order}: Size={len(batch_reqs)} | "
+                    f"Tokens={batch_tokens} | Goodput={goodput_tokens} | "
+                    f"Dur={dur:.3f}s | Finish={f_time:.3f} | IDs={rid_strs}")
 
                 # 更新全局时间轴，预占 GPU 资源
-                self.storage.update_availability(target_ip, f_time)
+                self.storage.update_predicted_availability(target_ip, f_time)
 
                 for r in batch_reqs:
                     r.req.Task.prefill_instance = target_ip
@@ -386,4 +436,4 @@ class SLOAwarePrefillScheduler:
 
     def update_instance_feedback(self, instance_ip: str, actual_finish_time: float):
         """反馈校准接口：当vLLM真实执行完毕后，调用此方法更新全局可用时间"""
-        self.storage.update_availability(instance_ip, actual_finish_time)
+        self.storage.update_real_availability(instance_ip, actual_finish_time)

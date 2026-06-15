@@ -10,6 +10,22 @@ try:
 except Exception:
     pynvml = None
 
+GPU_UTIL_EMA_ALPHA = 0.3
+_GPU_UTIL_EMA_STATE = {}
+
+
+def _smooth_gpu_util_percent(gpu_index: int, current_value: float) -> float:
+    previous_value = _GPU_UTIL_EMA_STATE.get(gpu_index)
+    if previous_value is None:
+        smoothed_value = current_value
+    else:
+        smoothed_value = (
+            GPU_UTIL_EMA_ALPHA * current_value
+            + (1 - GPU_UTIL_EMA_ALPHA) * previous_value
+        )
+    _GPU_UTIL_EMA_STATE[gpu_index] = smoothed_value
+    return smoothed_value
+
 
 def parse_metric_log(filename="metric_log.txt"):
     """
@@ -119,11 +135,15 @@ def get_gpu_bandwidth_utilization():
             device_name = device_name.decode("utf-8", errors="ignore")
 
         utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
+        gpu_util_percent = _smooth_gpu_util_percent(
+            gpu_index,
+            float(getattr(utilization, "gpu", 0.0)),
+        )
         return {
             "gpu_index": gpu_index,
             "device_name": device_name,
             "memory_util_percent": float(getattr(utilization, "memory", 0.0)),
-            "gpu_util_percent": float(getattr(utilization, "gpu", 0.0)),
+            "gpu_util_percent": gpu_util_percent,
             "source": "nvml",
         }
     except Exception as exc:

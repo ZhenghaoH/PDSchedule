@@ -15,7 +15,13 @@ class SyncBaseScheduler:
 
     def random(self, decode_proxy):
         links = self.storage.link_table
-        prefill_instances = [k for k, v in links.items() if v.decode_proxy == decode_proxy]
+        active_prefill_instances = set(self.storage.active_prefill_objs)
+        prefill_instances = [
+            k for k, v in links.items()
+            if v.decode_proxy == decode_proxy and k in active_prefill_instances
+        ]
+        if not prefill_instances:
+            return ""
         return random.choice(prefill_instances)
 
     def schedule(self, batch_requests: List[BaseRequest], strategy: str = "random", **kwargs) -> List[BaseRequest]:

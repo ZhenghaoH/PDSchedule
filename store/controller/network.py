@@ -21,7 +21,12 @@ class Network:
     decode_pool: "DecodePool"   
     bandwidth: float             # Mbps
     rtt: float                   # ms
+    max_bandwidth: float = 0.0    # Mbps，历史最大观测可用带宽，用作负载归一化基线
     last_updated: float = field(default_factory=time.time)
+
+    def __post_init__(self):
+        if self.max_bandwidth <= 0:
+            self.max_bandwidth = self.bandwidth
 
     def to_dict(self) -> Dict:
         """序列化为字典 (仅存ID，避免循环引用)"""
@@ -29,6 +34,7 @@ class Network:
             "prefill_pool_id": self.prefill_pool.pool_id,
             "decode_pool_id": self.decode_pool.pool_id,
             "bandwidth": self.bandwidth,
+            "max_bandwidth": self.max_bandwidth,
             "rtt": self.rtt,
             "last_updated": self.last_updated
         }
@@ -132,6 +138,7 @@ class NetworkManager:
                     
                     # 更新网络连接
                     net.bandwidth = new_bandwidth
+                    net.max_bandwidth = max(getattr(net, "max_bandwidth", 0.0), new_bandwidth)
                     net.last_updated = time.time()
                     print(f"[Manager] Updated link {net} with bandwidth {new_bandwidth}")
     
@@ -184,6 +191,7 @@ class NetworkManager:
             if link_key in self._networks:
                 net = self._networks[link_key]
                 net.bandwidth = bandwidth
+                net.max_bandwidth = max(getattr(net, "max_bandwidth", 0.0), bandwidth)
                 net.rtt = rtt
                 net.last_updated = current_time
                 # print(f"[Manager] Link P{prefill_id}->D{decode_id} updated.")
@@ -203,6 +211,7 @@ class NetworkManager:
                 prefill_pool=p_pool,  # 引用真实对象
                 decode_pool=d_pool,   # 引用真实对象
                 bandwidth=bandwidth,
+                max_bandwidth=bandwidth,
                 rtt=rtt,
                 last_updated=current_time
             )
@@ -219,4 +228,18 @@ class NetworkManager:
                 if now - net.last_updated <= timeout:
                     active_nets.append(net)
         return active_nets
+
+    def remove_connections_for_pool(self, pool_id: int, pool_type: PoolType) -> int:
+        """删除与指定资源池相关的网络连接。"""
+        with self.db_lock:
+            if pool_type == PoolType.PREFILL:
+                keys_to_delete = [key for key in self._networks if key[0] == pool_id]
+            elif pool_type == PoolType.DECODE:
+                keys_to_delete = [key for key in self._networks if key[1] == pool_id]
+            else:
+                keys_to_delete = []
+
+            for key in keys_to_delete:
+                del self._networks[key]
+            return len(keys_to_delete)
     

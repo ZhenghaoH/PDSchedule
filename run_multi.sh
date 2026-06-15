@@ -68,10 +68,10 @@ case "$MODE" in
         --dtype auto \
         --max-num-batched-tokens 8192 \
         --kv-offloading-backend lmcache \
-        --kv-offloading-size 64 \
+        --kv-offloading-size 16 \
         --disable-hybrid-kv-cache-manager \
         --kv-cache-metrics \
-        --enable-prefix-caching=False 
+        --disable-uvicorn-access-log
 
         ;;
     "p2")
@@ -93,10 +93,10 @@ case "$MODE" in
         --dtype auto \
         --max-num-batched-tokens 8192 \
         --kv-offloading-backend lmcache \
-        --kv-offloading-size 64 \
+        --kv-offloading-size 16 \
         --disable-hybrid-kv-cache-manager \
         --kv-cache-metrics \
-        --enable-prefix-caching=False
+        --disable-uvicorn-access-log
 
         ;;
     "d1")
@@ -114,38 +114,37 @@ case "$MODE" in
         --kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_consumer"}' \
         --gpu-memory-utilization 0.8 \
         --max-model-len 4096 \
-        --max-num-seqs 8 \
         --dtype auto \
         --max-num-batched-tokens 8192 \
         --kv-offloading-backend lmcache \
-        --kv-offloading-size 64 \
+        --kv-offloading-size 16 \
         --disable-hybrid-kv-cache-manager \
         --kv-cache-metrics \
-
+	--disable-uvicorn-access-log
+	
         ;;
-    # "d2")
-    #     echo -e "\033[34m=== [4/13] 启动 Decode 实例 (GPU 3) ===\033[0m"
-    #     cd /workspace/llm-stack/workspace_HZH/FlexPD
-    #     export VLLM_LOGGING_LEVEL=DEBUG
-    #     export CUDA_VISIBLE_DEVICES=3
-    #     export PYTHONHASHSEED=0
-    #     export LMCACHE_REMOTE_URL=$REDIS_URL
-    #     export LMCACHE_REMOTE_SERDE="cachegen"
-    #     export LMCACHE_CONFIG_FILE=$CONFIG_PATH
-    #     python3 -m vllm.entrypoints.openai.api_server \
-    #     --model $MODEL_PATH \
-    #     --host 0.0.0.0 --port 8004 \
-    #     --kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_consumer"}' \
-    #     --gpu-memory-utilization 0.8 \
-    #     --max-model-len 4096 \
-    #     --max-num-seqs 8 \
-    #     --dtype auto \
-    #     --max-num-batched-tokens 8192 \
-    #     --kv-offloading-backend lmcache \
-    #     --kv-offloading-size 64 \
-    #     --disable-hybrid-kv-cache-manager \
-
-    #     ;;
+     "d2")
+         echo -e "\033[34m=== [4/13] 启动 Decode 实例 (GPU 3) ===\033[0m"
+         cd /workspace/llm-stack/workspace_HZH/FlexPD
+         export VLLM_LOGGING_LEVEL=DEBUG
+         export CUDA_VISIBLE_DEVICES=3
+         export PYTHONHASHSEED=0
+         export LMCACHE_REMOTE_URL=$REDIS_URL
+         export LMCACHE_REMOTE_SERDE="cachegen"
+         export LMCACHE_CONFIG_FILE=$CONFIG_PATH
+         python3 -m vllm.entrypoints.openai.api_server \
+         --model $MODEL_PATH \
+         --host 0.0.0.0 --port 8004 \
+         --kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_consumer"}' \
+         --gpu-memory-utilization 0.8 \
+         --max-model-len 4096 \
+         --dtype auto \
+         --max-num-batched-tokens 8192 \
+         --kv-offloading-backend lmcache \
+         --kv-offloading-size 16 \
+         --disable-hybrid-kv-cache-manager \
+	 --disable-uvicorn-access-log
+         ;;
     "s")
         wait_for_loading 10 "Scheduler"
 

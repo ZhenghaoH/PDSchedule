@@ -10,7 +10,7 @@ from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 
 from core.handlers.controller.proxy import create_chat_completions, create_completions
-from core.handlers.controller.update import update_decode_pool_status, update_prefill_pool_status, register_decode_pool, register_prefill_pool, register_network_link, update_network_status
+from core.handlers.controller.update import update_decode_pool_status, update_prefill_pool_status, register_decode_pool, register_prefill_pool, unregister_decode_pool, unregister_prefill_pool, register_network_link, update_network_status
 
 from core.handlers.controller.req_display import show_requests
 
@@ -26,6 +26,8 @@ router.post("/decode_pool/update")(update_decode_pool_status)
 router.post("/prefill_pool/update")(update_prefill_pool_status)
 router.post("/decode_pool/register")(register_decode_pool)
 router.post("/prefill_pool/register")(register_prefill_pool)
+router.post("/decode_pool/unregister")(unregister_decode_pool)
+router.post("/prefill_pool/unregister")(unregister_prefill_pool)
 
 
 router.post("/network/update")(update_network_status)

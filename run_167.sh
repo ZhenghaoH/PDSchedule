@@ -61,13 +61,14 @@ case "$MODE" in
         --gpu-memory-utilization 0.8 \
         --max-model-len 20000 \
         --dtype auto \
-        --max-num-batched-tokens 10240 \
+        --max-num-batched-tokens 4096 \
         --kv-offloading-backend lmcache \
         --kv-offloading-size 64 \
         --disable-hybrid-kv-cache-manager \
         --kv-cache-metrics \
         --no-enable-prefix-caching \
-        --tensor_parallel_size=2 
+        --tensor_parallel_size=2 \
+        --disable-uvicorn-access-log
         ;;
     "d")
         echo -e "\033[34m=== [2/9] 启动 Decode 实例 (GPU 1) ===\033[0m"
@@ -89,7 +90,8 @@ case "$MODE" in
         --kv-offloading-size 64 \
         --disable-hybrid-kv-cache-manager \
         --kv-cache-metrics  \
-        --tensor_parallel_size=2 
+        --tensor_parallel_size=2 \
+        --disable-uvicorn-access-log
         ;;
     "s")
         wait_for_loading 10 "Scheduler"
@@ -100,34 +102,34 @@ case "$MODE" in
         python3 controller.py
         ;;
     "pd")
-        wait_for_loading 40 "Decode Proxy"
-	export MY_MEM_BANDWIDTH=936
+        wait_for_loading 50 "Decode Proxy"
+	    export MY_MEM_BANDWIDTH=936
         echo -e "\033[35m=== [4/9] 启动 Decode Proxy ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
         python3 gatewayD.py
         ;;
     "pp")
-        wait_for_loading 42 "Prefill Proxy"
+        wait_for_loading 52 "Prefill Proxy"
 
         echo -e "\033[36m=== [5/9] 启动 Prefill Proxy ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
-        export MY_MAX_PROMPT_THROUGHPUT=10278
-        export MY_FLOPS=209.6
-        python3 gatewayP.py
+        export MY_MAX_PROMPT_THROUGHPUT=5646.747
+        export MY_FLOPS=71.16
+        python3 gatewayP.py --host 172.18.0.167 --port 8081 --prefill 172.18.0.167:7001
         ;;
     "id")
-        wait_for_loading 45 "Decode Instance"
+        wait_for_loading 55 "Decode Instance"
 
         echo -e "\033[36m=== [6/9] 启动 Decode Instance ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
         python3 instanceD.py
         ;;
     "ip")
-        wait_for_loading 47 "Prefill Instance"
+        wait_for_loading 57 "Prefill Instance"
 
         echo -e "\033[36m=== [7/9] 启动 Prefill Instance ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
-        python3 instanceP.py
+        python3 instanceP.py --host 172.18.0.167 --port 7001 --vllm_port 8001
         ;;
     "kdn")
         echo -e "\033[36m=== [8/9] 启动 KDN Server ===\033[0m"
@@ -168,13 +170,13 @@ launch_tab() {
 #launch_tab "0.Meta" "meta"
 sleep 1
 
-launch_tab "1.Decode" "d"
+launch_tab "1.Prefill" "p"
 sleep 0.5
 
-launch_tab "5.Gateway-D" "pd"
+launch_tab "5.Gateway-P" "pp"
 sleep 0.5
 
-launch_tab "6.Instance-D" "id"
+launch_tab "6.Instance-P" "ip"
 sleep 0.5
 
 

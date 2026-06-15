@@ -19,7 +19,7 @@ async def handle_pd_pair(raw_request: Request):
     decode_instance = ""
     manager = GatewayStoreManager()
     links = manager.link_table
-    free_instances = list(set(manager.prefill_objs) - set(links.keys()))
+    free_instances = list(set(manager.active_prefill_objs) - set(links.keys()))
     # 非强制模式（只维持两池之间的一条配对，若配对已存在则不管，若配对不存在则创建）
     if not force:
         # 检索是否已有匹配好的路由

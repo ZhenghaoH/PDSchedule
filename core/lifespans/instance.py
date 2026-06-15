@@ -4,7 +4,7 @@ from fastapi import FastAPI
 import threading
 import time
 
-from coord.instance.up_store import metric_update
+from coord.instance.up_store import metric_update, instance_unregister
 from store.instance.store import InstanceStore
 from instance.perception.compute_metric_h import ThroughputMonitor
 
@@ -50,5 +50,5 @@ async def lifespan(api: FastAPI):
     # 停止吞吐量监控器
     monitor.stop()
 
-    # TODO：向全局调度器注销
+    instance_unregister()
     logging.info("[Instance] shutdown: 结束服务")

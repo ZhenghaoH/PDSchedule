@@ -10,6 +10,38 @@ from fastapi import HTTPException
 
 # 超时配置
 AIOHTTP_TIMEOUT = 6 * 60 * 60  # 6小时
+LOG_SEPARATOR = "+" * 80
+
+
+def _format_value(value):
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _log_forward_request_info(url, data):
+    if not isinstance(data, dict):
+        return
+
+    lines = [
+        "",
+        "",
+        "",
+        LOG_SEPARATOR,
+        "[Gateway] 请求转发信息",
+        LOG_SEPARATOR,
+        f"目标 URL: {url}",
+    ]
+    for key in ("model", "messages", "prompt", "stream", "max_tokens", "temperature"):
+        if key in data:
+            lines.append(f"请求报文 {key}: {_format_value(data.get(key))}")
+    lines.extend([
+        LOG_SEPARATOR,
+        "",
+        "",
+        "",
+    ])
+    logging.info("\n".join(lines))
 
 
 async def forward_request(url, data, use_chunked=True, extra_headers: Optional[dict] = None):
@@ -40,6 +72,7 @@ async def forward_request(url, data, use_chunked=True, extra_headers: Optional[d
             - 其它异常统一转成 500 Internal Server Error。
     """
     # 构造 ClientSession，设置总超时时间为 AIOHTTP_TIMEOUT
+    _log_forward_request_info(url, data)
     timeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         # 组装下游请求头
@@ -105,6 +138,7 @@ async def forward_request_trace(
         request_id: str = None,
         stats_callback: callable = None
 ):
+    _log_forward_request_info(url, data)
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)) as session:
         headers = {
             "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"

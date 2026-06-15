@@ -7,6 +7,8 @@ from typing import List, Dict, Any, Tuple
 
 from core.schemas.request import BaseRequest
 from scheduler.gateway.prefill.slo_aware import SLOAwarePrefillScheduler
+from scheduler.gateway.prefill.slo_aware_new import SLOAwareNewPrefillScheduler
+from scheduler.gateway.prefill.token_goodput_order import TokenGoodputOrderScheduler
 from scheduler.gateway.prefill.async_xpyd import AsyncBaseScheduler as BasicScheduler
 from scheduler.gateway.prefill.exhaustive import ExhaustiveOracleScheduler
 # from scheduler.gateway.prefill.slo_sa import SLOAwareSAScheduler
@@ -17,12 +19,19 @@ class SchedulerManager:
     def __init__(self, strategy: str = "pso"):
         self.strategy = strategy
         self.pso_scheduler = SLOAwarePrefillScheduler()
+        self.pso_new_scheduler = SLOAwareNewPrefillScheduler()
+        self.token_goodput_order_scheduler = TokenGoodputOrderScheduler()
         self.basic_scheduler = BasicScheduler()
         self.oracle_scheduler = ExhaustiveOracleScheduler()
         # self.slo_sa_scheduler = SLOAwareSAScheduler()
         # self.goodput_pso_scheduler = GoodputPSOScheduler()
 
-    async def schedule_batch(self, queue: List[BaseRequest], last_plan: List[BaseRequest] = None) -> Tuple[List[BaseRequest], str]:
+    async def schedule_batch(
+            self,
+            queue: List[BaseRequest],
+            last_plan: List[BaseRequest] = None,
+            inflight_prefill: List[Any] = None,
+    ) -> Tuple[List[BaseRequest], str]:
         """
         返回: (List[BaseRequest], dispatch_policy)
         dispatch_policy 选项: 'IMMEDIATE', 'IDLE_WAIT', 'PERIODIC'
@@ -40,13 +49,28 @@ class SchedulerManager:
 
         # ================= [策略：PSO 优化] =================
         elif self.strategy == "pso":
-            scheduled = await self.pso_scheduler.schedule(queue, last_plan=last_plan)
-            scheduled = await self.pso_scheduler.schedule(queue)
+            scheduled = await self.pso_scheduler.schedule(
+                queue,
+                last_plan=last_plan,
+            )
+            # scheduled = await self.pso_scheduler.schedule(queue)
             # scheduled = await self.goodput_pso_scheduler.schedule(queue, last_plan=last_plan)
-            # PSO 模式下，通常使用等空闲或周期分发（此处示例使用 PERIODIC）
+            # PSO 模式下等待实例空闲后再分发，避免周期性强制转发打破已规划批次。
             return scheduled, "PERIODIC"
 
         # ================= [策略：穷举优化] =================
+        elif self.strategy == "token_goodput_order":
+            scheduled = await self.token_goodput_order_scheduler.schedule(queue)
+            return scheduled, "PERIODIC"
+
+        elif self.strategy == "pso_new":
+            scheduled = await self.pso_new_scheduler.schedule(
+                queue,
+                last_plan=last_plan,
+                inflight_prefill=inflight_prefill,
+            )
+            return scheduled, "FULL_OR_IDLE_WAIT"
+
         elif self.strategy == "exhaustive":
             result = await self.oracle_scheduler.find_optimal(queue)
             if not result: return queue, "IMMEDIATE"

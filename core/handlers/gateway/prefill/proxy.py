@@ -14,6 +14,51 @@ from core.handlers.gateway.prefill.kdn_proxy import kdn_proxy_chat_completions, 
 
 
 request_batcher = RequestBatcher()
+LOG_SEPARATOR = "+" * 80
+LOG_ITEM_SEPARATOR = "-" * 80
+
+
+def _log_prefill_instance_status(storage: GatewayStoreManager, selected_instance: str) -> None:
+    candidates = storage.active_prefill_objs
+    instances = storage.instance_table
+    if not candidates:
+        print(
+            "\n" + "\n".join([
+                LOG_SEPARATOR,
+                "[Prefill调度] 候选实例负载",
+                LOG_SEPARATOR,
+                "无可用实例",
+                LOG_SEPARATOR,
+                "[Prefill调度] 已选择实例: ",
+                LOG_SEPARATOR,
+            ]) + "\n"
+        )
+        return
+
+    lines = [
+        LOG_SEPARATOR,
+        "[Prefill调度] 候选实例负载",
+        LOG_SEPARATOR,
+    ]
+    for index, instance_ip in enumerate(candidates, start=1):
+        instance = instances.get(instance_ip)
+        prompt_throughput = instance.prompt_throughput if instance else 0.0
+        gpu_util_percent = instance.gpu_util_percent if instance else 0.0
+        gpu_memory_util_percent = instance.gpu_memory_util_percent if instance else 0.0
+        lines.extend([
+            f"实例 {index}: {instance_ip}",
+            f"GPU利用率: {gpu_util_percent:.2f}%",
+            f"GPU显存带宽利用率: {gpu_memory_util_percent:.2f}%",
+            f"Prompt吞吐量: {prompt_throughput:.2f} tokens/s",
+        ])
+        if index != len(candidates):
+            lines.append(LOG_ITEM_SEPARATOR)
+    lines.extend([
+        LOG_SEPARATOR,
+        f"[Prefill调度] 已选择实例: {selected_instance}",
+        LOG_SEPARATOR,
+    ])
+    print("\n" + "\n".join(lines) + "\n")
 
 
 async def handle_completion_request(raw_request: Request, request: BaseRequest, endpoint_type: str):
@@ -44,6 +89,7 @@ async def handle_completion_request(raw_request: Request, request: BaseRequest, 
         else:
             scheduler = AsyncBaseScheduler()
             prefill_instance = scheduler.schedule(request, "prefill")
+            _log_prefill_instance_status(storage, prefill_instance)
             request_payload = BaseRequest.to_vllm_payload(request)
             request.Task.prefill_instance = prefill_instance
             try:

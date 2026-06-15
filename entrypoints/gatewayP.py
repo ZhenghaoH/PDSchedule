@@ -80,6 +80,56 @@ def parse_args():
         default=DEFAULT_HOST,
         help="The IP address for the proxy server to listen on. Supports IPv4 and IPv6."
     )
+
+    ttft_warmup_group = parser.add_mutually_exclusive_group()
+    ttft_warmup_group.add_argument(
+        "--ttft-warmup",
+        dest="ttft_warmup",
+        action="store_true",
+        help="Run TTFT predictor warmup in the background after the Prefill gateway starts.",
+    )
+    ttft_warmup_group.add_argument(
+        "--no-ttft-warmup",
+        dest="ttft_warmup",
+        action="store_false",
+        help="Disable TTFT predictor warmup even if it is enabled in config.",
+    )
+    parser.set_defaults(ttft_warmup=TTFT_WARMUP_ENABLED)
+
+    parser.add_argument(
+        "--ttft-warmup-repeats",
+        type=int,
+        default=TTFT_WARMUP_REPEATS,
+        help="Repeat count for each TTFT warmup configuration.",
+    )
+
+    parser.add_argument(
+        "--ttft-target",
+        type=str,
+        default=TTFT_TARGET,
+        help="Target vLLM instance for TTFT warmup, formatted as host:port. Defaults to the first --prefill instance.",
+    )
+
+    parser.add_argument(
+        "--ttft-model-id",
+        type=str,
+        default=TTFT_MODEL_ID,
+        help="Model ID used by TTFT warmup requests.",
+    )
+
+    parser.add_argument(
+        "--ttft-tokenizer-path",
+        type=str,
+        default=TTFT_TOKENIZER_PATH,
+        help="Tokenizer path used by TTFT warmup prompt generation.",
+    )
+
+    parser.add_argument(
+        "--ttft-model-file",
+        type=str,
+        default=TTFT_MODEL_FILE,
+        help="Local file path for loading and saving the fitted TTFT predictor.",
+    )
     return parser.parse_args()
 
 
@@ -106,8 +156,17 @@ def main():
 
     storage.TRIGGER_MODE = TRIGGER_MODE
     storage.PROFILE_MODE = PROFILE_MODE
+    storage.SCHEDULER_STRATEGY = SCHEDULER_STRATEGY
+    storage.ENABLE_ADAPTIVE_SWITCH = ENABLE_ADAPTIVE_SWITCH
 
     storage.KDN_BASE_URL = KDN_BASE_URL
+    
+    storage.TTFT_WARMUP_ENABLED = args.ttft_warmup
+    storage.TTFT_WARMUP_REPEATS = args.ttft_warmup_repeats
+    storage.TTFT_TARGET = args.ttft_target
+    storage.TTFT_MODEL_ID = args.ttft_model_id
+    storage.TTFT_TOKENIZER_PATH = args.ttft_tokenizer_path
+    storage.TTFT_MODEL_FILE = args.ttft_model_file
 
     # 创建FastAPI应用
     app = FastAPI(

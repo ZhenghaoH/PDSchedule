@@ -147,7 +147,10 @@ async def kdn_proxy_chat_completions(request: FastAPIRequest, req_obj: Scheduler
 
     # host = req_obj.Task.prefill_instance
     # TODO: 调度算法
-    host = random.choice(storage.prefill_objs)
+    active_prefill_objs = storage.active_prefill_objs
+    if not active_prefill_objs:
+        return JSONResponse(status_code=503, content={"error": "no_active_prefill_instance"})
+    host = random.choice(active_prefill_objs)
     instance_url = f"http://{host}/v1/chat/completions"
 
     logging.info(
@@ -214,7 +217,10 @@ async def kdn_proxy_completions(request: FastAPIRequest, req_obj: SchedulerReque
 
     # host = req_obj.Task.prefill_instance
     # TODO: 调度算法
-    host = random.choice(storage.prefill_objs)
+    active_prefill_objs = storage.active_prefill_objs
+    if not active_prefill_objs:
+        return JSONResponse(status_code=503, content={"error": "no_active_prefill_instance"})
+    host = random.choice(active_prefill_objs)
     instance_url = f"http://{host}/v1/completions"
 
     logging.info(

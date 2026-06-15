@@ -1,4 +1,5 @@
  chunk_size: 32
+ save_unfull_chunk: true
 
  local_cpu: false
  max_local_cpu_size: 80.0

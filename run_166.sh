@@ -67,7 +67,8 @@ case "$MODE" in
         --disable-hybrid-kv-cache-manager \
         --kv-cache-metrics \
         --no-enable-prefix-caching \
-        --tensor_parallel_size=2 
+        --tensor_parallel_size=2 \
+        --disable-uvicorn-access-log
         ;;
     "d")
         echo -e "\033[34m=== [2/9] 启动 Decode 实例 (GPU 1) ===\033[0m"
@@ -89,7 +90,8 @@ case "$MODE" in
         --kv-offloading-size 64 \
         --disable-hybrid-kv-cache-manager \
         --kv-cache-metrics  \
-        --tensor_parallel_size=2 
+        --tensor_parallel_size=2 \
+        --disable-uvicorn-access-log
         ;;
     "s")
         wait_for_loading 10 "Scheduler"
@@ -100,14 +102,15 @@ case "$MODE" in
         python3 controller.py
         ;;
     "pd")
-        wait_for_loading 40 "Decode Proxy"
-	export MY_MEM_BANDWIDTH=936
+        wait_for_loading 50 "Decode Proxy"
+	    export MY_MEM_BANDWIDTH=936
+        export MY_MAX_DECODE_REQ_NUM=32
         echo -e "\033[35m=== [4/9] 启动 Decode Proxy ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
-        python3 gatewayD.py
+        python3 gatewayD.py --host 172.18.0.166 --port 8082 --decode 172.18.0.166:7002
         ;;
     "pp")
-        wait_for_loading 42 "Prefill Proxy"
+        wait_for_loading 52 "Prefill Proxy"
 
         echo -e "\033[36m=== [5/9] 启动 Prefill Proxy ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
@@ -116,14 +119,14 @@ case "$MODE" in
         python3 gatewayP.py
         ;;
     "id")
-        wait_for_loading 45 "Decode Instance"
+        wait_for_loading 55 "Decode Instance"
 
         echo -e "\033[36m=== [6/9] 启动 Decode Instance ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
-        python3 instanceD.py
+        python3 instanceD.py --host 172.18.0.166 --port 7002 --vllm_port 8002
         ;;
     "ip")
-        wait_for_loading 47 "Prefill Instance"
+        wait_for_loading 57 "Prefill Instance"
 
         echo -e "\033[36m=== [7/9] 启动 Prefill Instance ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints

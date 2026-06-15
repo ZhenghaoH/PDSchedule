@@ -47,7 +47,7 @@ class GlobalScheduler:
             "paired_round_robin": PairedRoundRobin_Scheduler(),
             "least_load": LeastLoad_Scheduler()
         }
-        self.current_mode: str = "least_load" # 默认策略
+        self.current_mode: str = "pso" # 默认策略
         self.is_ready: bool = False
 
         print("[GlobalScheduler] Initializing... performing automatic state setup.")
@@ -114,7 +114,7 @@ class GlobalScheduler:
         token_len = getattr(prompt_obj, 'token_length', 0)     # 获取输入提示的token长度
         slo_ttft = getattr(service_obj, 'SLO_TTFT', 0.0)       # 获取首Token时延目标(SLO)
         slo_tpot = getattr(service_obj, 'SLO_TPOT', 0.0)       # 获取后续Token生成时延目标(SLO)
-        comp_fac = getattr(service_obj, 'Compress_factor', 0.8) # 获取KV缓存压缩因子
+        comp_fac = getattr(service_obj, 'Compress_factor', 1.0) # 获取KV缓存压缩因子
 
         # 获取当前激活的调度策略，如果未找到则回退到随机策略
         strategy = self.strategies.get(self.current_mode, self.strategies["random"])
@@ -139,17 +139,6 @@ class GlobalScheduler:
                 prefill_pools=self.prefill_pools,  # Prefill节点池
                 decode_pools=self.decode_pools     # Decode节点池
             )
-
-        decode_pool_id = self.pool_manager.get_id_by_ip_port(PoolType.DECODE, d_ip, d_port)
-        if decode_pool_id is not None:
-            decode_pool = self.pool_manager.get_pool_by_id(PoolType.DECODE, decode_pool_id)
-            decode_mem_bandwidth = getattr(decode_pool, "mem_bandwidth", 0.0) if decode_pool else 0.0
-            decode_request_load = (
-                float(token_len) / float(decode_mem_bandwidth)
-                if decode_mem_bandwidth and decode_mem_bandwidth > 0
-                else 0.0
-            )
-            self.pool_manager.add_decode_load(decode_pool_id, decode_request_load)
 
         # 返回调度结果，包含选定节点的网络地址信息
         return {

@@ -6,12 +6,8 @@ import time
 DEFAULT_PCIE_BANDWIDTH = 64000.0
 DEFAULT_PCIE_RTT = 0.1
 DEFAULT_GPU_INDEX = 0
-DEFAULT_SAMPLE_COUNT = 3
-DEFAULT_SAMPLE_INTERVAL = 0.05
-DEFAULT_EMA_ALPHA = 0.3
-DEFAULT_SAFETY_FACTOR = 0.8
-
-_EMA_STATE = {}
+DEFAULT_SAMPLE_COUNT = 1
+DEFAULT_SAMPLE_INTERVAL = 0.0
 
 try:
     import pynvml  # Provided by the official nvidia-ml-py package.
@@ -43,7 +39,7 @@ def _clamp_non_negative(value):
 
 def _sample_nvml_pcie_throughput(handle, sample_count, sample_interval):
     """
-    读取多次 PCIe 吞吐并求平均，降低短窗口统计的抖动。
+    读取 PCIe 吞吐并换算为 Mbps。
     NVML 返回值近似为 KB/s，这里统一换算为 Mbps。
     """
     tx_samples = []
@@ -77,19 +73,7 @@ def _get_config():
         "sample_count": max(1, _to_int(os.getenv("MY_PCIE_SAMPLE_COUNT"), DEFAULT_SAMPLE_COUNT)),
         "sample_interval": max(0.0, _to_float(os.getenv("MY_PCIE_SAMPLE_INTERVAL"), DEFAULT_SAMPLE_INTERVAL)),
         "bandwidth_floor": _to_float(os.getenv("MY_PCIE_BANDWIDTH_FLOOR"), 0.0),
-        "ema_alpha": min(1.0, max(0.0, _to_float(os.getenv("MY_PCIE_EMA_ALPHA"), DEFAULT_EMA_ALPHA))),
-        "safety_factor": min(1.0, max(0.0, _to_float(os.getenv("MY_PCIE_SAFETY_FACTOR"), DEFAULT_SAFETY_FACTOR))),
     }
-
-
-def _apply_ema(gpu_index, raw_available_bandwidth, ema_alpha):
-    previous = _EMA_STATE.get(gpu_index)
-    if previous is None:
-        smoothed = raw_available_bandwidth
-    else:
-        smoothed = ema_alpha * raw_available_bandwidth + (1 - ema_alpha) * previous
-    _EMA_STATE[gpu_index] = smoothed
-    return smoothed
 
 
 def _build_metrics(
@@ -108,13 +92,7 @@ def _build_metrics(
 ):
     used_bandwidth_mbps = max(observed_tx_mbps, observed_rx_mbps)
     raw_available_bandwidth_mbps = _clamp_non_negative(max_bandwidth_mbps - used_bandwidth_mbps)
-    smoothed_available_bandwidth_mbps = _apply_ema(
-        config["gpu_index"],
-        raw_available_bandwidth_mbps,
-        config["ema_alpha"],
-    )
-    reported_bandwidth = smoothed_available_bandwidth_mbps * config["safety_factor"]
-    bandwidth = max(reported_bandwidth, config["bandwidth_floor"])
+    bandwidth = raw_available_bandwidth_mbps
 
     return {
         "bandwidth": bandwidth,
@@ -129,10 +107,10 @@ def _build_metrics(
         "max_link_speed_mbps": max_link_speed_mbps,
         "max_bandwidth_mbps": max_bandwidth_mbps,
         "raw_available_bandwidth_mbps": raw_available_bandwidth_mbps,
-        "smoothed_available_bandwidth_mbps": smoothed_available_bandwidth_mbps,
+        "smoothed_available_bandwidth_mbps": raw_available_bandwidth_mbps,
         "bandwidth_floor_mbps": config["bandwidth_floor"],
-        "ema_alpha": config["ema_alpha"],
-        "safety_factor": config["safety_factor"],
+        "ema_alpha": None,
+        "safety_factor": None,
         "sample_count": config["sample_count"],
         "sample_interval": config["sample_interval"],
         "device_name": device_name,
@@ -146,11 +124,10 @@ def _get_nvml_pcie_metrics():
     """
     通过 NVML 实时获取 PCIe 指标。
 
-    第一版策略：
+    即时上报策略：
     - 最大带宽基线优先使用探测值
     - 当前占用带宽使用 max(TX, RX)
-    - 原始剩余可用带宽做 EMA 平滑
-    - 最终上报带宽乘安全系数，并受 floor 约束
+    - 本次采集得到的原始剩余可用带宽直接作为最终上报带宽
     """
     if pynvml is None:
         return None
@@ -259,13 +236,13 @@ def get_pcie_metrics():
 def monitor_pcie_metrics(interval=1):
     """单独运行时持续输出 PCIe 指标，使用单行刷新避免刷屏。"""
     print("正在持续监控 PCIe 指标 (按 Ctrl+C 停止)")
-    print("-" * 210)
+    print("-" * 190)
     print(
         f"{'时间':<10} | {'GPU':<4} | {'设备':<18} | {'TX(Mbps)':<10} | {'RX(Mbps)':<10} | "
         f"{'占用(Mbps)':<10} | {'带宽基线(Mbps)':<16} | {'原始剩余(Mbps)':<16} | "
-        f"{'平滑剩余(Mbps)':<16} | {'最终上报(Mbps)':<16} | {'来源':<18}"
+        f"{'上报带宽(Mbps)':<16} | {'来源':<18}"
     )
-    print("-" * 210)
+    print("-" * 190)
 
     try:
         while True:
@@ -282,7 +259,6 @@ def monitor_pcie_metrics(interval=1):
                 f"{data.get('used_bandwidth_mbps', 0.0):>8.2f}   | "
                 f"{data.get('max_bandwidth_mbps', 0.0):>14.2f}   | "
                 f"{data.get('raw_available_bandwidth_mbps', 0.0):>14.2f}   | "
-                f"{data.get('smoothed_available_bandwidth_mbps', 0.0):>14.2f}   | "
                 f"{data.get('bandwidth', 0.0):>14.2f}   | "
                 f"{source:<18}"
             )

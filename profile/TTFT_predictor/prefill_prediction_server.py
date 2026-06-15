@@ -10,13 +10,13 @@ from pydantic import BaseModel
 if __package__:
     from .prefill_predictor import predict_ttft, perform_detailed_warmup
 else:
-    from profile.TTFT_predictor.prefill_predictor import predict_ttft, perform_detailed_warmup
+    from prefill_predictor import predict_ttft, perform_detailed_warmup
 
 try:
     predict_ttft
 except NameError:
     try:
-        from profile.TTFT_predictor.prefill_predictor import predict_ttft, perform_detailed_warmup
+        from prefill_predictor import predict_ttft, perform_detailed_warmup
     except Exception as exc:
         print(f"[Critical Error] Failed to import prefill_predictor: {exc}")
         raise SystemExit(1)
@@ -80,8 +80,9 @@ app = FastAPI(
 
 
 class PredictionRequest(BaseModel):
-    batch_size: int
-    prompt_length: int
+    batch_size: int = 1
+    prompt_length: int = 0
+    total_tokens: Optional[int] = None
 
 
 class PredictionResponse(BaseModel):
@@ -96,9 +97,14 @@ async def read_root():
 
 @app.post("/predict", summary="Predict TTFT", response_model=PredictionResponse)
 async def handle_prediction(request: PredictionRequest):
+    prompt_length = (
+        max(0, int(request.total_tokens))
+        if request.total_tokens is not None
+        else request.prompt_length
+    )
     prediction_sec = await predict_ttft(
-        batch_size=request.batch_size,
-        prompt_length=request.prompt_length,
+        batch_size=1 if request.total_tokens is not None else request.batch_size,
+        prompt_length=prompt_length,
     )
     return {
         "predicted_ttft_seconds": prediction_sec,

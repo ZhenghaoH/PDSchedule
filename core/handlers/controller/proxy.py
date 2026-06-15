@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+import json
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Request as FastAPIRequest
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -10,8 +14,157 @@ from proxy.forward import forward_request
 
 from utils import timing
 
-from store.controller import PoolManager, PoolType
+from store.controller import PoolManager
 global_storage = PoolManager()
+
+
+LOG_SEPARATOR = "+" * 80
+LOG_ITEM_SEPARATOR = "-" * 80
+GLOBAL_SCHEDULE_LOG_PATH = Path(__file__).resolve().parents[3] / "global_schedule.log"
+
+
+def _format_ms(value: Optional[float]) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:.2f} ms"
+
+
+def _format_bool(value: Optional[bool]) -> str:
+    if value is None:
+        return "N/A"
+    return "YES" if value else "NO"
+
+
+def _append_global_schedule_log(text: str) -> None:
+    print(text)
+    try:
+        with GLOBAL_SCHEDULE_LOG_PATH.open("a", encoding="utf-8") as log_file:
+            log_file.write(text)
+            if not text.endswith("\n"):
+                log_file.write("\n")
+    except Exception as exc:
+        print(f"[Scheduler-SLO] 写入SLO追踪日志失败: {exc}")
+
+
+def _observe_stream_chunk(
+    chunk: bytes,
+    chunk_times: List[float],
+) -> None:
+    if chunk:
+        chunk_times.append(time.perf_counter())
+
+
+def _extract_completion_tokens(content: bytes) -> Optional[int]:
+    try:
+        body = json.loads(content.decode("utf-8", errors="ignore"))
+    except Exception:
+        return None
+    if not isinstance(body, dict):
+        return None
+
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    try:
+        completion_tokens = int(usage.get("completion_tokens"))
+    except (TypeError, ValueError):
+        return None
+    if completion_tokens <= 0:
+        return None
+    return completion_tokens
+
+
+def _build_slo_trace_log(
+    req_obj: SchedulerRequest,
+    *,
+    mode: str,
+    basis: str,
+    ttft_ms: Optional[float],
+    tpot_ms: Optional[float],
+    e2e_ms: Optional[float],
+    generated_units: int,
+    generated_units_label: str = "生成内容片段数",
+    completion_tokens: Optional[int] = None,
+) -> str:
+    slo_ttft = getattr(req_obj.Service, "SLO_TTFT", None)
+    slo_tpot = getattr(req_obj.Service, "SLO_TPOT", None)
+    slo_e2e = getattr(req_obj.Service, "SLO_E2E", None)
+
+    ttft_violation = ttft_ms is not None and slo_ttft is not None and ttft_ms > float(slo_ttft)
+    tpot_violation = tpot_ms is not None and slo_tpot is not None and tpot_ms > float(slo_tpot)
+    e2e_violation = e2e_ms is not None and slo_e2e is not None and e2e_ms > float(slo_e2e)
+
+    lines = [
+        "",
+        LOG_SEPARATOR,
+        "[Controller-SLO] 请求TTFT/TPOT追踪结果",
+        LOG_SEPARATOR,
+        f"日志时间: {datetime.now().isoformat(timespec='seconds')}",
+        f"Request_ID: {req_obj.Request_ID}",
+        f"Endpoint: {getattr(req_obj.Service, 'Endpoint_type', 'N/A')}",
+        f"响应模式: {mode}",
+        f"Prefill代理: {req_obj.Task.P_proxy_addr}:{req_obj.Task.P_proxy_port}",
+        f"Decode代理: {req_obj.Task.D_proxy_addr}:{req_obj.Task.D_proxy_port}",
+        LOG_ITEM_SEPARATOR,
+        f"SLO_TTFT: {slo_ttft} ms",
+        f"SLO_TPOT: {slo_tpot} ms",
+        f"SLO_E2E: {slo_e2e} ms",
+        LOG_ITEM_SEPARATOR,
+        f"实测TTFT: {_format_ms(ttft_ms)}",
+        f"实测TPOT: {_format_ms(tpot_ms)}",
+        f"实测E2E: {_format_ms(e2e_ms)}",
+        f"TPOT计算依据: {basis}",
+        f"{generated_units_label}: {generated_units}",
+        f"Completion tokens: {completion_tokens if completion_tokens is not None else 'N/A'}",
+        LOG_ITEM_SEPARATOR,
+        f"TTFT违约: {_format_bool(ttft_violation if ttft_ms is not None else None)}",
+        f"TPOT违约: {_format_bool(tpot_violation if tpot_ms is not None else None)}",
+        f"E2E违约: {_format_bool(e2e_violation if e2e_ms is not None else None)}",
+        LOG_SEPARATOR,
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def _log_stream_slo_trace(req_obj: SchedulerRequest, start_time: float, chunk_times: List[float]) -> None:
+    end_time = time.perf_counter()
+    ttft_ms: Optional[float] = None
+    tpot_ms: Optional[float] = None
+    if chunk_times:
+        ttft_ms = (chunk_times[0] - start_time) * 1000.0
+    if len(chunk_times) > 1:
+        tpot_ms = ((chunk_times[-1] - chunk_times[0]) / (len(chunk_times) - 1)) * 1000.0
+
+    log_text = _build_slo_trace_log(
+        req_obj,
+        mode="stream",
+        basis="non_empty_chunks",
+        ttft_ms=ttft_ms,
+        tpot_ms=tpot_ms,
+        e2e_ms=(end_time - start_time) * 1000.0,
+        generated_units=len(chunk_times),
+        generated_units_label="非空响应chunk数",
+    )
+    _append_global_schedule_log(log_text)
+
+
+def _log_non_stream_slo_trace(req_obj: SchedulerRequest, start_time: float, body: bytes) -> None:
+    end_time = time.perf_counter()
+    e2e_ms = (end_time - start_time) * 1000.0
+    completion_tokens = _extract_completion_tokens(body)
+    tpot_ms = e2e_ms / completion_tokens if completion_tokens else None
+
+    log_text = _build_slo_trace_log(
+        req_obj,
+        mode="non-stream",
+        basis="usage.completion_tokens" if completion_tokens else "N/A",
+        ttft_ms=e2e_ms,
+        tpot_ms=tpot_ms,
+        e2e_ms=e2e_ms,
+        generated_units=completion_tokens or 0,
+        completion_tokens=completion_tokens,
+    )
+    _append_global_schedule_log(log_text)
 
 
 # ======================= 请求 ID 分配器 =======================
@@ -154,31 +307,19 @@ async def create_chat_completions(request: FastAPIRequest):
 
     # 定义一个 async 生成器，从下游流式读取，再回给上游
     async def iter_upstream():
-        try:
-            # forward_request 本身是一个 async generator
-            async for chunk in forward_request(
-                url=downstream_url,
-                data=data_for_downstream,
-                use_chunked=True,             # chat/completions 一般是流式
-                extra_headers=extra_headers,  # 透传必要头
-            ):
-                # 这里 chunk 已经是 bytes，直接 yield 出去即可
-                yield chunk
-        finally:
-            decode_pool_id = global_storage.get_id_by_ip_port(
-                PoolType.DECODE,
-                req_obj.Task.D_proxy_addr,
-                req_obj.Task.D_proxy_port,
-            )
-            if decode_pool_id:
-                decode_pool = global_storage.get_pool_by_id(PoolType.DECODE, decode_pool_id)
-                decode_mem_bandwidth = getattr(decode_pool, "mem_bandwidth", 0.0) if decode_pool else 0.0
-                decode_request_load = (
-                    float(req_obj.Prompt.token_length) / float(decode_mem_bandwidth)
-                    if decode_mem_bandwidth and decode_mem_bandwidth > 0
-                    else 0.0
-                )
-                global_storage.sub_decode_load(decode_pool_id, decode_request_load)
+        start_time = time.perf_counter()
+        chunk_times: List[float] = []
+        # forward_request 本身是一个 async generator
+        async for chunk in forward_request(
+            url=downstream_url,
+            data=data_for_downstream,
+            use_chunked=True,             # chat/completions 一般是流式
+            extra_headers=extra_headers,  # 透传必要头
+        ):
+            _observe_stream_chunk(chunk, chunk_times)
+            # 这里 chunk 已经是 bytes，直接 yield 出去即可
+            yield chunk
+        _log_stream_slo_trace(req_obj, start_time, chunk_times)
 
     # 用 StreamingResponse 包一层，实现用户侧的流式响应
     return StreamingResponse(iter_upstream(), media_type="application/json")
@@ -240,31 +381,19 @@ async def create_completions(request: FastAPIRequest):
 
     # 定义一个 async 生成器，从下游流式读取，再回给上游
     async def iter_upstream():
-        try:
-            # forward_request 本身是一个 async generator
-            async for content in forward_request(
-                    url=downstream_url,
-                    data=data_for_downstream,
-                    use_chunked=False,  # chat/completions 一般是流式
-                    extra_headers=extra_headers,  # 透传必要头
-            ):
-                # 这里 chunk 已经是 bytes，直接 yield 出去即可
-                yield content
-        finally:
-            decode_pool_id = global_storage.get_id_by_ip_port(
-                PoolType.DECODE,
-                req_obj.Task.D_proxy_addr,
-                req_obj.Task.D_proxy_port,
-            )
-            if decode_pool_id:
-                decode_pool = global_storage.get_pool_by_id(PoolType.DECODE, decode_pool_id)
-                decode_mem_bandwidth = getattr(decode_pool, "mem_bandwidth", 0.0) if decode_pool else 0.0
-                decode_request_load = (
-                    float(req_obj.Prompt.token_length) / float(decode_mem_bandwidth)
-                    if decode_mem_bandwidth and decode_mem_bandwidth > 0
-                    else 0.0
-                )
-                global_storage.sub_decode_load(decode_pool_id, decode_request_load)
+        start_time = time.perf_counter()
+        response_body = b""
+        # forward_request 本身是一个 async generator
+        async for content in forward_request(
+                url=downstream_url,
+                data=data_for_downstream,
+                use_chunked=False,  # chat/completions 一般是流式
+                extra_headers=extra_headers,  # 透传必要头
+        ):
+            response_body += content
+            # 这里 chunk 已经是 bytes，直接 yield 出去即可
+            yield content
+        _log_non_stream_slo_trace(req_obj, start_time, response_body)
 
     # 用 StreamingResponse 包一层，实现用户侧的流式响应
     return StreamingResponse(iter_upstream(), media_type="application/json")

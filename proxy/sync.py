@@ -15,10 +15,15 @@ from store.gateway.manager import GatewayStoreManager
 
 # 导入配置参数
 storage = GatewayStoreManager()
-SYN_BATCH_SIZE = storage.SYN_BATCH_SIZE
-SYN_TIMEOUT = storage.SYN_TIMEOUT
-TRIGGER_MODE = storage.TRIGGER_MODE
-PROFILE_MODE = storage.PROFILE_MODE
+PREFILL_WAITING_TOKEN_BUDGET = 4096
+
+
+def _rid_key(rid: Any) -> str:
+    return str(rid)
+
+
+def _log_timeline_event(event: str, **payload: Any) -> None:
+    return
 
 
 # --- Helper: Response Tracker ---
@@ -86,7 +91,7 @@ class SchedulingEngine:
 
         判定逻辑：
         1. 队列首部的请求已经就绪 (batch_order == 1)。
-        2. 当前分发策略允许发送 (IMMEDIATE, 空闲的 IDLE_WAIT, 或 触发间隔的 PERIODIC)。
+        2. 当前分发策略允许发送 (IMMEDIATE, 空闲的 IDLE_WAIT, 或触发间隔的 PERIODIC)。
 
         Returns:
             bool: True 表示应该跳过本次调度，直接触发分发; False 表示继续执行调度算法。
@@ -112,6 +117,7 @@ class SchedulingEngine:
             return not is_busy
 
         elif policy == "PERIODIC":
+            de = self.b.dispatch_engine
             # 获取分发引擎的时间状态
             de = self.b.dispatch_engine
             now = time.time()
@@ -120,8 +126,25 @@ class SchedulingEngine:
             # PERIODIC 逻辑增强：
             # - 如果实例空闲：立即分发 (Yield)
             # - 如果实例忙碌但周期已到：强制分发 (Yield)
-            if not is_busy or interval_reached:
+            if interval_reached:
                 return True
+
+        elif policy == "FULL_OR_IDLE_WAIT":
+            decision = self.b.dispatch_engine._front_dispatch_decision(time.time())
+            if decision.should_wait_for_instance:
+                _log_timeline_event(
+                    "SCHEDULER_KEEP_COLLECTING",
+                    dispatch_policy=policy,
+                    reason=decision.reason,
+                    first_batch_ids=decision.front_ids,
+                    first_batch_tokens=decision.front_tokens,
+                    first_batch_total_tokens=decision.front_total_tokens,
+                    first_batch_token_shortfall=decision.token_shortfall,
+                    instance_busy=decision.instance_busy,
+                    active_instance_flows=decision.active_instance_flows,
+                    pending_queue_size=len(self.b.pending_queue),
+                )
+            return decision.should_dispatch_now
 
         return False
 
@@ -140,20 +163,78 @@ class SchedulingEngine:
                 # 优先分发检查
                 if self._check_yield_condition():
                     logging.debug("⚡ [Scheduler] Yielding to Dispatcher (Requests ready & Policy met).")
+                    first_order_reqs = []
+                    for req in self.b.pending_queue:
+                        if req.Task.batch_order != 1:
+                            break
+                        first_order_reqs.append(req)
+                    first_tokens = [
+                        getattr(req.Prompt, "token_length", 0)
+                        for req in first_order_reqs
+                    ]
+                    _log_timeline_event(
+                        "SCHEDULER_YIELD_READY",
+                        dispatch_policy=self.b.dispatch_policy,
+                        pending_queue_size=len(self.b.pending_queue),
+                        first_batch_ids=[str(req.Request_ID) for req in first_order_reqs],
+                        first_batch_tokens=first_tokens,
+                        first_batch_total_tokens=sum(first_tokens),
+                        first_batch_token_shortfall=max(0, PREFILL_WAITING_TOKEN_BUDGET - sum(first_tokens)),
+                        first_batch_is_full=sum(first_tokens) >= PREFILL_WAITING_TOKEN_BUDGET,
+                        first_batch_planned_full=any(
+                            getattr(req.Task, "slo_batch_is_full", False)
+                            for req in first_order_reqs
+                        ),
+                        first_schedule_id=getattr(
+                            first_order_reqs[0].Task,
+                            "slo_schedule_id",
+                            None,
+                        ) if first_order_reqs else None,
+                    )
                     self.b.dispatch_event.set()
                     continue  # <--- 直接跳过本次调度，让分发器先工作
 
                 # 获取待调度的候选请求（浅拷贝）
                 candidates = list(self.b.pending_queue)
                 last_plan = getattr(self.b, "last_plan", None)
+                inflight_prefill = []
+                for rid, req in self.b.inflight_prefill_reqs.items():
+                    meta = dict(self.b.inflight_prefill_meta.get(rid, {}))
+                    sent_time = self.b.inflight_prefill_sent_time.get(
+                        rid,
+                        getattr(req.Task, "slo_dispatch_time", time.time()),
+                    )
+                    meta.setdefault("sent_time", sent_time)
+                    meta["req"] = req
+                    inflight_prefill.append(meta)
 
             # 执行调度算法 (耗时操作，释放锁)
             try:
                 # 注意：此处释放了锁，分发器可能会在计算期间运行
                 # 但由于上面的"让路"逻辑，如果能分发，我们不会走到这里。
-                scheduled_plan, new_policy = await self.b.scheduler_mgr.schedule_batch(candidates, last_plan=last_plan)
+                scheduled_plan, new_policy = await self.b.scheduler_mgr.schedule_batch(
+                    candidates,
+                    last_plan=last_plan,
+                    inflight_prefill=inflight_prefill,
+                )
+                _log_timeline_event(
+                    "SCHEDULE_RETURNED",
+                    strategy=self.b.scheduler_mgr.strategy,
+                    new_policy=new_policy,
+                    candidate_count=len(candidates),
+                    candidate_ids=[str(r.Request_ID) for r in candidates],
+                    scheduled_count=len(scheduled_plan),
+                    scheduled_ids=[str(r.Request_ID) for r in scheduled_plan],
+                )
             except Exception as e:
                 logging.error(f"Scheduler Error: {e}", exc_info=True)
+                _log_timeline_event(
+                    "SCHEDULE_ERROR",
+                    strategy=self.b.scheduler_mgr.strategy,
+                    error=repr(e),
+                    candidate_count=len(candidates),
+                    candidate_ids=[str(r.Request_ID) for r in candidates],
+                )
                 continue
 
             # 应用调度结果
@@ -161,27 +242,85 @@ class SchedulingEngine:
                 self.b.dispatch_policy = new_policy
 
                 # 构建映射以便快速更新
-                id_map = {r.Request_ID: r for r in scheduled_plan}
+                id_map = {_rid_key(r.Request_ID): r for r in scheduled_plan}
 
                 # 更新队列中请求的调度信息
                 # 再次检查：防止在计算期间请求被取消或被异常移除
                 valid_reqs = []
                 for r in self.b.pending_queue:
-                    if r.Request_ID in id_map:
-                        obj = id_map[r.Request_ID]
+                    rid_key = _rid_key(r.Request_ID)
+                    if rid_key in id_map:
+                        obj = id_map[rid_key]
                         r.Task.batch_order = obj.Task.batch_order
                         r.Task.prefill_instance = obj.Task.prefill_instance
+                        for attr in (
+                            "slo_schedule_id",
+                            "slo_planned_batch_order",
+                            "slo_planned_step_order",
+                            "slo_planned_start",
+                            "slo_planned_finish",
+                            "slo_planned_batch_finish",
+                            "slo_planned_duration",
+                            "slo_batch_tokens",
+                            "slo_batch_is_full",
+                            "slo_ready_to_dispatch",
+                            "slo_plan_position",
+                        ):
+                            if hasattr(obj.Task, attr):
+                                setattr(r.Task, attr, getattr(obj.Task, attr))
                         valid_reqs.append(r)
 
                 # 排序：batch_order > 0 的优先，同批次按到达时间
                 self.b.pending_queue.sort(key=lambda x: (
                     x.Task.batch_order if x.Task.batch_order > 0 else 9999,
+                    getattr(x.Task, "slo_plan_position", 999999),
                     x.Service.arrival_time
                 ))
                 self.b.last_plan = scheduled_plan
+                _log_timeline_event(
+                    "SCHEDULE_APPLY_RESULT",
+                    dispatch_policy=self.b.dispatch_policy,
+                    pending_queue_size=len(self.b.pending_queue),
+                    scheduled_ids=[str(r.Request_ID) for r in scheduled_plan],
+                    applied_ids=[str(r.Request_ID) for r in valid_reqs],
+                    applied_count=len(valid_reqs),
+                    pending_ids=[str(r.Request_ID) for r in self.b.pending_queue],
+                    pending_batch_orders=[
+                        getattr(r.Task, "batch_order", None)
+                        for r in self.b.pending_queue
+                    ],
+                )
 
                 # 如果有请求就绪，唤醒分发器
                 if self.b.pending_queue and self.b.pending_queue[0].Task.batch_order == 1:
+                    first_order_reqs = []
+                    for req in self.b.pending_queue:
+                        if req.Task.batch_order != 1:
+                            break
+                        first_order_reqs.append(req)
+                    first_tokens = [
+                        getattr(req.Prompt, "token_length", 0)
+                        for req in first_order_reqs
+                    ]
+                    _log_timeline_event(
+                        "SCHEDULE_APPLIED",
+                        dispatch_policy=self.b.dispatch_policy,
+                        pending_queue_size=len(self.b.pending_queue),
+                        first_batch_ids=[str(req.Request_ID) for req in first_order_reqs],
+                        first_batch_tokens=first_tokens,
+                        first_batch_total_tokens=sum(first_tokens),
+                        first_batch_token_shortfall=max(0, PREFILL_WAITING_TOKEN_BUDGET - sum(first_tokens)),
+                        first_batch_is_full=sum(first_tokens) >= PREFILL_WAITING_TOKEN_BUDGET,
+                        first_batch_planned_full=any(
+                            getattr(req.Task, "slo_batch_is_full", False)
+                            for req in first_order_reqs
+                        ),
+                        first_schedule_id=getattr(
+                            first_order_reqs[0].Task,
+                            "slo_schedule_id",
+                            None,
+                        ) if first_order_reqs else None,
+                    )
                     self.b.dispatch_event.set()
 
 
@@ -197,7 +336,157 @@ class DispatchEngine:
     def __init__(self, batcher: RequestBatcher):
         self.b = batcher
         self.last_dispatch_time = time.time()
-        self.dispatch_interval = 0.3
+        self.dispatch_interval = 0.1
+
+    def configure_from_storage(self):
+        pass
+
+    def _front_batch(self):
+        if not self.b.pending_queue or self.b.pending_queue[0].Task.batch_order != 1:
+            return []
+        batch = []
+        for req in self.b.pending_queue:
+            if req.Task.batch_order != 1:
+                break
+            batch.append(req)
+        return batch
+
+    def _inflight_prefill_tokens(self) -> int:
+        total = 0
+        for req in self.b.inflight_prefill_reqs.values():
+            total += max(0, int(getattr(req.Prompt, "token_length", 0) or 0))
+        return total
+
+    def _inflight_prefill_tokens_by_instance(self) -> Dict[str, int]:
+        totals: Dict[str, int] = defaultdict(int)
+        for req in self.b.inflight_prefill_reqs.values():
+            ip = getattr(req.Task, "prefill_instance", "")
+            totals[ip] += max(0, int(getattr(req.Prompt, "token_length", 0) or 0))
+        return totals
+
+    def _front_dispatch_decision(self, now: float):
+        class _Decision:
+            pass
+
+        decision = _Decision()
+        decision.should_dispatch_now = False
+        decision.should_wait_for_instance = False
+        decision.reason = "not_ready"
+        decision.delay_sec = 0.0
+        decision.front_ids = []
+        decision.front_tokens = []
+        decision.front_total_tokens = 0
+        decision.dispatch_request_ids = []
+        decision.dispatch_instance_ids = []
+        decision.blocked_instance_ids = []
+        decision.instance_details = {}
+        decision.token_shortfall = PREFILL_WAITING_TOKEN_BUDGET
+        decision.inflight_prefill_tokens = self._inflight_prefill_tokens()
+        decision.waiting_token_budget = PREFILL_WAITING_TOKEN_BUDGET
+        decision.ready = False
+        decision.planned_full = False
+        decision.is_full = False
+        if self.b.instance_busy and self.b.active_instance_flows <= 0:
+            _log_timeline_event(
+                "STALE_INSTANCE_BUSY_RESET",
+                reason="instance_busy_true_but_no_active_flows",
+            )
+            self.b.instance_busy = False
+            self.b.active_instance_flows_by_ip.clear()
+
+        decision.instance_busy = self.b.instance_busy
+        decision.active_instance_flows = self.b.active_instance_flows
+
+        batch = self._front_batch()
+        if not batch:
+            decision.reason = "empty_or_unscheduled"
+            return decision
+
+        inflight_by_instance = self._inflight_prefill_tokens_by_instance()
+        grouped: Dict[str, List[BaseRequest]] = defaultdict(list)
+        for req in batch:
+            grouped[getattr(req.Task, "prefill_instance", "")].append(req)
+
+        ready = all(getattr(req.Task, "slo_ready_to_dispatch", True) for req in batch)
+        batch_tokens = sum(getattr(req.Prompt, "token_length", 0) for req in batch)
+        planned_full = any(getattr(req.Task, "slo_batch_is_full", False) for req in batch)
+        is_full = planned_full or batch_tokens >= PREFILL_WAITING_TOKEN_BUDGET
+        inflight_tokens = self._inflight_prefill_tokens()
+        decision.front_ids = [str(req.Request_ID) for req in batch]
+        decision.front_tokens = [getattr(req.Prompt, "token_length", 0) for req in batch]
+        decision.front_total_tokens = batch_tokens
+        decision.token_shortfall = max(0, PREFILL_WAITING_TOKEN_BUDGET - batch_tokens)
+        decision.inflight_prefill_tokens = inflight_tokens
+        decision.ready = ready
+        decision.planned_full = planned_full
+        decision.is_full = is_full
+        decision.instance_busy = self.b.instance_busy
+        decision.active_instance_flows = self.b.active_instance_flows
+
+        for ip, reqs in grouped.items():
+            group_ready = all(getattr(req.Task, "slo_ready_to_dispatch", True) for req in reqs)
+            group_tokens = sum(getattr(req.Prompt, "token_length", 0) for req in reqs)
+            group_planned_full = any(getattr(req.Task, "slo_batch_is_full", False) for req in reqs)
+            group_is_full = group_planned_full or group_tokens >= PREFILL_WAITING_TOKEN_BUDGET
+            instance_flows = self.b.active_instance_flows_by_ip.get(ip, 0)
+            instance_busy = instance_flows > 0
+            instance_inflight_tokens = inflight_by_instance.get(ip, 0)
+            can_dispatch = bool(
+                group_ready
+                and (
+                    group_is_full
+                    or not instance_busy
+                    or instance_inflight_tokens < PREFILL_WAITING_TOKEN_BUDGET
+                )
+            )
+
+            decision.instance_details[ip] = {
+                "ready": group_ready,
+                "tokens": group_tokens,
+                "planned_full": group_planned_full,
+                "is_full": group_is_full,
+                "busy": instance_busy,
+                "active_flows": instance_flows,
+                "inflight_tokens": instance_inflight_tokens,
+                "request_ids": [str(req.Request_ID) for req in reqs],
+                "can_dispatch": can_dispatch,
+            }
+
+            if can_dispatch:
+                decision.dispatch_instance_ids.append(ip)
+                decision.dispatch_request_ids.extend(str(req.Request_ID) for req in reqs)
+            else:
+                decision.blocked_instance_ids.append(ip)
+
+        if decision.dispatch_request_ids:
+            decision.should_dispatch_now = True
+            if decision.blocked_instance_ids:
+                decision.reason = "partial_instance_dispatch"
+            elif is_full:
+                decision.reason = "full_batch_dispatch"
+            elif not self.b.instance_busy:
+                decision.reason = "idle_dispatch"
+            else:
+                decision.reason = "instance_watermark_dispatch"
+            return decision
+
+        if not ready:
+            decision.reason = "not_ready_to_dispatch"
+            return decision
+
+        decision.should_wait_for_instance = True
+        decision.reason = "all_instances_waiting"
+        return decision
+
+    def _compute_periodic_decision(self, now: float):
+        class _FixedDecision:
+            pass
+
+        decision = _FixedDecision()
+        decision.delay_sec = max(0.0, self.dispatch_interval - (now - self.last_dispatch_time))
+        decision.should_dispatch_now = decision.delay_sec <= 0.0
+        decision.reason = "fixed_interval"
+        return decision
 
     async def run(self):
         while True:
@@ -215,6 +504,9 @@ class DispatchEngine:
             # -------------------------------------------------------
             # 我们需要检查锁内的状态，但不要在这里长时间持有锁
             should_wait_for_instance = False
+            periodic_wait_sec = 0.0
+            dispatch_reason = "unknown"
+            dispatch_request_ids = None
 
             async with self.b.lock:
                 # 基本检查：队列空 或 队首未调度
@@ -229,22 +521,64 @@ class DispatchEngine:
 
                 if policy == "IMMEDIATE":
                     can_dispatch = True
+                    dispatch_reason = "immediate"
 
                 elif policy == "IDLE_WAIT":
                     if not self.b.instance_busy:
                         can_dispatch = True
                     else:
+                        should_wait_for_instance = True
                         # 关键修复：如果忙，标记我们需要等待实例释放
                         should_wait_for_instance = True
 
                 elif policy == "PERIODIC":
-                    interval_reached = (now - self.last_dispatch_time >= self.dispatch_interval)
-                    if not self.b.instance_busy or interval_reached:
+                    timing_decision = self._compute_periodic_decision(now)
+                    periodic_wait_sec = timing_decision.delay_sec
+                    if timing_decision.should_dispatch_now:
                         can_dispatch = True
                     else:
                         # 周期模式下如果没到时间且忙碌，稍微睡一会或者等实例
                         # 简单起见，这里选择等待超时
                         pass
+
+                elif policy == "FULL_OR_IDLE_WAIT":
+                    timing_decision = self._front_dispatch_decision(now)
+                    periodic_wait_sec = timing_decision.delay_sec
+                    dispatch_reason = timing_decision.reason
+                    if timing_decision.should_dispatch_now:
+                        can_dispatch = True
+                        dispatch_request_ids = set(timing_decision.dispatch_request_ids)
+                    elif timing_decision.should_wait_for_instance:
+                        should_wait_for_instance = True
+                    _log_timeline_event(
+                        "DISPATCH_GATE_DECISION",
+                        policy=policy,
+                        action=(
+                            "dispatch"
+                            if can_dispatch
+                            else "wait_for_instance"
+                            if should_wait_for_instance
+                            else "blocked"
+                        ),
+                        reason=dispatch_reason,
+                        now=now,
+                        front_ids=timing_decision.front_ids,
+                        front_tokens=timing_decision.front_tokens,
+                        front_total_tokens=timing_decision.front_total_tokens,
+                        token_shortfall=timing_decision.token_shortfall,
+                        ready=timing_decision.ready,
+                        planned_full=timing_decision.planned_full,
+                        is_full=timing_decision.is_full,
+                        instance_busy=timing_decision.instance_busy,
+                        active_instance_flows=timing_decision.active_instance_flows,
+                        dispatch_instance_ids=timing_decision.dispatch_instance_ids,
+                        blocked_instance_ids=timing_decision.blocked_instance_ids,
+                        instance_details=timing_decision.instance_details,
+                        inflight_prefill_tokens=timing_decision.inflight_prefill_tokens,
+                        waiting_token_budget=timing_decision.waiting_token_budget,
+                        dispatch_interval=self.dispatch_interval,
+                        since_last_dispatch_ms=(now - self.last_dispatch_time) * 1000.0,
+                    )
 
                 if not can_dispatch:
                     if should_wait_for_instance:
@@ -263,8 +597,20 @@ class DispatchEngine:
                 else:
                     # ---> 执行分发提取逻辑
                     batch_to_send = []
-                    while self.b.pending_queue and self.b.pending_queue[0].Task.batch_order == 1:
-                        batch_to_send.append(self.b.pending_queue.pop(0))
+                    if dispatch_request_ids is None:
+                        while self.b.pending_queue and self.b.pending_queue[0].Task.batch_order == 1:
+                            batch_to_send.append(self.b.pending_queue.pop(0))
+                    else:
+                        remaining_queue = []
+                        for req in self.b.pending_queue:
+                            if (
+                                req.Task.batch_order == 1
+                                and str(req.Request_ID) in dispatch_request_ids
+                            ):
+                                batch_to_send.append(req)
+                            else:
+                                remaining_queue.append(req)
+                        self.b.pending_queue = remaining_queue
 
                     if batch_to_send:
                         self.b.instance_busy = True  # 标记繁忙
@@ -275,6 +621,70 @@ class DispatchEngine:
                             self.b.dispatch_event.clear()
 
                         self.last_dispatch_time = time.time()
+                        dispatch_offset = self.last_dispatch_time - self.b.timeline_origin
+                        rid_strs = [str(r.Request_ID)[-4:] for r in batch_to_send]
+                        batch_orders = sorted({r.Task.batch_order for r in batch_to_send})
+                        if dispatch_reason == "unknown":
+                            dispatch_reason = policy.lower()
+                        self.b.dispatch_group_seq += 1
+                        dispatch_group_id = self.b.dispatch_group_seq
+                        for request_order, r in enumerate(batch_to_send):
+                            rid_key = _rid_key(r.Request_ID)
+                            planned_start = getattr(r.Task, "slo_planned_start", None)
+                            planned_finish = getattr(r.Task, "slo_planned_finish", None)
+                            planned_batch_finish = getattr(r.Task, "slo_planned_batch_finish", None)
+                            request_duration = 0.0
+                            if planned_start is not None and planned_finish is not None:
+                                request_duration = max(0.0, planned_finish - planned_start)
+                            batch_duration = request_duration
+                            if planned_start is not None and planned_batch_finish is not None:
+                                batch_duration = max(0.0, planned_batch_finish - planned_start)
+                            dispatch_predicted_finish = self.last_dispatch_time + request_duration
+                            dispatch_batch_predicted_finish = self.last_dispatch_time + batch_duration
+                            r.Task.slo_dispatch_time = self.last_dispatch_time
+                            r.Task.slo_dispatch_group_id = dispatch_group_id
+                            r.Task.slo_dispatch_request_order = request_order
+                            r.Task.slo_dispatch_predicted_finish = dispatch_predicted_finish
+                            r.Task.slo_dispatch_batch_predicted_finish = dispatch_batch_predicted_finish
+                            self.b.inflight_prefill_reqs[rid_key] = r
+                            self.b.inflight_prefill_sent_time[rid_key] = self.last_dispatch_time
+                            self.b.inflight_prefill_meta[rid_key] = {
+                                "dispatch_group_id": dispatch_group_id,
+                                "sent_time": self.last_dispatch_time,
+                                "request_order": request_order,
+                                "schedule_id": getattr(r.Task, "slo_schedule_id", None),
+                                "planned_finish": getattr(r.Task, "slo_planned_finish", None),
+                                "planned_batch_order": getattr(r.Task, "slo_planned_batch_order", None),
+                                "planned_step_order": getattr(r.Task, "slo_planned_step_order", None),
+                                "dispatch_predicted_finish": dispatch_predicted_finish,
+                                "dispatch_batch_predicted_finish": dispatch_batch_predicted_finish,
+                            }
+                        logging.info(
+                            "[RealTimeline] dispatch t=%.6f offset=%.3fms batch_orders=%s size=%d ids=%s reason=%s",
+                            self.last_dispatch_time,
+                            dispatch_offset * 1000.0,
+                            batch_orders,
+                            len(batch_to_send),
+                            rid_strs,
+                            dispatch_reason,
+                        )
+                        _log_timeline_event(
+                            "DISPATCH",
+                            schedule_id=getattr(batch_to_send[0].Task, "slo_schedule_id", None),
+                            dispatch_group_id=dispatch_group_id,
+                            dispatch_time=self.last_dispatch_time,
+                            dispatch_offset_ms=dispatch_offset * 1000.0,
+                            batch_orders=batch_orders,
+                            ids=[str(r.Request_ID) for r in batch_to_send],
+                            tokens=[getattr(r.Prompt, "token_length", 0) for r in batch_to_send],
+                            reason=dispatch_reason,
+                            planned_start=getattr(batch_to_send[0].Task, "slo_planned_start", None),
+                            planned_finish=getattr(batch_to_send[0].Task, "slo_planned_batch_finish", None),
+                            dispatch_predicted_finish=max(
+                                getattr(r.Task, "slo_dispatch_batch_predicted_finish", self.last_dispatch_time)
+                                for r in batch_to_send
+                            ),
+                        )
 
                         # 启动执行任务
                         # 按实例分组 (支持多实例扩展)
@@ -283,7 +693,32 @@ class DispatchEngine:
                             groups[r.Task.prefill_instance].append(r)
 
                         for ip, reqs in groups.items():
-                            asyncio.create_task(self.b._instance_execution_flow(ip, reqs))
+                            planned_reqs = [
+                                r for r in reqs
+                                if getattr(r.Task, "slo_schedule_id", None) is not None
+                            ]
+                            if planned_reqs:
+                                group_predicted_finish = max(
+                                    getattr(
+                                        r.Task,
+                                        "slo_dispatch_batch_predicted_finish",
+                                        self.last_dispatch_time,
+                                    )
+                                    for r in planned_reqs
+                                )
+                                self.b.active_instance_reservations[ip][dispatch_group_id] = group_predicted_finish
+                                storage.update_predicted_availability(
+                                    ip,
+                                    max(self.b.active_instance_reservations[ip].values()),
+                                )
+                            self.b.active_instance_flows += 1
+                            self.b.active_instance_flows_by_ip[ip] += 1
+                            asyncio.create_task(
+                                self.b._instance_execution_flow(ip, reqs, dispatch_group_id)
+                            )
+
+                        if self.b.pending_queue:
+                            self.b.schedule_event.set()
 
                         # 已分发，直接进入下一次循环
                         continue
@@ -303,7 +738,8 @@ class DispatchEngine:
 
             elif self.b.dispatch_policy == "PERIODIC":
                 # 周期模式的等待
-                remaining = self.dispatch_interval - (time.time() - self.last_dispatch_time)
+                timing_decision = self._compute_periodic_decision(time.time())
+                remaining = timing_decision.delay_sec
                 if remaining > 0:
                     try:
                         # 等待超时，或者等 dispatch_event 被再次触发（可能有新请求插入前面）
@@ -317,7 +753,6 @@ class DispatchEngine:
                     except:
                         pass
 
-
 # ==========================================
 # 子类 3: 监控引擎 (Monitoring Engine)
 # ==========================================
@@ -327,12 +762,14 @@ class MonitoringEngine:
     def __init__(self, batcher: RequestBatcher):
         self.b = batcher
         self.prefill_completed_requests = set()
+        self.prefill_done_chunk_order = {}
+        self.prefill_done_plan_meta = {}
 
     async def run(self):
         """监控引擎主循环"""
         while True:
-            await asyncio.sleep(SYN_TIMEOUT)
-            if TRIGGER_MODE == "TIMEOUT":
+            await asyncio.sleep(self.b.syn_timeout)
+            if self.b.trigger_mode == "TIMEOUT":
                 async with self.b.lock:
                     if self.b.pending_queue:
                         self.b.schedule_event.set()
@@ -344,29 +781,117 @@ class MonitoringEngine:
         1. 第一次收到 (RID不在集合中): 视为 Prefill 耗时，仅记录日志，不影响策略。
         2. 第二次收到 (RID在集合中): 视为真实 TTFT，记录日志并用于策略调整。
         """
-        rid_str = str(rid)
+        rid_key = _rid_key(rid)
+        rid_str = rid_key
 
         # --- 逻辑分支开始 ---
-        if rid not in self.prefill_completed_requests:
+        if rid_key not in self.prefill_completed_requests:
             # [情况1] 第一次收到反馈 -> 视为 Prefill 计算完成时间
             logging.info(f"[Time Log] Req: {rid_str[-4:]} | Prefill Done: {ttft:.4f}s | (Not counting as TTFT)")
+            req = self.b.inflight_prefill_reqs.pop(rid_key, None)
+            sent_time = self.b.inflight_prefill_sent_time.pop(rid_key, None)
+            inflight_meta = self.b.inflight_prefill_meta.pop(rid_key, None) or {}
+            batch_order = None
+            plan_meta = dict(inflight_meta)
+            if req is not None:
+                batch_order = getattr(req.Task, "batch_order", None)
+                self.prefill_done_chunk_order[rid_key] = batch_order
+                plan_meta.update(
+                    {
+                        "schedule_id": getattr(req.Task, "slo_schedule_id", plan_meta.get("schedule_id")),
+                        "planned_finish": getattr(req.Task, "slo_planned_finish", plan_meta.get("planned_finish")),
+                        "planned_batch_order": getattr(req.Task, "slo_planned_batch_order", batch_order),
+                        "planned_step_order": getattr(req.Task, "slo_planned_step_order", None),
+                    }
+                )
+                self.prefill_done_plan_meta[rid_key] = plan_meta
+            now = time.time()
+            logging.info(
+                "[RealTimeline] prefill_done rid=%s t=%.6f offset=%.3fms sent_offset=%s batch_order=%s not_counted_as_ttft=True",
+                rid_str[-4:],
+                now,
+                (now - self.b.timeline_origin) * 1000.0,
+                "" if sent_time is None else f"{(sent_time - self.b.timeline_origin) * 1000.0:.3f}ms",
+                batch_order,
+            )
+            planned_finish = plan_meta.get("planned_finish")
+            dispatch_predicted_finish = plan_meta.get("dispatch_predicted_finish")
+            diff_predicted_finish = dispatch_predicted_finish
+            if diff_predicted_finish is None:
+                diff_predicted_finish = planned_finish
+            actual_minus_predicted_ms = None
+            if diff_predicted_finish is not None:
+                actual_minus_predicted_ms = (now - diff_predicted_finish) * 1000.0
+            _log_timeline_event(
+                "REQUEST_DONE_DIFF",
+                schedule_id=plan_meta.get("schedule_id"),
+                request_id=rid_key,
+                short_request_id=rid_str[-4:],
+                batch_order=batch_order,
+                step_order=plan_meta.get("planned_step_order"),
+                sent_time=sent_time,
+                actual_finish=now,
+                actual_finish_offset_ms=(now - self.b.timeline_origin) * 1000.0,
+                planned_finish=planned_finish,
+                dispatch_predicted_finish=dispatch_predicted_finish,
+                actual_minus_predicted_ms=actual_minus_predicted_ms,
+                delta_ms=actual_minus_predicted_ms,
+                kind="prefill_done",
+            )
 
             # 标记该请求已完成 Prefill，下一次该 ID 进来就是 TTFT
-            self.prefill_completed_requests.add(rid)
+            self.prefill_completed_requests.add(rid_key)
             return  # 直接返回，不执行下方的策略更新逻辑
 
         else:
             # [情况2] 第二次收到反馈 -> 视为真实 TTFT
             # 既然已经收到了 TTFT，从集合中移除以释放内存 (假设不会有第三次首字回调)
             try:
-                self.prefill_completed_requests.remove(rid)
+                self.prefill_completed_requests.remove(rid_key)
             except KeyError:
                 pass
 
             logging.info(
                 f"[Time Log] Req: {rid_str[-4:]} | Real TTFT: {ttft:.4f}s | Mode: {self.b.scheduler_mgr.strategy}")
+            batch_order = self.prefill_done_chunk_order.pop(rid_key, None)
+            plan_meta = self.prefill_done_plan_meta.pop(rid_key, {})
+            now = time.time()
+            logging.info(
+                "[RealTimeline] real_ttft rid=%s t=%.6f offset=%.3fms batch_order=%s ttft=%.4f",
+                rid_str[-4:],
+                now,
+                (now - self.b.timeline_origin) * 1000.0,
+                batch_order,
+                ttft,
+            )
+            planned_finish = plan_meta.get("planned_finish")
+            dispatch_predicted_finish = plan_meta.get("dispatch_predicted_finish")
+            diff_predicted_finish = dispatch_predicted_finish
+            if diff_predicted_finish is None:
+                diff_predicted_finish = planned_finish
+            actual_minus_predicted_ms = None
+            if diff_predicted_finish is not None:
+                actual_minus_predicted_ms = (now - diff_predicted_finish) * 1000.0
+            _log_timeline_event(
+                "REQUEST_DONE_DIFF",
+                schedule_id=plan_meta.get("schedule_id"),
+                request_id=rid_key,
+                short_request_id=rid_str[-4:],
+                batch_order=batch_order,
+                step_order=plan_meta.get("planned_step_order"),
+                actual_finish=now,
+                actual_finish_offset_ms=(now - self.b.timeline_origin) * 1000.0,
+                planned_finish=planned_finish,
+                dispatch_predicted_finish=dispatch_predicted_finish,
+                actual_minus_predicted_ms=actual_minus_predicted_ms,
+                delta_ms=actual_minus_predicted_ms,
+                kind="real_ttft",
+                ttft=ttft,
+            )
 
             # 以下是原有的策略调整逻辑，仅在此处执行
+            if not getattr(storage, "ENABLE_ADAPTIVE_SWITCH", self.b.adaptive_switch):
+                return
             if self.b.profile_mode: return
 
             self.b.stats_window.append(is_violated)
@@ -398,9 +923,12 @@ class RequestBatcher:
         self.lock = asyncio.Lock()
         self.pending_queue: List[BaseRequest] = []
         self.batch_manager: Dict[str, dict] = {}
+        self.timeline_origin = time.time()
 
         # 状态标志
         self.instance_busy: bool = False
+        self.active_instance_flows: int = 0
+        self.active_instance_flows_by_ip: Dict[str, int] = defaultdict(int)
         self.is_shutting_down: bool = False
 
         # 调度记忆
@@ -408,17 +936,26 @@ class RequestBatcher:
 
         # 句柄追踪：{request_id: (Task, BaseRequest, start_time)}
         self.running_tasks_map: Dict[str, Tuple[asyncio.Task, BaseRequest, float]] = {}
+        self.inflight_prefill_reqs: Dict[str, BaseRequest] = {}
+        self.inflight_prefill_sent_time: Dict[str, float] = {}
+        self.inflight_prefill_meta: Dict[str, dict] = {}
+        self.dispatch_group_seq = 0
+        self.active_instance_reservations: Dict[str, Dict[int, float]] = defaultdict(dict)
 
         # 策略配置
         self.scheduler_mgr = SchedulerManager(strategy=default_strategy)
         self.optimized_strategy = default_strategy
         self.dispatch_policy = "IMMEDIATE"
-        self.profile_mode = PROFILE_MODE
+        self.syn_batch_size = 1
+        self.syn_timeout = 1
+        self.trigger_mode = "ARRIVAL"
+        self.profile_mode = False
+        self.adaptive_switch = False
 
         if self.profile_mode:
             self.scheduler_mgr.strategy = "round_robin"
         else:
-            self.scheduler_mgr.strategy = "round_robin"
+            self.scheduler_mgr.strategy = default_strategy
 
             # 统计窗口
         self.stats_window = deque(maxlen=20)
@@ -436,10 +973,44 @@ class RequestBatcher:
         self.monitor_engine = MonitoringEngine(self)
         self.worker_tasks = []
 
+    def _create_engine_task(self, name: str, coro_factory):
+        async def _runner():
+            while not self.is_shutting_down:
+                try:
+                    await coro_factory()
+                    break
+                except asyncio.CancelledError:
+                    break
+                except Exception as exc:
+                    logging.error("%s crashed: %s", name, exc, exc_info=True)
+                    _log_timeline_event(
+                        "ENGINE_CRASH",
+                        engine=name,
+                        error=repr(exc),
+                    )
+                    await asyncio.sleep(0.1)
+
+        return asyncio.create_task(_runner())
+
     async def start(self):
-        self.worker_tasks.append(asyncio.create_task(self.sched_engine.run()))
-        self.worker_tasks.append(asyncio.create_task(self.dispatch_engine.run()))
-        self.worker_tasks.append(asyncio.create_task(self.monitor_engine.run()))
+        self.syn_batch_size = int(getattr(storage, "SYN_BATCH_SIZE", self.syn_batch_size))
+        self.syn_timeout = float(getattr(storage, "SYN_TIMEOUT", self.syn_timeout))
+        self.trigger_mode = getattr(storage, "TRIGGER_MODE", self.trigger_mode)
+        self.profile_mode = bool(getattr(storage, "PROFILE_MODE", self.profile_mode))
+        self.adaptive_switch = bool(getattr(storage, "ENABLE_ADAPTIVE_SWITCH", self.adaptive_switch))
+        self.optimized_strategy = getattr(storage, "SCHEDULER_STRATEGY", self.optimized_strategy)
+        self.scheduler_mgr.strategy = "round_robin" if self.profile_mode else self.optimized_strategy
+        self.dispatch_engine.configure_from_storage()
+
+        self.worker_tasks.append(
+            self._create_engine_task("SchedulingEngine", self.sched_engine.run)
+        )
+        self.worker_tasks.append(
+            self._create_engine_task("DispatchEngine", self.dispatch_engine.run)
+        )
+        self.worker_tasks.append(
+            self._create_engine_task("MonitoringEngine", self.monitor_engine.run)
+        )
         logging.info("RequestBatcher Engines Started.")
 
     async def preempt_heavy_requests(self):
@@ -460,6 +1031,9 @@ class RequestBatcher:
                 req.Service.is_preempted = True
                 req.Task.batch_order = -1
                 task.cancel()
+                self.inflight_prefill_reqs.pop(rid, None)
+                self.inflight_prefill_sent_time.pop(rid, None)
+                self.inflight_prefill_meta.pop(rid, None)
                 self.pending_queue.append(req)
 
             self.schedule_event.set()
@@ -467,34 +1041,48 @@ class RequestBatcher:
     def _unified_trigger(self, is_new_arrival: bool):
         q_len = len(self.pending_queue)
         if q_len == 0: return
-        if (TRIGGER_MODE == "ARRIVAL" and is_new_arrival) or \
-                (TRIGGER_MODE == "BATCH_SIZE" and q_len >= SYN_BATCH_SIZE):
+        if (self.trigger_mode == "ARRIVAL" and is_new_arrival) or \
+                (self.trigger_mode == "BATCH_SIZE" and q_len >= self.syn_batch_size):
             self.schedule_event.set()
 
     async def add_request(self, request: BaseRequest) -> Dict[str, Any]:
         """前端调用入口"""
         request.Service.arrival_time = time.time()
         rid = request.Request_ID
+        rid_key = _rid_key(rid)
         event = asyncio.Event()
 
         async with self.lock:
-            self.batch_manager[rid] = {"event": event, "result": {}}
+            self.batch_manager[rid_key] = {"event": event, "result": {}}
             request.Task.batch_order = -1
             self.pending_queue.append(request)
+            _log_timeline_event(
+                "REQUEST_ENQUEUED",
+                request_id=rid_key,
+                prompt_tokens=getattr(request.Prompt, "token_length", None),
+                pending_queue_size=len(self.pending_queue),
+                trigger_mode=self.trigger_mode,
+                schedule_event_set=self.schedule_event.is_set(),
+            )
             self._unified_trigger(is_new_arrival=True)
 
         try:
             await event.wait()
         except asyncio.CancelledError:
             async with self.lock:
-                self.batch_manager.pop(rid, None)
+                self.batch_manager.pop(rid_key, None)
             raise
 
         async with self.lock:
-            res = self.batch_manager.pop(rid, {}).get("result", None)
+            res = self.batch_manager.pop(rid_key, {}).get("result", None)
             return res if res else {"success": False, "error": "lost", "instance": "none"}
 
-    async def _instance_execution_flow(self, instance: str, reqs: List[BaseRequest]):
+    async def _instance_execution_flow(
+            self,
+            instance: str,
+            reqs: List[BaseRequest],
+            dispatch_group_id: int = None,
+    ):
         """
         实例执行生命周期管理。
         使用 asyncio.gather 并行启动转发，并等待所有流完成。
@@ -508,7 +1096,7 @@ class RequestBatcher:
                 t = asyncio.create_task(self._forward_wrapper(instance, r))
                 tasks.append(t)
                 async with self.lock:
-                    self.running_tasks_map[r.Request_ID] = (t, r, now)
+                    self.running_tasks_map[_rid_key(r.Request_ID)] = (t, r, now)
 
             # 2. 等待所有任务完成（无论成功还是异常）
             # 使用 return_exceptions=True 确保个别失败不影响整体流程
@@ -516,13 +1104,30 @@ class RequestBatcher:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
             # 3. 资源释放与后续触发
-            storage.update_availability(instance, time.time())
+            storage.update_real_availability(instance, time.time())
         except Exception as e:
             logging.error(f"Critical error in execution flow: {e}", exc_info=True)
 
         finally:
             async with self.lock:
-                self.instance_busy = False
+                self.active_instance_flows = max(0, self.active_instance_flows - 1)
+                if instance in self.active_instance_flows_by_ip:
+                    self.active_instance_flows_by_ip[instance] = max(
+                        0,
+                        self.active_instance_flows_by_ip[instance] - 1,
+                    )
+                    if self.active_instance_flows_by_ip[instance] <= 0:
+                        self.active_instance_flows_by_ip.pop(instance, None)
+                self.instance_busy = self.active_instance_flows > 0
+                actual_finish_time = time.time()
+                reservations = self.active_instance_reservations.get(instance, {})
+                if dispatch_group_id is not None:
+                    reservations.pop(dispatch_group_id, None)
+                if reservations:
+                    storage.update_predicted_availability(instance, max(reservations.values()))
+                else:
+                    self.active_instance_reservations.pop(instance, None)
+                    storage.update_predicted_availability(instance, actual_finish_time)
 
             logging.debug(f"Instance {instance} freed. Waking up engines.")
 
@@ -540,6 +1145,7 @@ class RequestBatcher:
         单个请求的转发包装器。
         """
         rid = request.Request_ID
+        rid_key = _rid_key(rid)
         tracker = None
         try:
             target_url = f"http://{instance}/v1/{request.Service.Endpoint_type}"
@@ -562,7 +1168,7 @@ class RequestBatcher:
                 data=payload,
                 arrival_time=request.Service.arrival_time,
                 slo_sec=request.Service.SLO_TTFT / 1000.0,
-                request_id=rid,
+                request_id=rid_key,
                 stats_callback=self.monitor_engine.handle_ttft_stats  # 回调下沉到 fwd
             )
 
@@ -571,13 +1177,13 @@ class RequestBatcher:
 
             # 将结果传回给 add_request 的等待者
             async with self.lock:
-                if rid in self.batch_manager:
-                    self.batch_manager[rid]["result"] = {
+                if rid_key in self.batch_manager:
+                    self.batch_manager[rid_key]["result"] = {
                         "success": True,
                         "generator": tracker,
                         "instance": instance
                     }
-                    self.batch_manager[rid]["event"].set()
+                    self.batch_manager[rid_key]["event"].set()
 
             # 挂起等待，直到流被完全消费（或客户端断开）
             # 只有这里 await 结束，_instance_execution_flow 才会认为该 slot 释放
@@ -594,30 +1200,36 @@ class RequestBatcher:
 
             # 确保通知 add_request，防止死锁
             async with self.lock:
-                if rid in self.batch_manager:
-                    self.batch_manager[rid]["result"] = {
+                if rid_key in self.batch_manager:
+                    self.batch_manager[rid_key]["result"] = {
                         "success": False,
                         "error": "request_cancelled",
                         "instance": instance
                     }
-                    self.batch_manager[rid]["event"].set()
+                    self.batch_manager[rid_key]["event"].set()
+                self.inflight_prefill_reqs.pop(rid_key, None)
+                self.inflight_prefill_sent_time.pop(rid_key, None)
+                self.inflight_prefill_meta.pop(rid_key, None)
 
         except Exception as e:
             # 异常处理
             logging.error(f"Req {rid} failed: {e}")
-            self.monitor_engine.handle_ttft_stats(999, True, rid)
+            self.monitor_engine.handle_ttft_stats(999, True, rid_key)
             async with self.lock:
-                if rid in self.batch_manager:
-                    self.batch_manager[rid]["result"] = {
+                if rid_key in self.batch_manager:
+                    self.batch_manager[rid_key]["result"] = {
                         "success": False,
                         "error": str(e),
                         "instance": instance
                     }
-                    self.batch_manager[rid]["event"].set()
+                    self.batch_manager[rid_key]["event"].set()
+                self.inflight_prefill_reqs.pop(rid_key, None)
+                self.inflight_prefill_sent_time.pop(rid_key, None)
+                self.inflight_prefill_meta.pop(rid_key, None)
         finally:
             # 清理全局运行映射
             async with self.lock:
-                self.running_tasks_map.pop(rid, None)
+                self.running_tasks_map.pop(rid_key, None)
 
     async def shutdown(self):
         """优雅关闭"""

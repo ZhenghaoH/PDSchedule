@@ -27,7 +27,21 @@ LOOP_TASK_TIME = 10  # 10s
 DEFAULT_CONTROLLER = f"{CONFIG_CONTROLLER_IP}:{CONFIG_CONTROLLER_PORT}"
 
 # 同步设置 是否启用同步
-USE_SYN = True
+USE_SYN = False
+SYN_BATCH_SIZE = 1
+SYN_TIMEOUT = 1
+DECODE_SCHEDULER_STRATEGY = "slo_tpot_admission"
+# round_robin
+# lowest_generate_throughput
+# slo_tpot_admission
+
+# TPOT predictor warmup configuration
+TPOT_WARMUP_ENABLED = True
+TPOT_WARMUP_REPEATS = 2
+TPOT_TARGET = CONFIG_INSTANCE_D_ADDRS[0]
+TPOT_MODEL_ID = "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+TPOT_TOKENIZER_PATH = "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+TPOT_MODEL_FILE = "profile/TPOT_predictor/artifacts/decode_tpot_regressor.pkl"
 # 同步设置 批处理批次
 SYN_BATCH_SIZE = 1
 # 同步设置 等待时间 秒

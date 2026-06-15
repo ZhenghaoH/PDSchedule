@@ -8,6 +8,7 @@
 import os
 from config.ADDRESS_CONFIG import *
 
+
 # 身份 prefill=0 decode=1
 RANK = 0
 
@@ -39,6 +40,16 @@ SYN_TIMEOUT = 15  # 同步设置 等待时间 秒， 超过该时间，进行调
 # 同步调度触发逻辑配置
 TRIGGER_MODE = "ARRIVAL"  # "ARRIVAL" or "BATCH" or "TIMEOUT"
 PROFILE_MODE = False
+SCHEDULER_STRATEGY = "pso_new"
+ENABLE_ADAPTIVE_SWITCH = False
 
 # KDN_BASE_URL = os.environ.get("KDN_BASE_URL", "http://127.0.0.1:9101").rstrip("/")
 KDN_BASE_URL = os.environ.get("KDN_BASE_URL", f"http://{CONFIG_KDN_IP}:{CONFIG_KDN_PORT}").rstrip("/")
+
+# TTFT predictor warmup configuration
+TTFT_WARMUP_ENABLED = True
+TTFT_WARMUP_REPEATS = 3
+TTFT_TARGET = CONFIG_INSTANCE_P_ADDRS[0]
+TTFT_MODEL_ID = "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+TTFT_TOKENIZER_PATH = "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+TTFT_MODEL_FILE = "profile/TTFT_predictor/artifacts/prefill_ttft_regressor.pkl"

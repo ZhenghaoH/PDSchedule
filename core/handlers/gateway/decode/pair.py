@@ -24,7 +24,7 @@ async def handle_pd_pair(raw_request: Request):
                 decode_instance = link.decode_instance
                 return JSONResponse({'message': 'InstanceLink Already Exist'}, status_code=409)
         # 没有已匹配好的，看看是否还有未配对的实例
-        free_instances = list(set(manager.decode_objs) - set(links.keys()))
+        free_instances = list(set(manager.active_decode_objs) - set(links.keys()))
         if free_instances:
             # FIXME: 根据一些规则选择未配对实例
             decode_instance = random.choice(free_instances)
@@ -33,7 +33,7 @@ async def handle_pd_pair(raw_request: Request):
             return JSONResponse(content={"message": "No Available Decode Instances"}, status_code=204)
     # 强制模式（优先选择空闲实例，无可用实例则断开已有连接）
     else:
-        free_instances = list(set(manager.decode_objs) - set(links.keys()))
+        free_instances = list(set(manager.active_decode_objs) - set(links.keys()))
         if free_instances:
             # FIXME: 根据一些规则选择未配对实例
             decode_instance = random.choice(free_instances)

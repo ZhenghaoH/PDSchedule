@@ -36,7 +36,7 @@ class InstanceStore:
                     self.MOONCAKE_DEVICE_NAME = ""  # RDMA配置 设备名 可选 "" or "mlx5_0"
                     self.KV_CONNECTOR = "mooncake"  # VLLM PD分离插件 mooncake or lmcache
 
-                    self.LOOP_TASK_TIME = 0.1  # 轮询上报任务时间
+                    self.LOOP_TASK_TIME = 0.02  # 轮询上报任务时间
 
                     self._initialized = True  # 确保不重复初始化
 

@@ -69,8 +69,8 @@ class ExhaustiveOracleScheduler(SLOAwarePrefillScheduler):
                         if sum(r.prompt_length for r in batch) > 32000:
                             valid_plan = False; break
                         
-                        max_len = max(r.prompt_length for r in batch)
-                        dur = await self._get_prediction(session, len(batch), max_len)
+                        batch_tokens = sum(r.prompt_length for r in batch)
+                        dur = await self._get_prediction(session, 1, batch_tokens)
                         sim_time += dur
                         cost = calculate_batch_nnvp(batch, sim_time)
                         total_nnvp += cost

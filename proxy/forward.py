@@ -128,6 +128,48 @@ async def forward_request(url, data, use_chunked=True, extra_headers: Optional[d
             raise HTTPException(status_code=500, detail=str(e)) from e
 
 
+async def forward_request_json(url, data, extra_headers: Optional[dict] = None):
+    _log_forward_request_info(url, data)
+    timeout = aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        headers = {
+            "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"
+        }
+        if extra_headers:
+            headers.update(extra_headers)
+        try:
+            async with session.post(url=url, json=data, headers=headers) as response:
+                content = await response.text()
+                try:
+                    body = json.loads(content)
+                except json.JSONDecodeError as exc:
+                    logging.error("Expected JSON response from %s, got: %s", url, content)
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Expected JSON response from upstream: {content}",
+                    ) from exc
+
+                if 200 <= response.status < 300:
+                    return body
+
+                logging.error("Request failed with status %s: %s", response.status, body)
+                raise HTTPException(
+                    status_code=response.status,
+                    detail=f"Request failed with status {response.status}: {body}",
+                )
+        except aiohttp.ClientError as e:
+            logging.error("ClientError occurred: %s", str(e))
+            raise HTTPException(
+                status_code=502,
+                detail="Bad Gateway: Error communicating with upstream server.",
+            ) from e
+        except HTTPException:
+            raise
+        except Exception as e:
+            logging.error("Unexpected error: %s", str(e))
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+
 async def forward_request_trace(
         url,
         data,
@@ -136,13 +178,16 @@ async def forward_request_trace(
         arrival_time: float = None,
         slo_sec: float = None,
         request_id: str = None,
-        stats_callback: callable = None
+        stats_callback: callable = None,
+        extra_headers: Optional[dict] = None,
 ):
     _log_forward_request_info(url, data)
     async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=AIOHTTP_TIMEOUT)) as session:
         headers = {
             "Authorization": f"Bearer {os.environ.get('OPENAI_API_KEY')}"
         }
+        if extra_headers:
+            headers.update(extra_headers)
         try:
             async with session.post(url=url, json=data, headers=headers) as response:
                 if 200 <= response.status < 300 or 400 <= response.status < 500:

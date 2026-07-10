@@ -4,8 +4,16 @@ __pycache__/
 
 .vscode/
 .trae/
+.idea/
+.venv/
 .env
 *.log
+*.sqlite3-shm
+*.sqlite3-wal
+
+simulator/result/.matplotlib/
+simulator/result/latest_*
+temp_script.sh
 
 .DS_Store
 Thumbs.db

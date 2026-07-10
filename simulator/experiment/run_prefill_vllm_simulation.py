@@ -2,24 +2,26 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 try:
     from .pipeline import DEFAULT_LATEST_RESULT_PATH, run_comparison, save_latest_result
-    from .request_workload import DEFAULT_BURSTGPT_CSV_PATH
-    from .schedule_log import DEFAULT_LATEST_SCHEDULE_LOG_PATH, save_schedule_log
-    from .ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH
-    from .visualize_result import (
+    from ..dataset.request_workload import DEFAULT_BURSTGPT_CSV_PATH
+    from ..result.schedule_log import DEFAULT_LATEST_SCHEDULE_LOG_PATH, save_schedule_log
+    from ..instance.ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH
+    from ..result.visualize_result import (
         DEFAULT_FIGURE_STRATEGIES,
         DEFAULT_LATEST_FIGURE_PATH,
         save_strategy_svgs,
     )
 except ImportError:
-    from pipeline import DEFAULT_LATEST_RESULT_PATH, run_comparison, save_latest_result
-    from request_workload import DEFAULT_BURSTGPT_CSV_PATH
-    from schedule_log import DEFAULT_LATEST_SCHEDULE_LOG_PATH, save_schedule_log
-    from ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH
-    from visualize_result import (
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from simulator.experiment.pipeline import DEFAULT_LATEST_RESULT_PATH, run_comparison, save_latest_result
+    from simulator.dataset.request_workload import DEFAULT_BURSTGPT_CSV_PATH
+    from simulator.result.schedule_log import DEFAULT_LATEST_SCHEDULE_LOG_PATH, save_schedule_log
+    from simulator.instance.ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH
+    from simulator.result.visualize_result import (
         DEFAULT_FIGURE_STRATEGIES,
         DEFAULT_LATEST_FIGURE_PATH,
         save_strategy_svgs,

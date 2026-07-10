@@ -7,9 +7,19 @@ from typing import List, Dict, Any, Optional, Tuple
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 
+from config.ADDRESS_CONFIG import (
+    get_nixl_meta_for_instance,
+    get_side_channel_addr_for_instance,
+)
 from scheduler.gateway.prefill.manager import SchedulerManager
+from proxy.forward import forward_request_json
 from proxy.forward import forward_request_trace as forward_request
 from core.schemas.request import BaseRequest
+from utils.nixl_request import (
+    build_nixl_prefill_payload,
+    extract_kv_transfer_params,
+    nixl_headers_for_request,
+)
 
 from store.gateway.manager import GatewayStoreManager
 
@@ -24,6 +34,23 @@ def _rid_key(rid: Any) -> str:
 
 def _log_timeline_event(event: str, **payload: Any) -> None:
     return
+
+
+def _bind_nixl_prefill_metadata(request: BaseRequest, selected_prefill: str) -> None:
+    meta = get_nixl_meta_for_instance(selected_prefill)
+    if not meta:
+        raise RuntimeError(
+            f"Missing NIXL metadata for prefill instance {selected_prefill}"
+        )
+    if meta.get("connector") != "NixlConnector" or meta.get("role") != "prefill":
+        raise RuntimeError(
+            f"Invalid prefill NIXL metadata for {selected_prefill}: {meta}"
+        )
+
+    request.Task.prefill_tp_size = int(meta.get("tp_size") or 0)
+    request.Task.prefill_side_channel_addr = get_side_channel_addr_for_instance(
+        selected_prefill
+    )
 
 
 # --- Helper: Response Tracker ---
@@ -1046,6 +1073,14 @@ class RequestBatcher:
             self.schedule_event.set()
 
     async def add_request(self, request: BaseRequest) -> Dict[str, Any]:
+        """普通同步 batching 前端调用入口，返回 StreamingResponse 所需 generator。"""
+        return await self._add_request(request, mode="stream")
+
+    async def add_nixl_prefill_request(self, request: BaseRequest) -> Dict[str, Any]:
+        """NIXL PD Prefill 同步 batching 入口，返回 per-request KV 参数。"""
+        return await self._add_request(request, mode="nixl_prefill")
+
+    async def _add_request(self, request: BaseRequest, mode: str) -> Dict[str, Any]:
         """前端调用入口"""
         request.Service.arrival_time = time.time()
         rid = request.Request_ID
@@ -1053,13 +1088,18 @@ class RequestBatcher:
         event = asyncio.Event()
 
         async with self.lock:
-            self.batch_manager[rid_key] = {"event": event, "result": {}}
+            self.batch_manager[rid_key] = {
+                "event": event,
+                "result": {},
+                "mode": mode,
+            }
             request.Task.batch_order = -1
             self.pending_queue.append(request)
             _log_timeline_event(
                 "REQUEST_ENQUEUED",
                 request_id=rid_key,
                 prompt_tokens=getattr(request.Prompt, "token_length", None),
+                mode=mode,
                 pending_queue_size=len(self.pending_queue),
                 trigger_mode=self.trigger_mode,
                 schedule_event_set=self.schedule_event.is_set(),
@@ -1148,7 +1188,56 @@ class RequestBatcher:
         rid_key = _rid_key(rid)
         tracker = None
         try:
+            async with self.lock:
+                batch_entry = self.batch_manager.get(rid_key, {})
+                mode = batch_entry.get("mode", "stream")
+
             target_url = f"http://{instance}/v1/{request.Service.Endpoint_type}"
+            if mode == "nixl_prefill":
+                _bind_nixl_prefill_metadata(request, instance)
+                payload = build_nixl_prefill_payload(request)
+
+                print("\n\n\n")
+                print("+" * 80)
+                print("[Gateway] NIXL Prefill 同步调度状态 ")
+                print("+" * 80)
+                print(f"转发实例: {instance}")
+                for k, v in payload.items():
+                    print(f"请求报文 {k}: {v}")
+                print("+" * 80)
+                print("\n\n\n")
+
+                prefill_response = await forward_request_json(
+                    url=target_url,
+                    data=payload,
+                    extra_headers=nixl_headers_for_request(request),
+                )
+                kv_transfer_params = extract_kv_transfer_params(prefill_response)
+                request.Task.prefill_instance = instance
+                request.Task.nixl_kv_transfer_params = kv_transfer_params
+
+                async with self.lock:
+                    if rid_key in self.batch_manager:
+                        self.batch_manager[rid_key]["result"] = {
+                            "success": True,
+                            "instance": instance,
+                            "prefill_response": prefill_response,
+                            "kv_transfer_params": kv_transfer_params,
+                        }
+                        self.batch_manager[rid_key]["event"].set()
+                    self.inflight_prefill_reqs.pop(rid_key, None)
+                    self.inflight_prefill_sent_time.pop(rid_key, None)
+                    self.inflight_prefill_meta.pop(rid_key, None)
+                    if self.pending_queue:
+                        self.schedule_event.set()
+
+                logging.info(
+                    "NIXL prefill req %s finished on %s.",
+                    str(rid)[-4:],
+                    instance,
+                )
+                return
+
             payload = BaseRequest.to_vllm_payload(request)
 
             # FIXME: 演示用，打印池调度状态

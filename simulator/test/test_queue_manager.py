@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from __future__ import annotations
 
 import sys
@@ -10,10 +10,10 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from simulator.queue_manager import QueueManager  # noqa: E402
-from simulator.request_workload import GeneratedRequest, generate_requests  # noqa: E402
-from simulator.scheduling_strategies import DirectSchedulingStrategy, PSOSchedulingStrategy, QueueRequestView  # noqa: E402
-from simulator.vllm_execution_calculator import VllmQueuedRequestSnapshot, VllmQueueSnapshot  # noqa: E402
+from simulator.gateway.queue_manager import QueueManager  # noqa: E402
+from simulator.dataset.request_workload import GeneratedRequest, generate_requests  # noqa: E402
+from simulator.gateway.scheduling_strategies import DirectSchedulingStrategy, PSOSchedulingStrategy, QueueRequestView  # noqa: E402
+from simulator.instance.vllm_execution_calculator import VllmQueuedRequestSnapshot, VllmQueueSnapshot  # noqa: E402
 
 
 class QueueManagerTest(unittest.TestCase):

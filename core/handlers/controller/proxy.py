@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 from core.schemas.request import BaseRequest as SchedulerRequest
 from proxy.forward import forward_request
+from utils.nixl_request import build_nixl_request_id, nixl_headers_for_request
 
 from utils import timing
 
@@ -189,6 +190,27 @@ class RequestIdAllocator:
 id_alloc = RequestIdAllocator()
 
 
+async def _prepare_nixl_pd_request(req_obj: SchedulerRequest) -> None:
+    if not getattr(req_obj.Service, "Enable_PD_Disaggregation", False):
+        return
+
+    if not req_obj.Task.P_proxy_addr or not req_obj.Task.P_proxy_port:
+        raise RuntimeError("Missing selected Prefill gateway")
+    if not req_obj.Task.D_proxy_addr or not req_obj.Task.D_proxy_port:
+        raise RuntimeError("Missing selected Decode gateway")
+
+    req_obj.Task.pd_connector = "NixlConnector"
+    req_obj.Task.nixl_request_id = build_nixl_request_id(req_obj.Request_ID)
+    req_obj.Task.decode_instance = ""
+    req_obj.Task.decode_selection_stage = "after_prefill"
+    print(
+        f"[Controller-NIXL] Req {req_obj.Request_ID} prepared "
+        f"P-Gateway={req_obj.Task.P_proxy_addr}:{req_obj.Task.P_proxy_port} "
+        f"D-Gateway={req_obj.Task.D_proxy_addr}:{req_obj.Task.D_proxy_port} "
+        f"nixl_request_id={req_obj.Task.nixl_request_id}"
+    )
+
+
 # ======================= 公共内部处理函数 =======================
 @timing
 def _handle_client(
@@ -285,6 +307,13 @@ async def create_chat_completions(request: FastAPIRequest):
 
     # 构建内部 Request（包含 Prompt/Service/Task 等）
     req_obj = _handle_client(url_path, payload, client_ip, scheduler_instance, request.app)
+    try:
+        await _prepare_nixl_pd_request(req_obj)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "pd_instance_selection_failed", "detail": str(exc)},
+        )
 
     # 根据调度结果选择下游 URL
     host = req_obj.Task.P_proxy_addr
@@ -304,6 +333,7 @@ async def create_chat_completions(request: FastAPIRequest):
 
     # 带一个 Scheduler分配的Request ID，便于链路追踪
     extra_headers["scheduler-request-id"] = str(req_obj.Request_ID)
+    extra_headers.update(nixl_headers_for_request(req_obj))
 
     # 定义一个 async 生成器，从下游流式读取，再回给上游
     async def iter_upstream():
@@ -359,6 +389,13 @@ async def create_completions(request: FastAPIRequest):
 
     # 构建内部 Request（包含 Prompt/Service/Task 等）
     req_obj = _handle_client(url_path, payload, client_ip, scheduler_instance, request.app)
+    try:
+        await _prepare_nixl_pd_request(req_obj)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "pd_instance_selection_failed", "detail": str(exc)},
+        )
 
     # 根据调度结果选择下游 URL
     host = req_obj.Task.P_proxy_addr
@@ -378,6 +415,7 @@ async def create_completions(request: FastAPIRequest):
 
     # 带一个 Scheduler分配的Request ID，便于链路追踪
     extra_headers["scheduler-request-id"] = str(req_obj.Request_ID)
+    extra_headers.update(nixl_headers_for_request(req_obj))
 
     # 定义一个 async 生成器，从下游流式读取，再回给上游
     async def iter_upstream():

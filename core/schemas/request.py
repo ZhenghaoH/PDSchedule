@@ -1,7 +1,7 @@
 # 构建任务和任务批次的信息结构
 from __future__ import annotations
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import Dict, Any, List, Tuple, Optional, Union, TYPE_CHECKING
 import logging
 
@@ -262,6 +262,14 @@ class Task:
     decode_instance: str
     batch_order: int
     User_url_path: str
+    pd_connector: str = "NixlConnector"
+    nixl_request_id: str = ""
+    nixl_kv_transfer_params: Dict[str, Any] = field(default_factory=dict)
+    prefill_tp_size: int = 0
+    decode_tp_size: int = 0
+    prefill_side_channel_addr: str = ""
+    decode_side_channel_addr: str = ""
+    decode_selection_stage: str = "after_prefill"
 
     def scheduler_method(self, scheduler_instance: GlobalScheduler, prompt_obj: Prompt, service_obj: Service,
                          request_id: int) -> Dict[str, Any]:
@@ -517,7 +525,15 @@ class BaseRequest:
             prefill_instance="127.0.0.1:7001",
             decode_instance="127.0.0.1:7002",
             batch_order=0,
-            User_url_path=url_path
+            User_url_path=url_path,
+            pd_connector="NixlConnector",
+            nixl_request_id="",
+            nixl_kv_transfer_params={},
+            prefill_tp_size=0,
+            decode_tp_size=0,
+            prefill_side_channel_addr="",
+            decode_side_channel_addr="",
+            decode_selection_stage="after_prefill",
         )
 
         # FIXME: 演示用，打印标识解析
@@ -673,6 +689,13 @@ class BaseRequest:
             f"  D_proxy_port={self.Task.D_proxy_port},\n"
             f"  prefill_instance={self.Task.prefill_instance},\n"
             f"  decode_instance={self.Task.decode_instance},\n"
+            f"  pd_connector={self.Task.pd_connector},\n"
+            f"  nixl_request_id={self.Task.nixl_request_id},\n"
+            f"  prefill_tp_size={self.Task.prefill_tp_size},\n"
+            f"  decode_tp_size={self.Task.decode_tp_size},\n"
+            f"  prefill_side_channel_addr={self.Task.prefill_side_channel_addr},\n"
+            f"  decode_side_channel_addr={self.Task.decode_side_channel_addr},\n"
+            f"  decode_selection_stage={self.Task.decode_selection_stage},\n"
             f"  batch_order={self.Task.batch_order},\n"
             f"  User_url_path={self.Task.User_url_path},\n"
             f")"

@@ -22,8 +22,8 @@ DEFAULT_MODEL_FILE = str(
     Path(__file__).resolve().parent / "artifacts" / "prefill_ttft_regressor.pkl"
 )
 
-BATCH_SIZES_TO_TEST = range(1, 9)
-TOKEN_LENGTHS_TO_TEST = range(64, 1024, 64)
+BATCH_SIZES_TO_TEST = range(1, 2)
+TOKEN_LENGTHS_TO_TEST = range(64, 4096+64, 64)
 
 WARM_UP_CONFIGS_DEFAULT = [
     (bs, pl)

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from __future__ import annotations
 
 import sys
@@ -11,8 +11,8 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from simulator.pipeline import run_comparison  # noqa: E402
-from simulator.schedule_log import render_schedule_log, save_schedule_log  # noqa: E402
+from simulator.experiment.pipeline import run_comparison  # noqa: E402
+from simulator.result.schedule_log import render_schedule_log, save_schedule_log  # noqa: E402
 
 
 class ScheduleLogTest(unittest.TestCase):

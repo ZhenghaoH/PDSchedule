@@ -22,7 +22,6 @@ from utils.kv_transfer import (
 
 import bisect
 from collections import deque
-from scipy.stats import rankdata
 
 PAIR_COL_WIDTH = 14
 P_SCORE_COL_WIDTH = 18
@@ -78,6 +77,73 @@ def _calculate_network_load(net: Network) -> float:
     return _clamp(1.0 - (available_bandwidth / max_bandwidth), 0.0, 1.0)
 
 
+def _calculate_capacity_loss(capacity_rank: float, request_rank: float) -> float:
+    """Return a 0~1-ish capability affinity loss; under-capacity is worse."""
+    diff = _clamp(capacity_rank, 0.0, 1.0) - _clamp(request_rank, 0.0, 1.0)
+    if diff >= 0:
+        return _clamp(0.5 * diff, 0.0, 1.0)
+    return _clamp(abs(diff), 0.0, 1.0)
+
+
+def _calculate_normalized_pool_load(pool) -> float:
+    return _clamp(getattr(pool, "current_load", 0.0), 0.0, 1.0)
+
+
+def _calculate_network_time_ms(
+    token_length: int,
+    compress_factor: float,
+    net: Network,
+) -> float:
+    bandwidth = float(getattr(net, "bandwidth", 0.0) or 0.0)
+    if bandwidth <= 0:
+        return float("inf")
+    return float(getattr(net, "rtt", 0.0) or 0.0) + estimate_transfer_time_ms(
+        token_length,
+        compress_factor,
+        bandwidth,
+    )
+
+
+def _calculate_network_time_bounds(
+    token_length: int,
+    compress_factor: float,
+    prefill_pools: List[PrefillPool],
+    decode_pools: List[DecodePool],
+    network_map: Dict[Tuple[int, int], Network],
+) -> Tuple[float, float]:
+    net_times = []
+    for p_candidate in prefill_pools:
+        for d_candidate in decode_pools:
+            candidate_net = network_map.get((p_candidate.pool_id, d_candidate.pool_id))
+            if not candidate_net:
+                continue
+            candidate_time = _calculate_network_time_ms(token_length, compress_factor, candidate_net)
+            if math.isfinite(candidate_time):
+                net_times.append(candidate_time)
+
+    if not net_times:
+        return 0.0, 0.0
+    return min(net_times), max(net_times)
+
+
+def _calculate_network_affinity_loss(
+    net_time_ms: float,
+    min_net_time_ms: float,
+    max_net_time_ms: float,
+    net_load: float,
+) -> float:
+    if not math.isfinite(net_time_ms):
+        return 1.0
+
+    denominator = max_net_time_ms - min_net_time_ms
+    if denominator <= 1e-9:
+        net_time_loss = 0.0
+    else:
+        net_time_loss = (net_time_ms - min_net_time_ms) / denominator
+
+    return _clamp(0.5 * _clamp(net_time_loss, 0.0, 1.0) + 0.5 * _clamp(net_load, 0.0, 1.0), 0.0, 1.0)
+
+
 def _display_width(text: str) -> int:
     width = 0
     for char in str(text):
@@ -121,11 +187,6 @@ class RequestRanker:
         self.history_queue = deque()
         # 使用列表保存排序后的数据，用于快速计算 Rank
         self.sorted_values = []
-
-        initial_data = list(range(0, 2048 + 1, 64))
-        for val in initial_data:
-            self.history_queue.append(val)
-            self.sorted_values.append(val)
 
     def update(self, value: int):
         """更新历史数据，保持窗口大小"""
@@ -194,22 +255,22 @@ class PSO_Scheduler:
         # 1. 提取能力值
         # 注意：保持列表顺序以便后续 zip 映射
         pool_ids = [p.pool_id for p in pools]
-        capacities = [getattr(p, 'flops', getattr(p, 'mem_bandwidth', 0)) for p in pools]
+        capacities = [
+            max(float(getattr(p, 'flops', getattr(p, 'mem_bandwidth', 0)) or 0.0), 0.0)
+            for p in pools
+        ]
 
-        # 2. 计算排名 (1-based index)
-        # method='average': [100, 200, 200, 300] -> [1.0, 2.5, 2.5, 4.0]
-        ranks = rankdata(capacities, method='average')
+        # 2. 按最强候选池归一化能力，使 rank 反映能力比例而不是序位
+        max_capacity = max(capacities)
+        if max_capacity <= 0:
+            return {pid: 0.5 for pid in pool_ids}
 
-        total = len(pools)
         rank_map = {}
 
-        # 3. 归一化到 0~1
-        for pid, r in zip(pool_ids, ranks):
-            # 公式: (Rank - 0.5) / N
-            # 解释: r 是 1-based 的，减 0.5 等价于之前的 (i + 0.5) 逻辑
-            # 例如 r=1.0 -> (1-0.5)/N = 0.5/N (即最弱节点的中心位置)
-            norm_rank = (r - 0.5) / total
-            rank_map[pid] = norm_rank
+        # 3. 限制到 0.01~0.99，避免 fitness 中出现极端 0 或 1
+        for pid, capacity in zip(pool_ids, capacities):
+            norm_rank = capacity / max_capacity
+            rank_map[pid] = min(max(norm_rank, 0.01), 0.99)
 
         # print(f"Pool Ranks: {rank_map}")
         return rank_map
@@ -229,15 +290,12 @@ class PSO_Scheduler:
                            d_rank_map: Dict[int, float]) -> float:
 
         # SLO 基准值
-        BASE_SLO_TTFT = 1500.0  # ms
-        BASE_SLO_TPOT = 50.0  # ms
+        W_CAP = 0.4
+        W_NET = 0.3
+        W_LOAD = 0.3
 
         # 权重配置 (Modified Weights)
-        A = 2.0  # Mismatch 权重 (保持不变)
-        B = 2.0  # Load 权重 (从 1.0 提高到 2.0，配合指数函数增强负载敏感度)
-
-        W1 = 1.0  # TTFT 内部权重
-        W2 = 1.0  # TPOT 内部权重
+        # SLO values are kept in the interface/logs, but do not affect fitness.
 
         # --- 1. 离散化 ---
         num_p = len(prefill_pools)
@@ -257,36 +315,37 @@ class PSO_Scheduler:
         # 如果 Map 中找不到（极其罕见），默认给 0.5
         norm_p_cap = p_rank_map.get(p_node.pool_id, 0.5)
         norm_d_cap = d_rank_map.get(d_node.pool_id, 0.5)
+        min_net_time_ms, max_net_time_ms = _calculate_network_time_bounds(
+            token_length,
+            compress_factor,
+            prefill_pools,
+            decode_pools,
+            network_map,
+        )
 
         # =================================================================
         # 第一部分：TTFT Mismatch
         # =================================================================
 
-        # A. 紧迫度放大
-        safe_slo_ttft = max(slo_ttft, 1.0)
-        gamma_ttft = max(1.0, BASE_SLO_TTFT / safe_slo_ttft)
-
-        # B. 等效请求 Rank
-        effective_req_p = norm_req_rank * gamma_ttft
+        # SLO is intentionally excluded from global scheduling fitness.
+        effective_req_p = norm_req_rank
 
         # C. Prefill 算力错配 (Rank Distance)
-        diff_p = norm_p_cap - effective_req_p
-        if diff_p >= 0:
-            cost_p_mismatch = diff_p * 5.0
-        else:
-            cost_p_mismatch = abs(diff_p) * 10.0  # 严惩能力不足
+        cost_p_mismatch = _calculate_capacity_loss(norm_p_cap, effective_req_p)
 
         # D. 网络错配
         net = network_map.get((p_node.pool_id, d_node.pool_id))
         if not net:
             return 1e9
 
-        net_time_ms = net.rtt + estimate_transfer_time_ms(
-            token_length,
-            compress_factor,
-            net.bandwidth,
+        net_time_ms = _calculate_network_time_ms(token_length, compress_factor, net)
+        safe_net_load = _calculate_network_load(net)
+        network_mismatch = _calculate_network_affinity_loss(
+            net_time_ms,
+            min_net_time_ms,
+            max_net_time_ms,
+            safe_net_load,
         )
-        network_mismatch = 5 * min(net_time_ms / safe_slo_ttft, 1.0)
 
         ttft_slo_mismatch = cost_p_mismatch + network_mismatch
 
@@ -294,15 +353,9 @@ class PSO_Scheduler:
         # 第二部分：TPOT Mismatch
         # =================================================================
 
-        safe_slo_tpot = max(slo_tpot, 0.1)
-        gamma_tpot = max(1.0, BASE_SLO_TPOT / safe_slo_tpot)
-        effective_req_d = norm_req_rank * gamma_tpot
+        effective_req_d = norm_req_rank
 
-        diff_d = norm_d_cap - effective_req_d
-        if diff_d >= 0:
-            cost_d_mismatch = diff_d * 5.0
-        else:
-            cost_d_mismatch = abs(diff_d) * 10.0
+        cost_d_mismatch = _calculate_capacity_loss(norm_d_cap, effective_req_d)
 
         tpot_slo_mismatch = cost_d_mismatch
 
@@ -310,24 +363,14 @@ class PSO_Scheduler:
         # 第三部分：Load Balance (核心修改部分)
         # =================================================================
 
-        # 使用指数惩罚函数代替原本的二次方
-        # 假设 load 在 0.0-1.0 之间
-        # exp(4 * 0.0) = 1.0
-        # exp(4 * 0.5) = 7.39
-        # exp(4 * 0.8) = 24.5
-        # exp(4 * 1.0) = 54.6 (极强的惩罚，足以覆盖 SLO Mismatch)
-        # 这样当负载超过 80% 时，调度器会极力避免该节点
+        # Keep P/D/network load in the same 0~1 range as affinity losses.
 
-        load_alpha = 4.0
+        safe_p_load = _calculate_normalized_pool_load(p_node)
+        safe_d_load = _calculate_normalized_pool_load(d_node)
 
-        # 限制指数输入，防止溢出（虽然归一化后一般不会）
-        safe_p_load = min(p_node.current_load, 5.0)
-        safe_d_load = min(d_node.current_load, 5.0)
-        safe_net_load = _calculate_network_load(net)
-
-        p_load_score = np.exp(load_alpha * safe_p_load)
-        d_load_score = np.exp(load_alpha * safe_d_load)
-        net_load_score = np.exp(load_alpha * safe_net_load)
+        p_load_score = safe_p_load
+        d_load_score = safe_d_load
+        net_load_score = safe_net_load
 
         load_balance_score = (p_load_score + d_load_score + net_load_score) / 3.0
 
@@ -335,8 +378,8 @@ class PSO_Scheduler:
         # 最终 Fitness
         # =================================================================
 
-        slo_mismatch = (W1 * ttft_slo_mismatch) + (W2 * tpot_slo_mismatch)
-        fitness = (A * slo_mismatch) + (B * load_balance_score)
+        ability_loss = (cost_p_mismatch + cost_d_mismatch) / 2.0
+        fitness = (W_CAP * ability_loss) + (W_NET * network_mismatch) + (W_LOAD * load_balance_score)
 
         return fitness
 
@@ -359,15 +402,10 @@ class PSO_Scheduler:
         # 1. 基础参数准备与归一化
         current_req_rank = self.req_ranker.get_rank(token_length)
 
-        BASE_SLO_TTFT = 1500.0
         safe_slo_ttft = max(slo_ttft, 1.0)
-        gamma_ttft = max(1.0, BASE_SLO_TTFT / safe_slo_ttft)
-        effective_req_p = min(current_req_rank * gamma_ttft, 1.0)
+        effective_req_p = current_req_rank
 
-        BASE_SLO_TPOT = 50.0
-        safe_slo_tpot = max(slo_tpot, 0.1)
-        gamma_tpot = max(1.0, BASE_SLO_TPOT / safe_slo_tpot)
-        effective_req_d = min(current_req_rank * gamma_tpot, 1.0)
+        effective_req_d = current_req_rank
 
         if current_req_rank < (1.0 / 3.0):
             req_difficulty_label = "简单"
@@ -377,22 +415,23 @@ class PSO_Scheduler:
             req_difficulty_label = "困难"
 
         # 权重引用 (保持与 _calculate_fitness 一致)
-        A, B = 2.0, 2.0  # Modified B
-        W1, W2 = 1.0, 1.0
-        load_alpha = 4.0
+        W_CAP, W_NET, W_LOAD = 0.4, 0.3, 0.3
 
         p_node = selected_prefill
         d_node = selected_decode
+        min_net_time_ms, max_net_time_ms = _calculate_network_time_bounds(
+            token_length,
+            compress_factor,
+            prefill_pools,
+            decode_pools,
+            network_map,
+        )
 
         # --- A. Prefill Mismatch ---
         norm_p_cap = p_rank_map.get(p_node.pool_id, 0.5)
         diff_p = norm_p_cap - effective_req_p
-        if diff_p >= 0:
-            cost_p_mismatch = diff_p * 5.0
-            p_note = f"{cost_p_mismatch:.2f}(Ov)"
-        else:
-            cost_p_mismatch = abs(diff_p) * 10.0
-            p_note = f"{cost_p_mismatch:.2f}(Un)"
+        cost_p_mismatch = _calculate_capacity_loss(norm_p_cap, effective_req_p)
+        p_note = f"{cost_p_mismatch:.4f}({'Ov' if diff_p >= 0 else 'Un'})"
 
         # --- B. Network Mismatch ---
         net = network_map.get((p_node.pool_id, d_node.pool_id))
@@ -411,43 +450,38 @@ class PSO_Scheduler:
             net_load = _calculate_network_load(net)
             kv_transfer_bytes = estimate_qwen25_7b_kv_transfer_bytes(token_length, compress_factor)
             kv_transfer_bytes_display = f"{kv_transfer_bytes:.0f}"
-            net_time_ms = net.rtt + estimate_transfer_time_ms(
-                token_length,
-                compress_factor,
-                net.bandwidth,
-            )
+            net_time_ms = _calculate_network_time_ms(token_length, compress_factor, net)
             net_time_ms_display = f"{net_time_ms:.4f}"
-            net_cost = 5 * min(net_time_ms / safe_slo_ttft, 1.0)
+            net_cost = _calculate_network_affinity_loss(
+                net_time_ms,
+                min_net_time_ms,
+                max_net_time_ms,
+                net_load,
+            )
 
         # --- C. Decode Mismatch ---
         norm_d_cap = d_rank_map.get(d_node.pool_id, 0.5)
         diff_d = norm_d_cap - effective_req_d
-        if diff_d >= 0:
-            cost_d_mismatch = diff_d * 5.0
-            d_note = f"{cost_d_mismatch:.2f}(Ov)"
-        else:
-            cost_d_mismatch = abs(diff_d) * 10.0
-            d_note = f"{cost_d_mismatch:.2f}(Un)"
+        cost_d_mismatch = _calculate_capacity_loss(norm_d_cap, effective_req_d)
+        d_note = f"{cost_d_mismatch:.4f}({'Ov' if diff_d >= 0 else 'Un'})"
 
         # --- D. Load Score (Modified) ---
-        safe_p_load = min(p_node.current_load, 5.0)
-        safe_d_load = min(d_node.current_load, 5.0)
-        p_load_score = np.exp(load_alpha * safe_p_load)
-        d_load_score = np.exp(load_alpha * safe_d_load)
-        net_load_score = np.exp(load_alpha * net_load)
+        safe_p_load = _calculate_normalized_pool_load(p_node)
+        safe_d_load = _calculate_normalized_pool_load(d_node)
+        p_load_score = safe_p_load
+        d_load_score = safe_d_load
+        net_load_score = net_load
         load_score = (p_load_score + d_load_score + net_load_score) / 3.0
 
         # --- E. Total Fitness ---
-        ttft_part = cost_p_mismatch + net_cost
-        tpot_part = cost_d_mismatch
-        slo_score = (W1 * ttft_part) + (W2 * tpot_part)
-        final_fitness = (A * slo_score) + (B * load_score)
+        ability_score = (cost_p_mismatch + cost_d_mismatch) / 2.0
+        final_fitness = (W_CAP * ability_score) + (W_NET * net_cost) + (W_LOAD * load_score)
 
         p_load_details = []
         for pool in prefill_pools:
             pool_load = getattr(pool, "current_load", 0.0)
-            safe_load = min(pool_load, 5.0)
-            load_detail_score = np.exp(load_alpha * safe_load)
+            safe_load = _calculate_normalized_pool_load(pool)
+            load_detail_score = safe_load
             p_load_details.append({
                 "pool": pool,
                 "capacity": getattr(pool, "flops", 0.0),
@@ -460,8 +494,8 @@ class PSO_Scheduler:
         d_load_details = []
         for pool in decode_pools:
             pool_load = getattr(pool, "current_load", 0.0)
-            safe_load = min(pool_load, 5.0)
-            load_detail_score = np.exp(load_alpha * safe_load)
+            safe_load = _calculate_normalized_pool_load(pool)
+            load_detail_score = safe_load
             d_load_details.append({
                 "pool": pool,
                 "capacity": getattr(pool, "mem_bandwidth", 0.0),
@@ -475,11 +509,11 @@ class PSO_Scheduler:
         for p_candidate in prefill_pools:
             for d_candidate in decode_pools:
                 candidate_net = network_map.get((p_candidate.pool_id, d_candidate.pool_id))
-                p_candidate_load = min(getattr(p_candidate, "current_load", 0.0), 5.0)
-                d_candidate_load = min(getattr(d_candidate, "current_load", 0.0), 5.0)
-                p_candidate_load_score = np.exp(load_alpha * p_candidate_load)
-                d_candidate_load_score = np.exp(load_alpha * d_candidate_load)
-                missing_net_load_score = np.exp(load_alpha * 1.0)
+                p_candidate_load = _calculate_normalized_pool_load(p_candidate)
+                d_candidate_load = _calculate_normalized_pool_load(d_candidate)
+                p_candidate_load_score = p_candidate_load
+                d_candidate_load_score = d_candidate_load
+                missing_net_load_score = 1.0
                 pair_load_score = (
                     p_candidate_load_score
                     + d_candidate_load_score
@@ -498,13 +532,13 @@ class PSO_Scheduler:
                     "slo_ratio": None,
                     "network_score": 1e9,
                     "network_load": 1.0,
-                    "network_load_score": np.exp(load_alpha * 1.0),
+                    "network_load_score": 1.0,
                     "pair_load_score": pair_load_score,
                 }
 
                 if candidate_net:
                     candidate_network_load = _calculate_network_load(candidate_net)
-                    candidate_network_load_score = np.exp(load_alpha * candidate_network_load)
+                    candidate_network_load_score = candidate_network_load
                     pair_load_score = (
                         p_candidate_load_score
                         + d_candidate_load_score
@@ -515,7 +549,7 @@ class PSO_Scheduler:
                         compress_factor,
                         candidate_net.bandwidth,
                     )
-                    candidate_net_time_ms = candidate_net.rtt + transfer_ms
+                    candidate_net_time_ms = _calculate_network_time_ms(token_length, compress_factor, candidate_net)
                     slo_ratio = candidate_net_time_ms / safe_slo_ttft
                     detail.update({
                         "bandwidth": candidate_net.bandwidth,
@@ -524,7 +558,12 @@ class PSO_Scheduler:
                         "transfer_ms": transfer_ms,
                         "net_time_ms": candidate_net_time_ms,
                         "slo_ratio": slo_ratio,
-                        "network_score": 5 * min(slo_ratio, 1.0),
+                        "network_score": _calculate_network_affinity_loss(
+                            candidate_net_time_ms,
+                            min_net_time_ms,
+                            max_net_time_ms,
+                            candidate_network_load,
+                        ),
                         "network_load": candidate_network_load,
                         "network_load_score": candidate_network_load_score,
                         "pair_load_score": pair_load_score,
@@ -557,20 +596,20 @@ class PSO_Scheduler:
             f"Network RTT: {net_rtt_display} ms",
             f"Network total time: {net_time_ms_display} ms",
             f"P池匹配分: {p_note}",
-            f"网络连接分: {net_cost:.4f}",
+            f"网络亲和分: {net_cost:.4f}",
             f"D池匹配分: {d_note}",
             f"负载均衡分: {load_score:.4f} = "
             f"(P{p_node.pool_id}负载分 {p_load_score:.4f} + "
             f"D{d_node.pool_id}负载分 {d_load_score:.4f} + "
             f"网络负载分 {net_load_score:.4f}) / 3",
-            f"SLO总匹配分: {slo_score:.4f}",
+            f"能力亲和分: {ability_score:.4f}",
             f"最终适配分: {final_fitness:.4f}",
             "",
             "[所有备选网络连接评分构成]",
-            "说明: 网络连接分 = 5 * min((RTT + KV传输时间) / SLO_TTFT, 1.0)",
+            "说明: 网络亲和分 = 0.5 * 当前请求内网络耗时归一化 + 0.5 * 网络负载",
             "说明: 网络负载 = clamp(1 - 当前可用带宽 / 历史最大可用带宽, 0, 1)",
             "P池 -> D池 | P地址 | D地址 | 可用带宽(Mbps) | 基线带宽(Mbps) | RTT(ms) | "
-            "KV传输(ms) | 网络总耗时(ms) | SLO占比 | 网络连接分 | 网络负载 | 网络负载分 | 配对负载分",
+            "KV传输(ms) | 网络总耗时(ms) | SLO占比 | 网络亲和分 | 网络负载 | 网络负载分 | 配对负载分",
         ]
 
         for item in network_details:
@@ -605,7 +644,7 @@ class PSO_Scheduler:
         lines.extend([
             "",
             "[Prefill池负载评分构成]",
-            "说明: 负载分 = exp(4.0 * min(current_load, 5.0))",
+            "说明: 负载分 = clamp(current_load, 0, 1)",
             "P池 | 地址 | current_load | safe_load | 负载分 | flops | rank",
         ])
         for item in p_load_details:
@@ -622,7 +661,7 @@ class PSO_Scheduler:
         lines.extend([
             "",
             "[Decode池负载评分构成]",
-            "说明: 负载分 = exp(4.0 * min(current_load, 5.0))",
+            "说明: 负载分 = clamp(current_load, 0, 1)",
             "D池 | 地址 | current_load | safe_load | 负载分 | mem_bandwidth | rank",
         ])
         for item in d_load_details:

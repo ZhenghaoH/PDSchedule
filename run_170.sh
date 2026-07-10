@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ================= 配置 =================
-CONTAINER="test"
+CONTAINER="new_env"
 # =======================================
 
 # 0. 提前询问 sudo 密码
@@ -21,9 +21,7 @@ echo ">>> 正在初始化容器环境..."
 cat << 'EOF' > .internal_script.sh
 #!/bin/bash
 MODE=$1
-CONFIG_PATH="/workspace/llm-stack/workspace_HZH/FlexPD/lmcache.yaml"
 MODEL_PATH="/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-REDIS_URL="redis://172.18.0.170:6378"
 
 # 定义一个通用的倒计时函数，方便复用
 wait_for_loading() {
@@ -47,161 +45,163 @@ case "$MODE" in
         ;;
     "p1")
         echo -e "\033[32m=== [1/13] 启动 Prefill vLLM 实例 1 (GPU 0,1) ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD
+        cd /workspace/llm-stack/P2P_FlexPD
         export CUDA_VISIBLE_DEVICES=0,1
         export PYTHONHASHSEED=0
-        export LMCACHE_LOCAL_CPU="False"
-        export LMCACHE_REMOTE_URL=$REDIS_URL
-        unset LMCACHE_REMOTE_SERDE
-        export LMCACHE_CONFIG_FILE=$CONFIG_PATH
+        export VLLM_USE_FLASHINFER_SAMPLER=0
+        export UCX_TLS=tcp,cuda_copy
+        export UCX_NET_DEVICES=eno5
+        export VLLM_NIXL_SIDE_CHANNEL_HOST=172.18.0.170
+        export VLLM_NIXL_SIDE_CHANNEL_PORT=5557
         python3 -m vllm.entrypoints.openai.api_server \
         --model $MODEL_PATH \
         --host 0.0.0.0 --port 8001 \
-        --kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_producer","kv_connector_extra_config":{"discard_partial_chunks":false}}' \
+        --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"],"kv_lease_duration":120}}' \
         --gpu-memory-utilization 0.8 \
         --max-model-len 20000 \
         --dtype auto \
         --max-num-batched-tokens 4096 \
-        --kv-offloading-backend lmcache \
-        --kv-offloading-size 16 \
         --disable-hybrid-kv-cache-manager \
         --kv-cache-metrics \
         --tensor_parallel_size=2 \
         --disable-uvicorn-access-log \
-        --no-enable-prefix-caching
+        --no-enable-prefix-caching \
+        --attention-backend TRITON_ATTN
         ;;
     "p2")
         echo -e "\033[32m=== [2/13] 启动 Prefill vLLM 实例 2 (GPU 2,3) ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD
+        cd /workspace/llm-stack/P2P_FlexPD
         export CUDA_VISIBLE_DEVICES=2,3
         export PYTHONHASHSEED=0
-        export LMCACHE_LOCAL_CPU="False"
-        export LMCACHE_REMOTE_URL=$REDIS_URL
-        unset LMCACHE_REMOTE_SERDE
-        export LMCACHE_CONFIG_FILE=$CONFIG_PATH
+        export UCX_TLS=tcp,cuda_copy
+        export UCX_NET_DEVICES=eno5
+        export VLLM_USE_FLASHINFER_SAMPLER=0
+        export VLLM_NIXL_SIDE_CHANNEL_HOST=172.18.0.170
+        export VLLM_NIXL_SIDE_CHANNEL_PORT=5558
         python3 -m vllm.entrypoints.openai.api_server \
         --model $MODEL_PATH \
         --host 0.0.0.0 --port 8002 \
-        --kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_producer","kv_connector_extra_config":{"discard_partial_chunks":false}}' \
+        --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"],"kv_lease_duration":120}}' \
         --gpu-memory-utilization 0.8 \
         --max-model-len 20000 \
         --dtype auto \
         --max-num-batched-tokens 4096 \
-        --kv-offloading-backend lmcache \
-        --kv-offloading-size 16 \
         --disable-hybrid-kv-cache-manager \
         --kv-cache-metrics \
         --tensor_parallel_size=2 \
         --disable-uvicorn-access-log \
-        --no-enable-prefix-caching
+        --no-enable-prefix-caching \
+        --attention-backend TRITON_ATTN
         ;;
     "d1")
         echo -e "\033[34m=== [3/13] 启动 Decode vLLM 实例 1 (GPU 4,5) ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD
+        cd /workspace/llm-stack/P2P_FlexPD
         export CUDA_VISIBLE_DEVICES=4,5
         export PYTHONHASHSEED=0
-        export LMCACHE_REMOTE_URL=$REDIS_URL
-        unset LMCACHE_REMOTE_SERDE
-        export LMCACHE_CONFIG_FILE=$CONFIG_PATH
+        export UCX_TLS=tcp,cuda_copy
+        export UCX_NET_DEVICES=eno5
+        export VLLM_USE_FLASHINFER_SAMPLER=0
+        export VLLM_NIXL_SIDE_CHANNEL_HOST=172.18.0.170
+        export VLLM_NIXL_SIDE_CHANNEL_PORT=5559
         python3 -m vllm.entrypoints.openai.api_server \
         --model $MODEL_PATH \
         --host 0.0.0.0 --port 8003 \
-        --kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_consumer","kv_connector_extra_config":{"discard_partial_chunks":false}}' \
+        --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"],"kv_lease_duration":120}}' \
         --gpu-memory-utilization 0.8 \
         --max-model-len 20000 \
         --dtype auto \
         --max-num-batched-tokens 4096 \
-        --kv-offloading-backend lmcache \
-        --kv-offloading-size 16 \
         --disable-hybrid-kv-cache-manager \
         --kv-cache-metrics \
         --tensor_parallel_size=2  \
-        --disable-uvicorn-access-log
+        --disable-uvicorn-access-log \
+        --attention-backend TRITON_ATTN
         ;;
     "d2")
         echo -e "\033[34m=== [4/13] 启动 Decode vLLM 实例 2 (GPU 6,7) ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD
+        cd /workspace/llm-stack/P2P_FlexPD
         export CUDA_VISIBLE_DEVICES=6,7
         export PYTHONHASHSEED=0
-        export LMCACHE_REMOTE_URL=$REDIS_URL
-        unset LMCACHE_REMOTE_SERDE
-        export LMCACHE_CONFIG_FILE=$CONFIG_PATH
+        export UCX_TLS=tcp,cuda_copy
+        export UCX_NET_DEVICES=eno5
+        export VLLM_USE_FLASHINFER_SAMPLER=0
+        export VLLM_NIXL_SIDE_CHANNEL_HOST=172.18.0.170
+        export VLLM_NIXL_SIDE_CHANNEL_PORT=5560
         python3 -m vllm.entrypoints.openai.api_server \
         --model $MODEL_PATH \
         --host 0.0.0.0 --port 8004 \
-        --kv-transfer-config '{"kv_connector":"LMCacheConnectorV1","kv_role":"kv_consumer","kv_connector_extra_config":{"discard_partial_chunks":false}}' \
+        --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"],"kv_lease_duration":120}}' \
         --gpu-memory-utilization 0.8 \
         --max-model-len 20000 \
         --dtype auto \
         --max-num-batched-tokens 4096 \
-        --kv-offloading-backend lmcache \
-        --kv-offloading-size 16 \
         --disable-hybrid-kv-cache-manager \
         --kv-cache-metrics \
         --tensor_parallel_size=2  \
-        --disable-uvicorn-access-log
+        --disable-uvicorn-access-log \
+        --attention-backend TRITON_ATTN
         ;;
     "s")
         wait_for_loading 10 "Scheduler"
 
         echo -e "\033[31m=== [5/13] 启动 Scheduler ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
+        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         export CUDA_VISIBLE_DEVICES=4
         python3 controller.py 
         ;;
     "pd")
         wait_for_loading 50 "Decode Proxy"
-	    export MY_MEM_BANDWIDTH=1792
-        export MY_MAX_DECODE_REQ_NUM=128
+	    export MY_MEM_BANDWIDTH=3584
+        export MY_MAX_DECODE_REQ_NUM=256
         echo -e "\033[35m=== [6/13] 启动 Decode Proxy ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
+        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         python3 gatewayD.py --decode 172.18.0.170:7003 172.18.0.170:7004
         ;;
     "pp")
         wait_for_loading 52 "Prefill Proxy"
 
         echo -e "\033[36m=== [7/13] 启动 Prefill Proxy ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
-        export MY_MAX_PROMPT_THROUGHPUT=12749.885
+        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
+        export MY_MAX_PROMPT_THROUGHPUT=25499.77
         export MY_FLOPS=209.6
-        python3 gatewayP.py --prefill 172.18.0.170:7001 172.18.0.170:7002 --ttft-warmup
+        python3 gatewayP.py --prefill 172.18.0.170:7001 172.18.0.170:7002
         ;;
     "id1")
         wait_for_loading 55 "Decode Instance 1"
 
         echo -e "\033[36m=== [8/13] 启动 Decode Instance Proxy 1 ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
+        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         python3 instanceD.py --port 7003 --vllm_port 8003
         ;;
     "id2")
         wait_for_loading 55 "Decode Instance 2"
 
         echo -e "\033[36m=== [9/13] 启动 Decode Instance Proxy 2 ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
+        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         python3 instanceD.py --port 7004 --vllm_port 8004
         ;;
     "ip1")
         wait_for_loading 57 "Prefill Instance 1"
 
         echo -e "\033[36m=== [10/13] 启动 Prefill Instance Proxy 1 ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
+        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         python3 instanceP.py --port 7001 --vllm_port 8001
         ;;
     "ip2")
         wait_for_loading 57 "Prefill Instance 2"
 
         echo -e "\033[36m=== [11/13] 启动 Prefill Instance Proxy 2 ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
+        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         python3 instanceP.py --port 7002 --vllm_port 8002
         ;;
     "kdn")
         echo -e "\033[36m=== [12/13] 启动 KDN Server ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
+        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         python3 demo_kdn.py
         ;;
     "cli")
         echo -e "\033[36m=== [13/13] 启动 KDN CLI ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD/
+        cd /workspace/llm-stack/P2P_FlexPD/
         python3 ./kdn_server/kdn_register_cli.py
         ;;
 esac
@@ -236,14 +236,14 @@ sleep 1
 launch_tab "1.Prefill-vLLM-1" "p1"
 sleep 0.5
 
-# launch_tab "2.Prefill-vLLM-2" "p2"
-# sleep 0.5
+launch_tab "2.Prefill-vLLM-2" "p2"
+sleep 0.5
 
 launch_tab "3.Decode-vLLM-1" "d1"
 sleep 0.5
 
-# launch_tab "4.Decode-vLLM-2" "d2"
-# sleep 0.5
+launch_tab "4.Decode-vLLM-2" "d2"
+sleep 0.5
 
 launch_tab "5.Controller" "s"
 sleep 0.5
@@ -257,14 +257,14 @@ sleep 0.5
 launch_tab "8.Instance-D-1" "id1"
 sleep 0.5
 
-# launch_tab "9.Instance-D-2" "id2"
-# sleep 0.5
+launch_tab "9.Instance-D-2" "id2"
+sleep 0.5
 
 launch_tab "10.Instance-P-1" "ip1"
 sleep 0.5
 
-# launch_tab "11.Instance-P-2" "ip2"
-# sleep 0.5
+launch_tab "11.Instance-P-2" "ip2"
+sleep 0.5
 
 launch_tab "12.KDN-Server" "kdn"
 sleep 0.5

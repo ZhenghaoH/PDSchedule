@@ -1,32 +1,34 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Literal, Optional, Union
 
 try:
-    from .prefill_pso_scheduler import (
+    from ..gateway.prefill_pso_scheduler import (
         PrefillScheduleResult,
     )
-    from .queue_manager import DispatchRecord, QueueManager, QueueManagerResult, SimRequestState
-    from .request_workload import DEFAULT_BURSTGPT_CSV_PATH, GeneratedRequest, generate_requests, requests_to_dicts
-    from .scheduling_strategies import PSOSchedulingStrategy
-    from .ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH
-    from .vllm_v1_scheduler import SimulationResult, VllmRequest, VllmV1SchedulerSimulator
+    from ..gateway.queue_manager import DispatchRecord, QueueManager, QueueManagerResult, SimRequestState
+    from ..dataset.request_workload import DEFAULT_BURSTGPT_CSV_PATH, GeneratedRequest, generate_requests, requests_to_dicts
+    from ..gateway.scheduling_strategies import PSOSchedulingStrategy
+    from ..instance.ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH
+    from ..instance.vllm_v1_scheduler import SimulationResult, VllmRequest, VllmV1SchedulerSimulator
 except ImportError:
-    from prefill_pso_scheduler import (
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from simulator.gateway.prefill_pso_scheduler import (
         PrefillScheduleResult,
     )
-    from queue_manager import DispatchRecord, QueueManager, QueueManagerResult, SimRequestState
-    from request_workload import DEFAULT_BURSTGPT_CSV_PATH, GeneratedRequest, generate_requests, requests_to_dicts
-    from scheduling_strategies import PSOSchedulingStrategy
-    from ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH
-    from vllm_v1_scheduler import SimulationResult, VllmRequest, VllmV1SchedulerSimulator
+    from simulator.gateway.queue_manager import DispatchRecord, QueueManager, QueueManagerResult, SimRequestState
+    from simulator.dataset.request_workload import DEFAULT_BURSTGPT_CSV_PATH, GeneratedRequest, generate_requests, requests_to_dicts
+    from simulator.gateway.scheduling_strategies import PSOSchedulingStrategy
+    from simulator.instance.ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH
+    from simulator.instance.vllm_v1_scheduler import SimulationResult, VllmRequest, VllmV1SchedulerSimulator
 
 
 Strategy = Literal["direct", "pso", "both"]
-DEFAULT_LATEST_RESULT_PATH = Path(__file__).resolve().parent / "latest_result.json"
+DEFAULT_LATEST_RESULT_PATH = Path(__file__).resolve().parents[1] / "result" / "latest_result.json"
 
 
 @dataclass(frozen=True)

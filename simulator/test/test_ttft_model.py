@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from __future__ import annotations
 
 import sys
@@ -11,8 +11,8 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from simulator.ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH, LinearTTFTModel, load_prefill_ttft_model  # noqa: E402
-from simulator.vllm_v1_scheduler import VllmRequest, VllmV1SchedulerSimulator  # noqa: E402
+from simulator.instance.ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH, LinearTTFTModel, load_prefill_ttft_model  # noqa: E402
+from simulator.instance.vllm_v1_scheduler import VllmRequest, VllmV1SchedulerSimulator  # noqa: E402
 
 
 class TTFTModelTest(unittest.TestCase):

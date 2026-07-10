@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from __future__ import annotations
 
 import sys
@@ -11,8 +11,8 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from simulator.pipeline import run_comparison  # noqa: E402
-from simulator.visualize_result import render_strategy_svg, save_strategy_svgs  # noqa: E402
+from simulator.experiment.pipeline import run_comparison  # noqa: E402
+from simulator.result.visualize_result import render_strategy_svg, save_strategy_svgs  # noqa: E402
 
 
 class VisualizeResultTest(unittest.TestCase):

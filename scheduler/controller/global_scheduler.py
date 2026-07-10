@@ -11,10 +11,11 @@ from store.controller.pool_manager import PoolManager
 from store.controller.network import NetworkManager, Network
 
 # --- 导入调度算法 ---
-from .scheduler_PSO import PSO_Scheduler
+from .scheduler_PSO_1 import PSO_Scheduler
 from .scheduler_Random import Random_Scheduler
 from .scheduler_RoundRobin import PairedRoundRobin_Scheduler, RoundRobin_Scheduler
 from .scheduler_LeastLoad import LeastLoad_Scheduler
+from .scheduler_AdaptiveVariance import AdaptiveVarianceScheduler
 
 # --- 导入请求 ---
 from core.schemas.request import Prompt, Service 
@@ -45,7 +46,8 @@ class GlobalScheduler:
             "random": Random_Scheduler(),
             "round_robin": RoundRobin_Scheduler(),
             "paired_round_robin": PairedRoundRobin_Scheduler(),
-            "least_load": LeastLoad_Scheduler()
+            "least_load": LeastLoad_Scheduler(),
+            "adaptive_variance": AdaptiveVarianceScheduler(num_particles=20, max_iterations=15),
         }
         self.current_mode: str = "pso" # 默认策略
         self.is_ready: bool = False
@@ -112,6 +114,10 @@ class GlobalScheduler:
 
         # 2. 准备参数 - 从Prompt和服务对象中提取调度所需的关键参数
         token_len = getattr(prompt_obj, 'token_length', 0)     # 获取输入提示的token长度
+        max_tokens = getattr(prompt_obj, 'max_tokens', None)   # 获取Decode侧输出token上限
+        max_tokens_fallback = max_tokens is None
+        if max_tokens_fallback:
+            max_tokens = token_len
         slo_ttft = getattr(service_obj, 'SLO_TTFT', 0.0)       # 获取首Token时延目标(SLO)
         slo_tpot = getattr(service_obj, 'SLO_TPOT', 0.0)       # 获取后续Token生成时延目标(SLO)
         comp_fac = getattr(service_obj, 'Compress_factor', 1.0) # 获取KV缓存压缩因子
@@ -132,6 +138,19 @@ class GlobalScheduler:
                 prefill_pools=self.prefill_pools, # Prefill节点池状态
                 decode_pools=self.decode_pools,   # Decode节点池状态
                 network_map=self.network_map      # 网络连接状态映射
+            )
+        elif self.current_mode == "adaptive_variance":
+            p_ip, p_port, d_ip, d_port = strategy.schedule(
+                token_length=token_len,
+                max_tokens=max_tokens,
+                slo_ttft=slo_ttft,
+                slo_tpot=slo_tpot,
+                compress_factor=comp_fac,
+                prefill_pools=self.prefill_pools,
+                decode_pools=self.decode_pools,
+                network_map=self.network_map,
+                request_id=request_id,
+                max_tokens_fallback=max_tokens_fallback,
             )
         else:
             # Random等简单策略只需要基本的节点池信息

@@ -32,6 +32,23 @@ class AsyncBaseScheduler:
             return self.storage.next_decode_round_robin()
         return self.lowest_generate_throughput()
 
+    def _decode_instance_generate_throughput(self, instance_ip: str) -> float:
+        instance = self.storage.instance_table.get(instance_ip)
+        if instance is None:
+            return 0.0
+        return float(getattr(instance, "generate_throughput", 0.0) or 0.0)
+
+    def _decode_instance_load_score(
+        self,
+        instance_ip: str,
+        active_batch: List[Dict[str, Any]],
+    ) -> tuple:
+        return (
+            len(active_batch),
+            self._decode_instance_generate_throughput(instance_ip),
+            instance_ip,
+        )
+
     def _request_to_active_item(self, request: BaseRequest) -> Dict[str, Any]:
         prompt = getattr(request, "Prompt", None)
         service = getattr(request, "Service", None)
@@ -131,9 +148,19 @@ class AsyncBaseScheduler:
             evaluation = await self._evaluate_candidate_batch(instance_ip, candidate)
             if evaluation is None:
                 continue
+            evaluation["active_count"] = len(active_batch)
+            evaluation["generate_throughput"] = self._decode_instance_generate_throughput(instance_ip)
+            evaluation["load_score"] = self._decode_instance_load_score(instance_ip, active_batch)
 
             if evaluation["violation_count"] == 0:
-                if best_safe is None or evaluation["min_margin"] > best_safe["min_margin"]:
+                if (
+                    best_safe is None
+                    or evaluation["load_score"] < best_safe["load_score"]
+                    or (
+                        evaluation["load_score"] == best_safe["load_score"]
+                        and evaluation["min_margin"] > best_safe["min_margin"]
+                    )
+                ):
                     best_safe = evaluation
                 continue
 
@@ -144,14 +171,20 @@ class AsyncBaseScheduler:
                     evaluation["violation_count"] == best_unsafe["violation_count"]
                     and evaluation["min_margin"] > best_unsafe["min_margin"]
                 )
+                or (
+                    evaluation["violation_count"] == best_unsafe["violation_count"]
+                    and evaluation["min_margin"] == best_unsafe["min_margin"]
+                    and evaluation["load_score"] < best_unsafe["load_score"]
+                )
             ):
                 best_unsafe = evaluation
 
         if best_safe is not None:
             logging.info(
-                "[Decode SLO Admission] Selected %s with TPOT margin %.3f ms; "
+                "[Decode SLO Admission] Selected %s with load_score=%s and TPOT margin %.3f ms; "
                 "worst_request=%s predicted_tpot=%.3f ms slo=%.3f ms",
                 best_safe["instance_ip"],
+                best_safe["load_score"],
                 best_safe["min_margin"],
                 best_safe["worst_request_id"],
                 best_safe["worst_predicted_tpot_ms"],
@@ -162,10 +195,11 @@ class AsyncBaseScheduler:
         if best_unsafe is not None:
             logging.info(
                 "[Decode SLO Admission] No safe active batch found; selected %s with "
-                "minimum violations=%d, worst_margin=%.3f ms; worst_request=%s "
+                "minimum violations=%d, load_score=%s, worst_margin=%.3f ms; worst_request=%s "
                 "predicted_tpot=%.3f ms slo=%.3f ms",
                 best_unsafe["instance_ip"],
                 best_unsafe["violation_count"],
+                best_unsafe["load_score"],
                 best_unsafe["min_margin"],
                 best_unsafe["worst_request_id"],
                 best_unsafe["worst_predicted_tpot_ms"],

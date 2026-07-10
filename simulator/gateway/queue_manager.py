@@ -1,28 +1,31 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Optional
 
 try:
     from .prefill_pso_scheduler import PrefillScheduleResult
-    from .request_workload import GeneratedRequest
+    from ..dataset.request_workload import GeneratedRequest
     from .scheduling_strategies import (
         PlannedRequest,
         QueueRequestView,
         SchedulingStrategy,
     )
-    from .vllm_execution_calculator import VllmExecutionCalculator
-    from .vllm_v1_scheduler import SimulationResult, VllmRequest
+    from ..instance.vllm_execution_calculator import VllmExecutionCalculator
+    from ..instance.vllm_v1_scheduler import SimulationResult, VllmRequest
 except ImportError:
-    from prefill_pso_scheduler import PrefillScheduleResult
-    from request_workload import GeneratedRequest
-    from scheduling_strategies import (
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from simulator.gateway.prefill_pso_scheduler import PrefillScheduleResult
+    from simulator.dataset.request_workload import GeneratedRequest
+    from simulator.gateway.scheduling_strategies import (
         PlannedRequest,
         QueueRequestView,
         SchedulingStrategy,
     )
-    from vllm_execution_calculator import VllmExecutionCalculator
-    from vllm_v1_scheduler import SimulationResult, VllmRequest
+    from simulator.instance.vllm_execution_calculator import VllmExecutionCalculator
+    from simulator.instance.vllm_v1_scheduler import SimulationResult, VllmRequest
 
 
 @dataclass

@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 try:
-    from .pipeline import DEFAULT_LATEST_RESULT_PATH
+    from ..experiment.pipeline import DEFAULT_LATEST_RESULT_PATH
 except ImportError:
-    from pipeline import DEFAULT_LATEST_RESULT_PATH
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from simulator.experiment.pipeline import DEFAULT_LATEST_RESULT_PATH
 
 
 DEFAULT_LATEST_SCHEDULE_LOG_PATH = Path(__file__).resolve().parent / "latest_schedule_log.md"

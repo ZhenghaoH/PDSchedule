@@ -21,14 +21,21 @@ async def handle_completion_request(raw_request: Request, endpoint_type: str):
             return mock_completion(request_json)
         else:
             return mock_chat(request_json)
-    else:
-        try:
-            generator = forward_request(
-                f"http://{storage.vllm_addr()}/v1/{endpoint_type}", request_json)
-        except HTTPException as http_exc:
-            raise http_exc
-        response = StreamingResponse(generator)
-        return response
+
+    extra_headers = {}
+    nixl_request_id = raw_request.headers.get("X-Request-Id")
+    if nixl_request_id:
+        extra_headers["X-Request-Id"] = nixl_request_id
+    try:
+        generator = forward_request(
+                f"http://{storage.vllm_addr()}/v1/{endpoint_type}",
+                request_json,
+                extra_headers=extra_headers,
+            )
+    except HTTPException as http_exc:
+        raise http_exc
+    response = StreamingResponse(generator)
+    return response
     # except Exception:
     #     exc_info = sys.exc_info()
     #     print("Error occurred in handle_completion_request")

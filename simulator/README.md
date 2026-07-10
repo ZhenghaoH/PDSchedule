@@ -1,10 +1,21 @@
-# FlexPD simulator
+﻿# FlexPD simulator
+
+## 当前归类
+
+- `controller/`：控制器视角的 P/D 池选择、带宽利用率分析，以及 controller + gateway + instance 联合仿真入口。
+- `gateway/`：池内网关调度、队列管理、Prefill PSO 调度策略，以及联合仿真使用的 SLO-aware 实例选择器。
+- `instance/`：模拟 vLLM 运行过程的离散事件仿真器、在线执行时间计算器、TTFT 模型加载器和默认 TTFT 回归模型文件。
+- `dataset/`：BurstGPT 数据集和请求工作负载生成逻辑。
+- `experiment/`：原单池 Prefill/vLLM 对比实验流水线和 CLI 入口。
+- `result/`：仿真 JSON、调度日志、SVG 可视化结果，以及结果渲染脚本。
+- `profile/`：不同机器/实例的 TTFT、TPOT profile 文件。
+- `test/`：simulator 相关单元测试和集成测试。
 
 `simulator/` 是 FlexPD 的离线仿真策略对比子项目，用于比较不同 Prefill 策略进入 vLLM V1 chunked prefill 调度后的 goodput 表现。
 
 ## 统一流水线
 
-主入口是 `pipeline.py`：
+主入口是 `experiment/pipeline.py`：
 
 ```python
 from simulator import run_comparison
@@ -15,14 +26,14 @@ result = run_comparison(seed=42, strategy="both")
 CLI 入口是：
 
 ```powershell
-python .\simulator\run_prefill_vllm_simulation.py --seed 42 --strategy both
+python .\simulator\experiment\run_prefill_vllm_simulation.py --seed 42 --strategy both
 ```
 
 默认请求到达模式为 `qps`，默认 `qps=10`，即每 1 秒窗口到达 10 个请求，窗口内到达间隔随机但 seed 固定时可复现。
 
 默认 prompt token 来源为 `BurstGPT_1.csv` 的 `Request tokens` 列。`--num-requests N` 会生成 N 个请求，并只从 CSV 中读取前 N 条有效 `Request tokens > 0`，不会扫描完整 CSV。
 
-默认 prefill 计算时间从 `simulator/prefill_ttft_regressor.pkl` 读取，使用线性公式：
+默认 prefill 计算时间从 `simulator/instance/prefill_ttft_regressor.pkl` 读取，使用线性公式：
 
 ```text
 duration_ms = (a * total_tokens + b) * 1000
@@ -33,7 +44,7 @@ duration_ms = (a * total_tokens + b) * 1000
 默认会将完整仿真结果写入：
 
 ```text
-simulator/latest_result.json
+simulator/result/latest_result.json
 ```
 
 每次运行会覆盖旧文件，只保留最近一次仿真结果。终端默认只打印摘要；如果需要完整 JSON 输出到终端，可加 `--print-json`。如果只想运行不保存文件，可加 `--no-save`。也可以用 `--output <path>` 指定保存路径。
@@ -41,14 +52,14 @@ simulator/latest_result.json
 如果需要额外生成图形结果，可加 `--save-figure`：
 
 ```powershell
-python .\simulator\run_prefill_vllm_simulation.py --seed 42 --strategy both --save-figure
+python .\simulator\experiment\run_prefill_vllm_simulation.py --seed 42 --strategy both --save-figure
 ```
 
 第一阶段只输出 SVG。默认会展示最多前 20 个请求，并生成两张图：
 
 ```text
-simulator/latest_result.svg
-simulator/latest_result_direct.svg
+simulator/result/latest_result.svg
+simulator/result/latest_result_direct.svg
 ```
 
 其中 `latest_result.svg` 是 pso 策略图，`latest_result_direct.svg` 是 direct 策略图。每次运行会覆盖旧图。图中包含执行时间线，以及 `request ID`、`prompt tokens`、`SLO`、`actual latency`、`SLO met?` 表格。
@@ -56,13 +67,13 @@ simulator/latest_result_direct.svg
 默认会额外生成人类可读的调度过程日志：
 
 ```powershell
-python .\simulator\run_prefill_vllm_simulation.py --seed 42 --strategy both
+python .\simulator\experiment\run_prefill_vllm_simulation.py --seed 42 --strategy both
 ```
 
 默认输出：
 
 ```text
-simulator/latest_schedule_log.md
+simulator/result/latest_schedule_log.md
 ```
 
 如果不想保存调度日志，可加 `--no-save-schedule-log`。也可以用 `--schedule-log-output <path>` 指定保存路径，用 `--schedule-log-strategy direct|pso` 指定日志策略。
@@ -81,8 +92,8 @@ simulator/latest_schedule_log.md
 示例：
 
 ```powershell
-python .\simulator\run_prefill_vllm_simulation.py --arrival-mode all_at_once --num-requests 10 --save-figure
-python .\simulator\run_prefill_vllm_simulation.py --arrival-mode qps --qps 10 --num-requests 20 --save-figure
+python .\simulator\experiment\run_prefill_vllm_simulation.py --arrival-mode all_at_once --num-requests 10 --save-figure
+python .\simulator\experiment\run_prefill_vllm_simulation.py --arrival-mode qps --qps 10 --num-requests 20 --save-figure
 ```
 
 goodput deadline 始终基于原始到达时间：
@@ -109,7 +120,7 @@ request-level PSO 规则：
 
 - `queue_manager.py`：对齐 `proxy/sync.py` 的离线队列管理与 dispatch 闭环，记录 pending 请求如何被策略转发。
 - `scheduling_strategies.py`：统一 direct 与 pso 策略接口，将策略输出转换为 batch order / planned finish 等计划字段。
-- `pipeline.py`：统一策略对比流水线，包含策略运行、goodput 统计和 summary 对比。
+- `experiment/pipeline.py`：统一策略对比流水线，包含策略运行、goodput 统计和 summary 对比。
 - `run_prefill_vllm_simulation.py`：统一 CLI wrapper。
 - `visualize_result.py`：将最近一次仿真结果渲染为 SVG 时间线和 SLO 表格。
 - `request_workload.py`：可复现 workload 生成器，默认生成 50 个请求。
@@ -120,32 +131,32 @@ request-level PSO 规则：
 - `test/`：测试目录。
 - `test/test_vllm_v1_scheduler.py`：vLLM 调度规则单元测试。
 - `test/test_prefill_pso_scheduler.py`：PSO 调度器单元测试。
-- `test/test_request_workload_pipeline.py`：workload 与统一 pipeline 集成测试。
+- `test/test_request_workload_experiment/pipeline.py`：workload 与统一 pipeline 集成测试。
 
 ## 常用命令
 
 生成 workload：
 
 ```powershell
-python .\simulator\request_workload.py --seed 42
+python .\simulator\dataset\request_workload.py --seed 42
 ```
 
 运行 direct 与 pso 对比：
 
 ```powershell
-python .\simulator\run_prefill_vllm_simulation.py --seed 42 --strategy both
+python .\simulator\experiment\run_prefill_vllm_simulation.py --seed 42 --strategy both
 ```
 
 只运行 direct：
 
 ```powershell
-python .\simulator\run_prefill_vllm_simulation.py --seed 42 --strategy direct
+python .\simulator\experiment\run_prefill_vllm_simulation.py --seed 42 --strategy direct
 ```
 
 只运行 pso：
 
 ```powershell
-python .\simulator\run_prefill_vllm_simulation.py --seed 42 --strategy pso
+python .\simulator\experiment\run_prefill_vllm_simulation.py --seed 42 --strategy pso
 ```
 
 常用参数：
@@ -183,7 +194,7 @@ python .\simulator\run_prefill_vllm_simulation.py --seed 42 --strategy pso
 最近一次完整结果默认保存在：
 
 ```powershell
-Get-Content .\simulator\latest_result.json -Encoding UTF8
+Get-Content .\simulator\result\latest_result.json -Encoding UTF8
 ```
 
 `runs.<strategy>.summary` 包含：
@@ -230,13 +241,13 @@ pso - direct
 最近一次图形结果默认保存在：
 
 ```powershell
-Get-Content .\simulator\latest_result.svg -Encoding UTF8
+Get-Content .\simulator\result\latest_result.svg -Encoding UTF8
 ```
 
 也可以从已有 JSON 单独生成 SVG：
 
 ```powershell
-python .\simulator\visualize_result.py --strategy both
+python .\simulator\result\visualize_result.py --strategy both
 ```
 
 ## 测试
@@ -247,4 +258,4 @@ python -m unittest discover -s .\simulator\test -p "test_*.py"
 
 ## 扩展新策略
 
-新增策略时优先在 `pipeline.py` 中补充独立的 `run_<strategy>_strategy()`，并让 `run_comparison()` 负责统一调度和输出。策略内部可以改写请求到达顺序或仿真前处理，但 goodput 统计应继续通过 `calculate_goodput()` 统一完成。
+新增策略时优先在 `experiment/pipeline.py` 中补充独立的 `run_<strategy>_strategy()`，并让 `run_comparison()` 负责统一调度和输出。策略内部可以改写请求到达顺序或仿真前处理，但 goodput 统计应继续通过 `calculate_goodput()` 统一完成。

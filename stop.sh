@@ -1,6 +1,6 @@
 #!/bin/bash
 
-CONTAINER="test"
+CONTAINER="new_env"
 
 echo ">>> 正在强制清理容器 $CONTAINER ..."
 

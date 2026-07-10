@@ -12,6 +12,7 @@ from core.handlers.gateway.prefill.proxy import create_completion, create_chat_c
 from core.handlers.gateway.prefill.update import update_instance_metric, unregister_instance
 from core.handlers.gateway.prefill.pair import handle_pd_pair, handle_pd_close
 from core.handlers.gateway.prefill.network_analysis import analyze_network_transfer
+from core.handlers.gateway.prefill.select_instance import select_instance
 
 router = APIRouter()
 
@@ -24,5 +25,6 @@ router.post("/instance/unregister")(unregister_instance)
 
 router.post("/pd/pair")(handle_pd_pair)
 router.post("/pd/close")(handle_pd_close)
+router.post("/pd/select_instance")(select_instance)
 
 router.post("/analysis/network-transfer")(analyze_network_transfer)

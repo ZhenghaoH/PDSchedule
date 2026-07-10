@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Protocol, Union
@@ -12,19 +13,20 @@ try:
         PrefillSimInstance,
         PrefillSimRequest,
     )
-    from .vllm_v1_scheduler import VllmRequest, VllmV1SchedulerSimulator
-    from .ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH
-    from .vllm_execution_calculator import VllmExecutionCalculator, VllmQueueSnapshot
+    from ..instance.vllm_v1_scheduler import VllmRequest, VllmV1SchedulerSimulator
+    from ..instance.ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH
+    from ..instance.vllm_execution_calculator import VllmExecutionCalculator, VllmQueueSnapshot
 except ImportError:
-    from prefill_pso_scheduler import (
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from simulator.gateway.prefill_pso_scheduler import (
         PrefillPSOScheduler,
         PrefillScheduleResult,
         PrefillSimInstance,
         PrefillSimRequest,
     )
-    from vllm_v1_scheduler import VllmRequest, VllmV1SchedulerSimulator
-    from ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH
-    from vllm_execution_calculator import VllmExecutionCalculator, VllmQueueSnapshot
+    from simulator.instance.vllm_v1_scheduler import VllmRequest, VllmV1SchedulerSimulator
+    from simulator.instance.ttft_model import DEFAULT_PREFILL_TTFT_MODEL_PATH
+    from simulator.instance.vllm_execution_calculator import VllmExecutionCalculator, VllmQueueSnapshot
 
 
 @dataclass(frozen=True)

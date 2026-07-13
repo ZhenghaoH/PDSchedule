@@ -17,7 +17,14 @@ if "fastapi" not in sys.modules:
     fastapi_stub.HTTPException = type("HTTPException", (Exception,), {})
     sys.modules["fastapi"] = fastapi_stub
 
-from core.consoles.gateway import run_gateway_cli, run_gateway_server, switch_gateway_scheduler
+from core.consoles.gateway import (
+    build_gateway_completer,
+    configure_gateway_readline,
+    gateway_completion_words,
+    run_gateway_cli,
+    run_gateway_server,
+    switch_gateway_scheduler,
+)
 from core.schemas.request import BaseRequest, Prompt, Service, Task
 from proxy.sync import RequestBatcher, storage as shared_storage
 from scheduler.gateway.prefill.manager import SchedulerManager
@@ -157,6 +164,36 @@ class RequestBatcherSwitchTest(unittest.IsolatedAsyncioTestCase):
 
 
 class GatewayConsoleStrategyTest(unittest.TestCase):
+    def test_completion_words_are_role_specific_and_stable(self):
+        prefill_words = gateway_completion_words("prefill")
+        decode_words = gateway_completion_words("decode")
+        self.assertIn("show", prefill_words)
+        self.assertIn("least_load", prefill_words)
+        self.assertNotIn("slo_tpot_admission", prefill_words)
+        self.assertIn("slo_tpot_admission", decode_words)
+        self.assertNotIn("pso_new", decode_words)
+        self.assertEqual(len(prefill_words), len(set(prefill_words)))
+        self.assertEqual(len(decode_words), len(set(decode_words)))
+
+    def test_completer_matches_current_word_prefix(self):
+        completer = build_gateway_completer("prefill")
+        self.assertEqual(completer("lea", 0), "least_load")
+        self.assertIsNone(completer("lea", 1))
+        self.assertEqual(completer("s", 0), "show")
+        self.assertEqual(completer("s", 1), "switch")
+
+    def test_readline_completion_is_registered_and_can_degrade(self):
+        fake_readline = Mock()
+        self.assertTrue(configure_gateway_readline("decode", fake_readline))
+        fake_readline.set_completer.assert_called_once()
+        fake_readline.parse_and_bind.assert_called_once_with("tab: complete")
+
+        broken_readline = Mock()
+        broken_readline.set_completer.side_effect = RuntimeError("unsupported")
+        self.assertFalse(configure_gateway_readline("decode", broken_readline))
+        with patch("core.consoles.gateway.readline", None):
+            self.assertFalse(configure_gateway_readline("decode"))
+
     def test_decode_switch_uses_runtime_store(self):
         store = make_store()
         result = switch_gateway_scheduler("decode", "round_robin", store)

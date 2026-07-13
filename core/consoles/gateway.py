@@ -28,10 +28,49 @@ DECODE_STRATEGIES = (
     "lowest_generate_throughput",
     "slo_tpot_admission",
 )
+COMMON_COMPLETION_WORDS = (
+    "history",
+    "quit",
+    "exit",
+    "clear",
+    "cls",
+    "show",
+    "switch",
+    "scheduler",
+)
 
 
 def _strategies(role: str):
     return PREFILL_STRATEGIES if role == "prefill" else DECODE_STRATEGIES
+
+
+def gateway_completion_words(role: str):
+    """Return stable, role-specific completion words without duplicates."""
+    return tuple(dict.fromkeys((*COMMON_COMPLETION_WORDS, *_strategies(role))))
+
+
+def build_gateway_completer(role: str):
+    words = gateway_completion_words(role)
+
+    def completer(text: str, state: int):
+        options = [word for word in words if word.startswith(text)]
+        return options[state] if state < len(options) else None
+
+    return completer
+
+
+def configure_gateway_readline(role: str, readline_module=None) -> bool:
+    """Enable Tab completion when readline/pyreadline is available."""
+    target = readline if readline_module is None else readline_module
+    if target is None:
+        return False
+    try:
+        target.set_completer(build_gateway_completer(role))
+        target.parse_and_bind("tab: complete")
+        return True
+    except Exception as exc:
+        print(f"Warning: gateway CLI auto-completion is unavailable: {exc}")
+        return False
 
 
 def get_gateway_scheduler(
@@ -87,10 +126,13 @@ def run_gateway_cli(
     history = []
     available = ", ".join(_strategies(role))
     prompt = f"{role}-gateway-cli> "
+    completion_enabled = configure_gateway_readline(role)
 
     print("=" * 60)
     print(f"[CLI] {role.title()} gateway CLI ready. Commands:")
     _print_help(role)
+    if completion_enabled:
+        print("Tip: Use ↑/↓ for history, Tab for auto-completion")
     print("=" * 60)
 
     while True:

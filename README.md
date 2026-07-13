@@ -81,6 +81,20 @@ redis-cli info memory | grep used_memory_human
 
 Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `least_load`、`round_robin` 或 `pso_new`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generate_throughput` 或 `slo_tpot_admission`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。systemd、nohup 或无 TTY 容器部署时请增加 `--no-cli`。
 
+交互式网关 CLI 支持上下方向键查看历史，并支持 Tab 自动补全命令和当前网关可用的调度策略。
+
+在 Ubuntu 部署机上可使用根目录的 `sync.sh` 同步代码并修复 Shell 脚本执行权限：
+
+```bash
+# 默认同步 origin/p2p-flexpd
+./sync.sh
+
+# 覆盖远端名和分支名
+./sync.sh origin p2p-flexpd
+```
+
+脚本会先把 staged、unstaged 和未跟踪的本地改动保存到临时 stash，再获取远端代码。只有本地独有路径的改动会以普通未提交工作区改动恢复；同一路径只要本地和远端都发生修改，即使 Git 能自动合并，当前工作区也采用远端完整版本，原本地内容保留在脚本输出的 stash 中供人工检查。此时脚本返回状态码 `2`，可使用 `git stash show -p <stash-ref>` 查看备份。脚本不会提交恢复后的本地改动，也不会自动推送代码。
+
 ```bash
 # 进入项目所在目录
 cd /workspace/llm-stack/workspace_LLL/FlexPD

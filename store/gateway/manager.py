@@ -397,12 +397,13 @@ class GatewayStoreManager:
         return load
 
     def get_decode_load(self):
-        """获取 Decode 池当前 running requests 总数。"""
+        """获取 Decode 池当前所有未完成请求总数。"""
         running_reqs = 0
         for instance_ip in self.active_decode_objs:
             instance = self.instance_table.get(instance_ip)
             if instance:
-                running_reqs += int(instance.running_reqs)
+                running_reqs += max(0, int(instance.running_reqs))
+                running_reqs += max(0, int(instance.waiting_reqs))
         return running_reqs
 
     def get_max_decode_req_num(self):

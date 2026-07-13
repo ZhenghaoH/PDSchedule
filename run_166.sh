@@ -91,7 +91,8 @@ case "$MODE" in
 
         echo -e "\033[31m=== [3/7] Start Scheduler ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 controller.py
+        export FLEXPD_KDN_HOST=172.18.0.170
+        python3 controller.py --host 172.18.0.170 --port 5000
         ;;
     "pd")
         wait_for_loading 50 "Decode Proxy"
@@ -99,26 +100,27 @@ case "$MODE" in
         export MY_MAX_DECODE_REQ_NUM=32
         echo -e "\033[35m=== [4/7] Start Decode Proxy ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 gatewayD.py --host 172.18.0.166 --port 8082 --decode 172.18.0.166:7001 172.18.0.166:7002
+        python3 gatewayD.py --host 172.18.0.166 --port 8082 --controller 172.18.0.170:5000 --decode 172.18.0.166:7001 172.18.0.166:7002
         ;;
     "id1")
         wait_for_loading 55 "Decode Instance 1"
 
         echo -e "\033[36m=== [5/7] Start Decode Instance Proxy 1 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 instanceD.py --host 172.18.0.166 --port 7001 --vllm_port 8001
+        python3 instanceD.py --host 172.18.0.166 --port 7001 --vllm_port 8001 --gateway 172.18.0.166:8082 --side-channel-host 172.18.0.166 --side-channel-port 5557 --tp-size 1
         ;;
     "id2")
         wait_for_loading 55 "Decode Instance 2"
 
         echo -e "\033[36m=== [6/7] Start Decode Instance Proxy 2 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 instanceD.py --host 172.18.0.166 --port 7002 --vllm_port 8002
+        python3 instanceD.py --host 172.18.0.166 --port 7002 --vllm_port 8002 --gateway 172.18.0.166:8082 --side-channel-host 172.18.0.166 --side-channel-port 5558 --tp-size 1
         ;;
     "kdn")
         echo -e "\033[36m=== [7/7] Start KDN Server ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 demo_kdn.py
+        export FLEXPD_REDIS_HOST=172.18.0.170
+        python3 demo_kdn.py --host 172.18.0.166 --port 9101
         ;;
     "cli")
         echo -e "\033[36m=== [7/7] Start KDN CLI ===\033[0m"

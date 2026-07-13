@@ -140,6 +140,15 @@ def main():
 
     # 解析命令行参数
     args = parse_args()
+    missing = [name for name, value in {
+        "host": args.host, "controller": args.controller,
+    }.items() if not value]
+    if missing:
+        raise SystemExit(f"Missing required deployment options: {', '.join(missing)}")
+    if args.ttft_warmup and not (args.ttft_target or args.prefill):
+        raise SystemExit("TTFT warmup requires --ttft-target or at least one --prefill instance")
+    if not args.ttft_target and args.prefill:
+        args.ttft_target = args.prefill[0]
 
     # 初始化核心组件
     storage = GatewayStoreManager()

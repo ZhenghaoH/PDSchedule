@@ -4,7 +4,7 @@ from fastapi import FastAPI
 import threading
 import time
 
-from coord.instance.up_store import metric_update, instance_unregister
+from coord.instance.up_store import instance_register, metric_update, instance_unregister
 from store.instance.store import InstanceStore
 from instance.perception.compute_metric_h import ThroughputMonitor
 
@@ -30,6 +30,8 @@ async def lifespan(api: FastAPI):
     """
     # 初始化阶段，向全局调度器注册
     global stop_event
+    stop_event.clear()
+    instance_register()
 
     # 初始化并启动吞吐量监控器 (高频采样)
     vllm_host = storage.vllm_addr()

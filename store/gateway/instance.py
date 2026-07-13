@@ -35,6 +35,21 @@ class Instance:
     gpu_util_percent: float = 0.0
     gpu_memory_util_percent: float = 0.0
     online: bool = False
+    role: str = ""
+    connector: str = ""
+    side_channel_host: str = ""
+    side_channel_port: int = 0
+    tp_size: int = 0
+    vllm_port: int = 0
+
+    def nixl_metadata(self) -> Dict[str, Any]:
+        return {
+            "connector": self.connector,
+            "role": self.role,
+            "side_channel_host": self.side_channel_host,
+            "side_channel_port": self.side_channel_port,
+            "tp_size": self.tp_size,
+        }
 
     def __post_init__(self):
         if self.predicted_available_time <= 0:

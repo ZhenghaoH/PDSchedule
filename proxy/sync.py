@@ -7,10 +7,6 @@ from typing import List, Dict, Any, Optional, Tuple
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 
-from config.ADDRESS_CONFIG import (
-    get_nixl_meta_for_instance,
-    get_side_channel_addr_for_instance,
-)
 from scheduler.gateway.prefill.manager import SchedulerManager
 from proxy.forward import forward_request_json
 from proxy.forward import forward_request_trace as forward_request
@@ -37,7 +33,7 @@ def _log_timeline_event(event: str, **payload: Any) -> None:
 
 
 def _bind_nixl_prefill_metadata(request: BaseRequest, selected_prefill: str) -> None:
-    meta = get_nixl_meta_for_instance(selected_prefill)
+    meta = storage.get_nixl_metadata(selected_prefill)
     if not meta:
         raise RuntimeError(
             f"Missing NIXL metadata for prefill instance {selected_prefill}"
@@ -48,9 +44,7 @@ def _bind_nixl_prefill_metadata(request: BaseRequest, selected_prefill: str) -> 
         )
 
     request.Task.prefill_tp_size = int(meta.get("tp_size") or 0)
-    request.Task.prefill_side_channel_addr = get_side_channel_addr_for_instance(
-        selected_prefill
-    )
+    request.Task.prefill_side_channel_addr = storage.get_side_channel_addr(selected_prefill)
 
 
 # --- Helper: Response Tracker ---

@@ -1,3 +1,4 @@
+import argparse
 import os, sys
 import uvicorn
 
@@ -24,4 +25,10 @@ if __name__ == "__main__":
     os.environ["TRANSFORMERS_OFFLINE"] = "1"
 
     from config.ADDRESS_CONFIG import CONFIG_KDN_IP, CONFIG_KDN_PORT
-    uvicorn.run(kdn, host=CONFIG_KDN_IP, port=CONFIG_KDN_PORT, log_level="info")
+    parser = argparse.ArgumentParser("KDN server")
+    parser.add_argument("--host", default=CONFIG_KDN_IP)
+    parser.add_argument("--port", type=int, default=CONFIG_KDN_PORT)
+    args = parser.parse_args()
+    if not args.host:
+        raise SystemExit("Missing required deployment option: host")
+    uvicorn.run(kdn, host=args.host, port=args.port, log_level="info")

@@ -1,6 +1,5 @@
 from fastapi import HTTPException, Request
 
-from config.ADDRESS_CONFIG import get_nixl_meta_for_instance
 from core.schemas.request import BaseRequest
 from scheduler.gateway.prefill.async_base import AsyncBaseScheduler
 from store.gateway.manager import GatewayStoreManager
@@ -26,7 +25,7 @@ async def select_instance(raw_request: Request):
     if not _active_prefill_instance(storage, instance):
         raise HTTPException(status_code=503, detail="No active prefill instance")
 
-    nixl_meta = get_nixl_meta_for_instance(instance)
+    nixl_meta = storage.get_nixl_metadata(instance)
     if not nixl_meta:
         raise HTTPException(status_code=503, detail=f"Missing NIXL metadata for prefill instance {instance}")
     if nixl_meta.get("connector") != "NixlConnector" or nixl_meta.get("role") != "prefill":

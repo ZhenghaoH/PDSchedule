@@ -5,6 +5,8 @@
 - 所有默认值集中管理
 - 为生产环境提供清晰的配置参考
 """
+import os
+
 from config.ADDRESS_CONFIG import *
 # 身份 prefill=0 decode=1
 RANK = 1
@@ -12,22 +14,22 @@ RANK = 1
 # 服务配置
 # DEFAULT_PORT = 7002
 # DEFAULT_HOST = "127.0.0.1"
-INSTANCE_INDEX = 0
-INSTANCE_CONFIG = CONFIG_INSTANCE_D_POOL[INSTANCE_INDEX] if len(CONFIG_INSTANCE_D_POOL) > INSTANCE_INDEX else None
-
-DEFAULT_PORT = INSTANCE_CONFIG["port"] if INSTANCE_CONFIG else None
-DEFAULT_HOST = INSTANCE_CONFIG["ip"] if INSTANCE_CONFIG else None
+DEFAULT_PORT = None
+DEFAULT_HOST = os.getenv("FLEXPD_INSTANCE_HOST", "")
 
 # 所代理的vLLM的端口号（instance代理和vLLM实例在一起，理论上IP相同）
 # VLLM_PORT = 8002
-VLLM_PORT = INSTANCE_CONFIG["vllm_port"] if INSTANCE_CONFIG else None
+VLLM_PORT = None
 
 # 轮询上报任务时间
 LOOP_TASK_TIME = 10  # 10s
 
 # 上级网关
 # DEFAULT_GATEWAY = "127.0.0.1:8082"
-DEFAULT_GATEWAY = f"{CONFIG_GATEWAY_D_IP}:{CONFIG_GATEWAY_D_PORT}"
+DEFAULT_GATEWAY = os.getenv(
+    "FLEXPD_GATEWAY_ADDR",
+    f"{CONFIG_GATEWAY_D_IP}:{CONFIG_GATEWAY_D_PORT}" if CONFIG_GATEWAY_D_IP else "",
+)
 
 # 使用模拟数据
 USE_MOCK = False

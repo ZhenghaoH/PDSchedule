@@ -73,7 +73,7 @@ class GatewayStoreManager:
                     self._decode_active_batches: Dict[str, Dict[str, Dict[str, Any]]] = {}
                     self._decode_round_robin_index = 0
 
-                    self.KDN_BASE_URL = "http://172.18.0.169:9101"  # FIXME: 值传递有问题，记得修复
+                    self.KDN_BASE_URL = ""
 
                     self.LOOP_TASK_TIME = 0.03  # 轮询上报任务时间
                     self.MAX_DECODE_REQ_NUM = int(os.getenv("MY_MAX_DECODE_REQ_NUM", 128))
@@ -252,11 +252,66 @@ class GatewayStoreManager:
             if prefills is not None:
                 self._prefill_objs = prefills.copy() if prefills else []
                 for prefill_instance in self._prefill_objs:
-                    self._instance_table[prefill_instance] = Instance(instance_ip=prefill_instance)
+                    self._instance_table[prefill_instance] = Instance(
+                        instance_ip=prefill_instance, role="prefill"
+                    )
             if decodes is not None:
                 self._decode_objs = decodes.copy() if decodes else []
                 for decode_instance in self._decode_objs:
-                    self._instance_table[decode_instance] = Instance(instance_ip=decode_instance)
+                    self._instance_table[decode_instance] = Instance(
+                        instance_ip=decode_instance, role="decode"
+                    )
+
+    def register_instance(
+        self,
+        instance_ip: str,
+        role: str,
+        connector: str,
+        side_channel_host: str,
+        side_channel_port: int,
+        tp_size: int,
+        vllm_port: int = 0,
+    ) -> Instance:
+        """Register or idempotently refresh an instance and its NIXL identity."""
+        if role not in {"prefill", "decode"}:
+            raise ValueError(f"Unsupported instance role: {role}")
+        if not instance_ip or not side_channel_host:
+            raise ValueError("instance_ip and side_channel_host are required")
+        if connector != "NixlConnector":
+            raise ValueError(f"Unsupported connector: {connector}")
+        if int(side_channel_port) <= 0 or int(tp_size) <= 0:
+            raise ValueError("side_channel_port and tp_size must be positive")
+
+        with self._data_lock:
+            existing = self._instance_table.get(instance_ip)
+            if existing and existing.role and existing.role != role:
+                raise ValueError(
+                    f"Instance {instance_ip} is already registered as {existing.role}"
+                )
+            instance = existing or Instance(instance_ip=instance_ip)
+            instance.role = role
+            instance.connector = connector
+            instance.side_channel_host = side_channel_host
+            instance.side_channel_port = int(side_channel_port)
+            instance.tp_size = int(tp_size)
+            instance.vllm_port = int(vllm_port or 0)
+            instance.last_updated = time.time()
+            self._instance_table[instance_ip] = instance
+            target = self._prefill_objs if role == "prefill" else self._decode_objs
+            if instance_ip not in target:
+                target.append(instance_ip)
+            return deepcopy(instance)
+
+    def get_nixl_metadata(self, instance_ip: str) -> Dict[str, Any]:
+        with self._data_lock:
+            instance = self._instance_table.get(instance_ip)
+            return instance.nixl_metadata() if instance else {}
+
+    def get_side_channel_addr(self, instance_ip: str) -> str:
+        meta = self.get_nixl_metadata(instance_ip)
+        host = meta.get("side_channel_host", "")
+        port = meta.get("side_channel_port", 0)
+        return f"{host}:{port}" if host and port else ""
 
     @property
     def instance_table(self) -> Dict[str, Any]:

@@ -3,10 +3,6 @@ import sys
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from config.ADDRESS_CONFIG import (
-    get_nixl_meta_for_instance,
-    get_side_channel_addr_for_instance,
-)
 from core.handlers.gateway.prefill.kdn_proxy import (
     kdn_proxy_chat_completions,
     kdn_proxy_completions,
@@ -92,8 +88,10 @@ def _select_prefill_instance(storage: GatewayStoreManager, request: BaseRequest)
     return selected_prefill
 
 
-def _bind_prefill_nixl_metadata(request: BaseRequest, selected_prefill: str) -> None:
-    meta = get_nixl_meta_for_instance(selected_prefill)
+def _bind_prefill_nixl_metadata(
+    storage: GatewayStoreManager, request: BaseRequest, selected_prefill: str
+) -> None:
+    meta = storage.get_nixl_metadata(selected_prefill)
     if not meta:
         raise HTTPException(
             status_code=503,
@@ -106,7 +104,7 @@ def _bind_prefill_nixl_metadata(request: BaseRequest, selected_prefill: str) -> 
         )
 
     request.Task.prefill_tp_size = int(meta.get("tp_size") or 0)
-    request.Task.prefill_side_channel_addr = get_side_channel_addr_for_instance(selected_prefill)
+    request.Task.prefill_side_channel_addr = storage.get_side_channel_addr(selected_prefill)
 
 
 async def _handle_pd_request(request: BaseRequest, endpoint_type: str):
@@ -130,7 +128,7 @@ async def _handle_pd_request(request: BaseRequest, endpoint_type: str):
         request.Task.nixl_kv_transfer_params = kv_transfer_params
     else:
         selected_prefill = _select_prefill_instance(storage, request)
-        _bind_prefill_nixl_metadata(request, selected_prefill)
+        _bind_prefill_nixl_metadata(storage, request, selected_prefill)
 
         prefill_payload = build_nixl_prefill_payload(request)
         prefill_response = await forward_request_json(

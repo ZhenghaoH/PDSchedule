@@ -36,9 +36,9 @@ decode_selection_stage: str = "after_prefill"
 
 旧的 P2P 地址字段与 `p2p_request_id` 已从主 schema 中移除。
 
-### 静态 NIXL metadata
+### 动态 NIXL metadata
 
-`P2P_FlexPD/config/ADDRESS_CONFIG.py` 维护 instance proxy 地址到 NIXL metadata 的静态映射：
+实例启动时向所属网关的 `/instance/register` 注册以下 NIXL metadata：
 
 - `connector`
 - `role`
@@ -46,7 +46,7 @@ decode_selection_stage: str = "after_prefill"
 - `side_channel_port`
 - `tp_size`
 
-当前先采用静态配置，不引入完整注册上报协议。
+网关将元数据保存在运行时实例表中。心跳只更新负载，注销负责将实例移出在线候选集合。Prefill 网关把已选实例的 TP 和 side-channel 信息随请求传给 Decode 网关，因此各网关不再依赖 `ADDRESS_CONFIG.py` 中的全局静态拓扑。
 
 ### Controller
 

@@ -3,10 +3,6 @@ import sys
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from config.ADDRESS_CONFIG import (
-    get_nixl_meta_for_instance,
-    get_side_channel_addr_for_instance,
-)
 from core.schemas.request import BaseRequest
 from proxy.batcher import RequestBatcher
 from proxy.forward import forward_request
@@ -97,24 +93,23 @@ async def _select_decode_instance(storage: GatewayStoreManager, request: BaseReq
     return selected_decode
 
 
-def _bind_and_validate_nixl_metadata(request: BaseRequest, selected_decode: str) -> None:
+def _bind_and_validate_nixl_metadata(
+    storage: GatewayStoreManager, request: BaseRequest, selected_decode: str
+) -> None:
     prefill_instance = getattr(request.Task, "prefill_instance", "")
-    prefill_meta = get_nixl_meta_for_instance(prefill_instance)
-    decode_meta = get_nixl_meta_for_instance(selected_decode)
+    prefill_side_channel_addr = getattr(request.Task, "prefill_side_channel_addr", "")
+    prefill_tp_size = int(getattr(request.Task, "prefill_tp_size", 0) or 0)
+    decode_meta = storage.get_nixl_metadata(selected_decode)
 
-    if not prefill_meta:
+    if not prefill_instance or not prefill_side_channel_addr or prefill_tp_size <= 0:
         raise HTTPException(status_code=503, detail=f"Missing NIXL metadata for prefill instance {prefill_instance}")
     if not decode_meta:
         raise HTTPException(status_code=503, detail=f"Missing NIXL metadata for decode instance {selected_decode}")
-    if prefill_meta.get("connector") != "NixlConnector" or prefill_meta.get("role") != "prefill":
-        raise HTTPException(status_code=503, detail=f"Invalid prefill NIXL metadata: {prefill_meta}")
     if decode_meta.get("connector") != "NixlConnector" or decode_meta.get("role") != "decode":
         raise HTTPException(status_code=503, detail=f"Invalid decode NIXL metadata: {decode_meta}")
 
-    request.Task.prefill_tp_size = int(prefill_meta.get("tp_size") or 0)
     request.Task.decode_tp_size = int(decode_meta.get("tp_size") or 0)
-    request.Task.prefill_side_channel_addr = get_side_channel_addr_for_instance(prefill_instance)
-    request.Task.decode_side_channel_addr = get_side_channel_addr_for_instance(selected_decode)
+    request.Task.decode_side_channel_addr = storage.get_side_channel_addr(selected_decode)
 
 
 async def handle_completion_request(raw_request: Request, endpoint_type: str):
@@ -133,7 +128,7 @@ async def handle_completion_request(raw_request: Request, endpoint_type: str):
 
         selected_decode = await _select_decode_instance(storage, request)
         if request.Service.Enable_PD_Disaggregation:
-            _bind_and_validate_nixl_metadata(request, selected_decode)
+            _bind_and_validate_nixl_metadata(storage, request, selected_decode)
             request_payload = build_nixl_decode_payload(request)
         else:
             request_payload = BaseRequest.to_vllm_payload(request)

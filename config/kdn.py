@@ -1,6 +1,6 @@
 from config.ADDRESS_CONFIG import *
 
-DEFAULT_BASE_URL = f"http://{CONFIG_KDN_IP}:{CONFIG_KDN_PORT}"  # KDN服务器URL
+DEFAULT_BASE_URL = f"http://{CONFIG_KDN_IP}:{CONFIG_KDN_PORT}" if CONFIG_KDN_IP else ""
 DEFAULT_WARN_LEN = 4000                                         # 注册文本超过该长度则会警告，建议通过文件路径方式注册
 # build_kv 的默认值（与你服务端默认保持一致）
 DEFAULT_API_URL = "http://127.0.0.1:8000/v1/chat/completions"   # 构建KVCache块时送入的vllm服务url

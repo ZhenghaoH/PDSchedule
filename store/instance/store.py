@@ -35,6 +35,11 @@ class InstanceStore:
                     self.MOONCAKE_PROTOCOL = "tcp"  # RDMA配置 协议  可选 "tcp" or "rdma"
                     self.MOONCAKE_DEVICE_NAME = ""  # RDMA配置 设备名 可选 "" or "mlx5_0"
                     self.KV_CONNECTOR = "mooncake"  # VLLM PD分离插件 mooncake or lmcache
+                    self.role = ""
+                    self.connector = "NixlConnector"
+                    self.side_channel_host = ""
+                    self.side_channel_port = 0
+                    self.tp_size = 0
 
                     self.LOOP_TASK_TIME = 0.02  # 轮询上报任务时间
 

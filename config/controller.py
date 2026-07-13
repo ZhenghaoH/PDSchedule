@@ -36,7 +36,8 @@ os.environ["SCHEDULER_MODEL_PATH"] = DEFAULT_MODEL
 os.environ[
     "SCHEDULER_TOKENIZER_MAP"] = '{"llama3-70b":"/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct"}'
 os.environ["SCHEDULER_KNOWLEDGE_YAML"] = str(KNOWLEDGE_YAML_PATH)
-os.environ["SCHEDULER_KDN_BASE_URL"] = str(f"http://{CONFIG_KDN_IP}:{CONFIG_KDN_PORT}").rstrip("/")
+if CONFIG_KDN_IP:
+    os.environ["SCHEDULER_KDN_BASE_URL"] = f"http://{CONFIG_KDN_IP}:{CONFIG_KDN_PORT}".rstrip("/")
 os.environ["SCHEDULER_EMBEDDING_MODEL"] = DEFAULT_EMBED_MODEL
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"

@@ -148,8 +148,15 @@ if str(ROOT_DIR) not in sys.path:
 if __name__ == '__main__':
     # 示例：启用 IPv6 支持，绑定地址为 ::，端口 8080
     # 要改回 IPv4，可将 host 参数设为 "0.0.0.0",ipv6:"2004:1::167"
+    import argparse
     from config.ADDRESS_CONFIG import CONFIG_METADATA_IP, CONFIG_METADATA_PORT
-    server = KVBootstrapServer(host=CONFIG_METADATA_IP, port=CONFIG_METADATA_PORT)
+    parser = argparse.ArgumentParser("Metadata server")
+    parser.add_argument("--host", default=CONFIG_METADATA_IP)
+    parser.add_argument("--port", type=int, default=CONFIG_METADATA_PORT)
+    args = parser.parse_args()
+    if not args.host:
+        raise SystemExit("Missing required deployment option: host")
+    server = KVBootstrapServer(host=args.host, port=args.port)
     server.run()
     try:
         threading.Event().wait()  # 保持主线程运行

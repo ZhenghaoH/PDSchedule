@@ -9,7 +9,7 @@
 from fastapi import APIRouter
 
 from core.handlers.gateway.prefill.proxy import create_completion, create_chat_completion
-from core.handlers.gateway.prefill.update import update_instance_metric, unregister_instance
+from core.handlers.gateway.prefill.update import register_instance, update_instance_metric, unregister_instance
 from core.handlers.gateway.prefill.pair import handle_pd_pair, handle_pd_close
 from core.handlers.gateway.prefill.network_analysis import analyze_network_transfer
 from core.handlers.gateway.prefill.select_instance import select_instance
@@ -20,6 +20,7 @@ router = APIRouter()
 router.post("/v1/completions")(create_completion)
 router.post("/v1/chat/completions")(create_chat_completion)
 
+router.post("/instance/register")(register_instance)
 router.post("/instance/update")(update_instance_metric)
 router.post("/instance/unregister")(unregister_instance)
 

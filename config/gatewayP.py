@@ -16,7 +16,7 @@ RANK = 0
 # DEFAULT_PREFILL = ["127.0.0.1:7001"]
 # DEFAULT_DECODE = ["127.0.0.1:8082"]
 DEFAULT_PREFILL = CONFIG_INSTANCE_P_ADDRS
-DEFAULT_DECODE = [f"{CONFIG_GATEWAY_D_IP}:{CONFIG_GATEWAY_D_PORT}"]
+DEFAULT_DECODE = []
 
 # 服务配置
 # DEFAULT_PORT = 8081
@@ -29,7 +29,7 @@ LOOP_TASK_TIME = 10  # 10s
 
 # 上级调度器
 # DEFAULT_CONTROLLER = "127.0.0.1:8000"
-DEFAULT_CONTROLLER = f"{CONFIG_CONTROLLER_IP}:{CONFIG_CONTROLLER_PORT}"
+DEFAULT_CONTROLLER = f"{CONFIG_CONTROLLER_IP}:{CONFIG_CONTROLLER_PORT}" if CONFIG_CONTROLLER_IP else ""
 
 # 同步设置 是否启用同步
 USE_SYN = False
@@ -44,12 +44,15 @@ SCHEDULER_STRATEGY = "pso_new"
 ENABLE_ADAPTIVE_SWITCH = False
 
 # KDN_BASE_URL = os.environ.get("KDN_BASE_URL", "http://127.0.0.1:9101").rstrip("/")
-KDN_BASE_URL = os.environ.get("KDN_BASE_URL", f"http://{CONFIG_KDN_IP}:{CONFIG_KDN_PORT}").rstrip("/")
+KDN_BASE_URL = os.environ.get(
+    "KDN_BASE_URL",
+    f"http://{CONFIG_KDN_IP}:{CONFIG_KDN_PORT}" if CONFIG_KDN_IP else "",
+).rstrip("/")
 
 # TTFT predictor warmup configuration
 TTFT_WARMUP_ENABLED = True
 TTFT_WARMUP_REPEATS = 3
-TTFT_TARGET = CONFIG_INSTANCE_P_ADDRS[0]
+TTFT_TARGET = CONFIG_INSTANCE_P_ADDRS[0] if CONFIG_INSTANCE_P_ADDRS else None
 TTFT_MODEL_ID = "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
 TTFT_TOKENIZER_PATH = "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
 TTFT_MODEL_FILE = "profile/TTFT_predictor/artifacts/prefill_ttft_regressor.pkl"

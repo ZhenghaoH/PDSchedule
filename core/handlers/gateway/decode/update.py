@@ -5,6 +5,27 @@ import time
 from store.gateway.manager import GatewayStoreManager
 
 
+async def register_instance(raw_request: Request):
+    try:
+        data = await raw_request.json()
+        if data.get("role") != "decode":
+            raise HTTPException(status_code=400, detail="Decode gateway only accepts decode instances")
+        instance = GatewayStoreManager().register_instance(
+            instance_ip=data.get("report_label", ""),
+            role=data.get("role", ""),
+            connector=data.get("connector", ""),
+            side_channel_host=data.get("side_channel_host", ""),
+            side_channel_port=data.get("side_channel_port", 0),
+            tp_size=data.get("tp_size", 0),
+            vllm_port=data.get("vllm_port", 0),
+        )
+        return {"report_label": instance.instance_ip, "role": instance.role}
+    except HTTPException:
+        raise
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 async def update_instance_metric(raw_request: Request):
     try:
         request_json = await raw_request.json()

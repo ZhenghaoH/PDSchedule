@@ -11,6 +11,28 @@ from instance.perception.metric import (
 from instance.perception.compute_metric_h import ThroughputMonitor
 
 
+def instance_register():
+    storage = InstanceStore()
+    target_url = f"http://{storage.gateway}/instance/register"
+    payload = {
+        "report_label": storage.report_label(),
+        "role": storage.role,
+        "connector": storage.connector,
+        "side_channel_host": storage.side_channel_host,
+        "side_channel_port": storage.side_channel_port,
+        "tp_size": storage.tp_size,
+        "vllm_port": storage.vllm_port,
+    }
+    try:
+        response = requests.post(target_url, json=payload)
+        if response.status_code == 200:
+            return True
+        logging.warning("[Instance] 注册失败: %s - %s", response.status_code, response.text)
+    except Exception as exc:
+        logging.warning("[Instance] 注册错误: %s", exc)
+    return False
+
+
 def _get_metric_sample_value(metrics: dict, names: List[str], default: float = 0.0) -> float:
     for name in names:
         metric = metrics.get(name)
@@ -101,6 +123,8 @@ def metric_update(monitor: Optional[ThroughputMonitor] = None):
             "gpu_memory_util_percent": gpu_memory_util_percent,
         }
         resp = requests.post(target_url, json=payload)
+        if resp.status_code == 404:
+            instance_register()
         if resp.status_code != 200:
             logging.warning(f"[Instance] 心跳异常: {resp.status_code}")
     except Exception as e:

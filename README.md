@@ -75,7 +75,9 @@ redis-cli info memory | grep used_memory_human
 
 ### 2 启动系统
 
-在项目`config`目录可以修改系统各项配置参数，在 [config/ADDRESS_CONFIG.py](./config/ADDRESS_CONFIG.py) 中可以修改系统各模块的IP地址和端口
+`config/ADDRESS_CONFIG.py` 只保存公共默认端口，不保存机器拓扑。各模块的 IP、上级服务地址、实例列表和 NIXL 参数通过启动参数或 `FLEXPD_*` / `VLLM_NIXL_*` 环境变量提供。实例启动后会向所属网关动态注册；部署新机器时无需复制或修改 Python 地址配置。
+
+主要启动参数包括 `--host`、`--port`、`--controller`、`--gateway`、`--prefill`、`--decode`、`--side-channel-host`、`--side-channel-port` 和 `--tp-size`。可参考 `run_166.sh`、`run_167.sh`、`run_169.sh`、`run_170.sh`。
 
 ```bash
 # 进入项目所在目录

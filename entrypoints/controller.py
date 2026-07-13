@@ -68,6 +68,8 @@ def main():
 
     # 解析命令行参数
     args = parse_args()
+    if not args.host:
+        raise SystemExit("Missing required deployment option: host")
 
     # 创建FastAPI应用
     app = FastAPI(

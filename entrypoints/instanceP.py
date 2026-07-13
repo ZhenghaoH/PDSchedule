@@ -69,6 +69,10 @@ def parse_args():
         default=DEFAULT_HOST,
         help="The IP address for the proxy server to listen on. Supports IPv4 and IPv6."
     )
+    parser.add_argument("--side-channel-host", default=os.getenv("VLLM_NIXL_SIDE_CHANNEL_HOST", ""))
+    parser.add_argument("--side-channel-port", type=int, default=int(os.getenv("VLLM_NIXL_SIDE_CHANNEL_PORT", "0")))
+    parser.add_argument("--tp-size", type=int, default=int(os.getenv("FLEXPD_TP_SIZE", "0")))
+    parser.add_argument("--connector", default=NIXL_CONNECTOR)
     return parser.parse_args()
 
 
@@ -79,6 +83,13 @@ def main():
 
     # 解析命令行参数
     args = parse_args()
+    missing = [name for name, value in {
+        "host": args.host, "port": args.port, "vllm_port": args.vllm_port,
+        "gateway": args.gateway, "side_channel_host": args.side_channel_host,
+        "side_channel_port": args.side_channel_port, "tp_size": args.tp_size,
+    }.items() if value in (None, "", 0)]
+    if missing:
+        raise SystemExit(f"Missing required deployment options: {', '.join(missing)}")
 
     # 初始化核心组件
     storage = InstanceStore()
@@ -86,6 +97,11 @@ def main():
     storage.port = args.port
     storage.gateway = args.gateway
     storage.vllm_port = args.vllm_port
+    storage.role = PREFILL_ROLE
+    storage.connector = args.connector
+    storage.side_channel_host = args.side_channel_host
+    storage.side_channel_port = args.side_channel_port
+    storage.tp_size = args.tp_size
 
     storage.rank = RANK
     storage.USE_MOCK = USE_MOCK

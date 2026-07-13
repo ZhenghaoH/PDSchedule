@@ -141,7 +141,8 @@ case "$MODE" in
 
         echo -e "\033[31m=== [5/13] Start Scheduler ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 controller.py
+        export FLEXPD_KDN_HOST=172.18.0.170
+        python3 controller.py --host 172.18.0.170 --port 5000
         ;;
     "pd")
         wait_for_loading 50 "Decode Proxy"
@@ -149,7 +150,7 @@ case "$MODE" in
         export MY_MAX_DECODE_REQ_NUM=128
         echo -e "\033[35m=== [6/13] Start Decode Proxy ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 gatewayD.py --decode 172.18.0.169:7003 172.18.0.169:7004
+        python3 gatewayD.py --host 172.18.0.169 --port 8082 --controller 172.18.0.170:5000 --decode 172.18.0.169:7003 172.18.0.169:7004
         ;;
     "pp")
         wait_for_loading 52 "Prefill Proxy"
@@ -158,40 +159,42 @@ case "$MODE" in
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         export MY_MAX_PROMPT_THROUGHPUT=24976.1
         export MY_FLOPS=104.8
-        python3 gatewayP.py --prefill 172.18.0.169:7001 172.18.0.169:7002
+        export KDN_BASE_URL=http://172.18.0.170:9101
+        python3 gatewayP.py --host 172.18.0.169 --port 8081 --controller 172.18.0.170:5000 --prefill 172.18.0.169:7001 172.18.0.169:7002
         ;;
     "id1")
         wait_for_loading 55 "Decode Instance 1"
 
         echo -e "\033[36m=== [8/13] Start Decode Instance Proxy 1 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 instanceD.py --port 7003 --vllm_port 8003
+        python3 instanceD.py --host 172.18.0.169 --port 7003 --vllm_port 8003 --gateway 172.18.0.169:8082 --side-channel-host 172.18.0.169 --side-channel-port 5559 --tp-size 1
         ;;
     "id2")
         wait_for_loading 55 "Decode Instance 2"
 
         echo -e "\033[36m=== [9/13] Start Decode Instance Proxy 2 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 instanceD.py --port 7004 --vllm_port 8004
+        python3 instanceD.py --host 172.18.0.169 --port 7004 --vllm_port 8004 --gateway 172.18.0.169:8082 --side-channel-host 172.18.0.169 --side-channel-port 5560 --tp-size 1
         ;;
     "ip1")
         wait_for_loading 57 "Prefill Instance 1"
 
         echo -e "\033[36m=== [10/13] Start Prefill Instance Proxy 1 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 instanceP.py --port 7001 --vllm_port 8001
+        python3 instanceP.py --host 172.18.0.169 --port 7001 --vllm_port 8001 --gateway 172.18.0.169:8081 --side-channel-host 172.18.0.169 --side-channel-port 5557 --tp-size 1
         ;;
     "ip2")
         wait_for_loading 57 "Prefill Instance 2"
 
         echo -e "\033[36m=== [11/13] Start Prefill Instance Proxy 2 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 instanceP.py --port 7002 --vllm_port 8002
+        python3 instanceP.py --host 172.18.0.169 --port 7002 --vllm_port 8002 --gateway 172.18.0.169:8081 --side-channel-host 172.18.0.169 --side-channel-port 5558 --tp-size 1
         ;;
     "kdn")
         echo -e "\033[36m=== [12/13] Start KDN Server ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 demo_kdn.py
+        export FLEXPD_REDIS_HOST=172.18.0.170
+        python3 demo_kdn.py --host 172.18.0.169 --port 9101
         ;;
     "cli")
         echo -e "\033[36m=== [13/13] Start KDN CLI ===\033[0m"

@@ -138,6 +138,15 @@ def main():
 
     # 解析命令行参数
     args = parse_args()
+    missing = [name for name, value in {
+        "host": args.host, "controller": args.controller,
+    }.items() if not value]
+    if missing:
+        raise SystemExit(f"Missing required deployment options: {', '.join(missing)}")
+    if args.tpot_warmup and not (args.tpot_target or args.decode):
+        raise SystemExit("TPOT warmup requires --tpot-target or at least one --decode instance")
+    if not args.tpot_target and args.decode:
+        args.tpot_target = args.decode[0]
 
     # 初始化核心组件
     storage = GatewayStoreManager()

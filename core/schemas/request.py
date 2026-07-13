@@ -166,7 +166,7 @@ class Service:
         else:
             return {
                 "Enable_PD_Disaggregation": True,
-                "SLO_TTFT": 1500,
+                "SLO_TTFT": 6000,
                 "SLO_TPOT": 40,
                 "SLO_E2E": 21500,
             }

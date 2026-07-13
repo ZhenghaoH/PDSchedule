@@ -10,6 +10,12 @@ from .link import InstanceLink
 
 class GatewayStoreManager:
     """存储管理"""
+    PREFILL_SCHEDULER_STRATEGIES = frozenset({"least_load", "round_robin", "pso_new"})
+    DECODE_SCHEDULER_STRATEGIES = frozenset({
+        "round_robin",
+        "lowest_generate_throughput",
+        "slo_tpot_admission",
+    })
     _instance = None
     _lock = threading.RLock()
     _initialized = False
@@ -47,7 +53,7 @@ class GatewayStoreManager:
 
                     self.TRIGGER_MODE = "ARRIVAL"
                     self.PROFILE_MODE = False
-                    self.SCHEDULER_STRATEGY = "pso"
+                    self.SCHEDULER_STRATEGY = "pso_new"
                     self.DECODE_SCHEDULER_STRATEGY = "slo_tpot_admission"
                     self.ENABLE_ADAPTIVE_SWITCH = False
                     
@@ -71,6 +77,7 @@ class GatewayStoreManager:
                     self.TPOT_STEP_PREDICTOR_READY = False
                     self.TPOT_STEP_PREDICT_FUNC: Optional[Callable[[int, int], Awaitable[float]]] = None
                     self._decode_active_batches: Dict[str, Dict[str, Dict[str, Any]]] = {}
+                    self._prefill_round_robin_index = 0
                     self._decode_round_robin_index = 0
 
                     self.KDN_BASE_URL = ""
@@ -199,6 +206,44 @@ class GatewayStoreManager:
             index = self._decode_round_robin_index % len(active_instances)
             self._decode_round_robin_index = (index + 1) % len(active_instances)
             return active_instances[index]
+
+    def next_prefill_round_robin(self) -> str:
+        """Return the next active Prefill instance using round-robin order."""
+        with self._data_lock:
+            active_instances = [
+                instance_ip for instance_ip in self._prefill_objs
+                if self._instance_table.get(instance_ip)
+                and self._instance_table[instance_ip].online
+            ]
+            if not active_instances:
+                return ""
+            index = self._prefill_round_robin_index % len(active_instances)
+            self._prefill_round_robin_index = (index + 1) % len(active_instances)
+            return active_instances[index]
+
+    def get_prefill_scheduler_strategy(self) -> str:
+        with self._data_lock:
+            return self.SCHEDULER_STRATEGY
+
+    def set_prefill_scheduler_strategy(self, strategy: str) -> str:
+        if strategy not in self.PREFILL_SCHEDULER_STRATEGIES:
+            raise ValueError(f"Unsupported Prefill scheduler strategy: {strategy}")
+        with self._data_lock:
+            previous = self.SCHEDULER_STRATEGY
+            self.SCHEDULER_STRATEGY = strategy
+            return previous
+
+    def get_decode_scheduler_strategy(self) -> str:
+        with self._data_lock:
+            return self.DECODE_SCHEDULER_STRATEGY
+
+    def set_decode_scheduler_strategy(self, strategy: str) -> str:
+        if strategy not in self.DECODE_SCHEDULER_STRATEGIES:
+            raise ValueError(f"Unsupported Decode scheduler strategy: {strategy}")
+        with self._data_lock:
+            previous = self.DECODE_SCHEDULER_STRATEGY
+            self.DECODE_SCHEDULER_STRATEGY = strategy
+            return previous
 
     @property
     def network_register_table(self) -> List[str]:

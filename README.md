@@ -79,6 +79,8 @@ redis-cli info memory | grep used_memory_human
 
 主要启动参数包括 `--host`、`--port`、`--controller`、`--gateway`、`--prefill`、`--decode`、`--side-channel-host`、`--side-channel-port` 和 `--tp-size`。可参考 `run_166.sh`、`run_167.sh`、`run_169.sh`、`run_170.sh`。
 
+Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `least_load`、`round_robin` 或 `pso_new`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generate_throughput` 或 `slo_tpot_admission`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。systemd、nohup 或无 TTY 容器部署时请增加 `--no-cli`。
+
 ```bash
 # 进入项目所在目录
 cd /workspace/llm-stack/workspace_LLL/FlexPD

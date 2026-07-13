@@ -112,7 +112,10 @@ async def _handle_pd_request(request: BaseRequest, endpoint_type: str):
     if storage.USE_SYN:
         batch_result = await request_batcher.add_nixl_prefill_request(request)
         if batch_result.get("error"):
-            raise HTTPException(status_code=500, detail=batch_result["error"])
+            raise HTTPException(
+                status_code=batch_result.get("status_code", 500),
+                detail=batch_result["error"],
+            )
         if not batch_result.get("success", True):
             raise HTTPException(status_code=500, detail="NIXL prefill batch failed")
 
@@ -160,7 +163,10 @@ async def _handle_non_pd_request(request: BaseRequest, endpoint_type: str):
     if storage.USE_SYN:
         batch_result = await request_batcher.add_request(request)
         if batch_result.get("error"):
-            raise HTTPException(status_code=500, detail=batch_result["error"])
+            raise HTTPException(
+                status_code=batch_result.get("status_code", 500),
+                detail=batch_result["error"],
+            )
         if not batch_result.get("success", True):
             raise HTTPException(status_code=500, detail="Batch processing failed")
         return StreamingResponse(batch_result["generator"])

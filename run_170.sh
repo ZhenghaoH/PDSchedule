@@ -156,7 +156,7 @@ case "$MODE" in
         export MY_MAX_DECODE_REQ_NUM=256
         echo -e "\033[35m=== [6/13] 启动 Decode Proxy ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 gatewayD.py --host 172.18.0.170 --port 8082 --controller 172.18.0.170:5000 --decode 172.18.0.170:7003 172.18.0.170:7004
+        python3 gatewayD.py --host 172.18.0.170 --port 8082 --controller 172.18.0.170:5000 --decode 172.18.0.170:7003 172.18.0.170:7004 --decode-scheduler-strategy slo_tpot_admission
         ;;
     "pp")
         wait_for_loading 52 "Prefill Proxy"
@@ -166,7 +166,7 @@ case "$MODE" in
         export MY_MAX_PROMPT_THROUGHPUT=25499.77
         export MY_FLOPS=209.6
         export KDN_BASE_URL=http://172.18.0.170:9101
-        python3 gatewayP.py --host 172.18.0.170 --port 8081 --controller 172.18.0.170:5000 --prefill 172.18.0.170:7001 172.18.0.170:7002
+        python3 gatewayP.py --host 172.18.0.170 --port 8081 --controller 172.18.0.170:5000 --prefill 172.18.0.170:7001 172.18.0.170:7002 --prefill-scheduler-strategy pso_new
         ;;
     "id1")
         wait_for_loading 55 "Decode Instance 1"

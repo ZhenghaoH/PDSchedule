@@ -100,7 +100,7 @@ case "$MODE" in
         export MY_MAX_DECODE_REQ_NUM=32
         echo -e "\033[35m=== [4/7] Start Decode Proxy ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 gatewayD.py --host 172.18.0.166 --port 8082 --controller 172.18.0.170:5000 --decode 172.18.0.166:7001 172.18.0.166:7002
+        python3 gatewayD.py --host 172.18.0.166 --port 8082 --controller 172.18.0.170:5000 --decode 172.18.0.166:7001 172.18.0.166:7002 --decode-scheduler-strategy slo_tpot_admission
         ;;
     "id1")
         wait_for_loading 55 "Decode Instance 1"

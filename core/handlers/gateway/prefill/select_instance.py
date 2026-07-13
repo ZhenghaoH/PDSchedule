@@ -1,7 +1,7 @@
 from fastapi import HTTPException, Request
 
 from core.schemas.request import BaseRequest
-from scheduler.gateway.prefill.async_base import AsyncBaseScheduler
+from core.handlers.gateway.prefill.proxy import request_batcher
 from store.gateway.manager import GatewayStoreManager
 
 
@@ -19,8 +19,12 @@ async def select_instance(raw_request: Request):
 
     instance = getattr(request.Task, "prefill_instance", "")
     if not _active_prefill_instance(storage, instance):
-        scheduler = AsyncBaseScheduler(storage)
-        instance = scheduler.schedule(request, "prefill")
+        strategy = storage.get_prefill_scheduler_strategy()
+        scheduled, _ = await request_batcher.scheduler_mgr.schedule_batch(
+            [request],
+            strategy=strategy,
+        )
+        instance = scheduled[0].Task.prefill_instance if scheduled else ""
 
     if not _active_prefill_instance(storage, instance):
         raise HTTPException(status_code=503, detail="No active prefill instance")

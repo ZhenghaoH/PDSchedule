@@ -7,7 +7,6 @@
 """
 
 import argparse
-import uvicorn
 from fastapi import FastAPI
 import logging
 import os
@@ -23,6 +22,8 @@ from config.gatewayP import *
 from core.lifespans.gatewayP import lifespan
 from store.gateway.manager import GatewayStoreManager
 from core.routers.gatewayP import router
+from core.consoles.gateway import run_gateway_server
+from core.handlers.gateway.prefill.proxy import request_batcher
 
 
 def setup_logger():
@@ -79,6 +80,19 @@ def parse_args():
         type=str,
         default=DEFAULT_HOST,
         help="The IP address for the proxy server to listen on. Supports IPv4 and IPv6."
+    )
+
+    parser.add_argument(
+        "--prefill-scheduler-strategy",
+        choices=["least_load", "round_robin", "pso_new"],
+        default=SCHEDULER_STRATEGY,
+        help="Prefill scheduler strategy.",
+    )
+
+    parser.add_argument(
+        "--no-cli",
+        action="store_true",
+        help="Disable the interactive gateway CLI for background deployments.",
     )
 
     ttft_warmup_group = parser.add_mutually_exclusive_group()
@@ -165,7 +179,7 @@ def main():
 
     storage.TRIGGER_MODE = TRIGGER_MODE
     storage.PROFILE_MODE = PROFILE_MODE
-    storage.SCHEDULER_STRATEGY = SCHEDULER_STRATEGY
+    storage.set_prefill_scheduler_strategy(args.prefill_scheduler_strategy)
     storage.ENABLE_ADAPTIVE_SWITCH = ENABLE_ADAPTIVE_SWITCH
 
     storage.KDN_BASE_URL = KDN_BASE_URL
@@ -186,9 +200,16 @@ def main():
     # 注册路由
     app.include_router(router)
 
-    # 启动服务器
-    # uvicorn.run(app, host=args.host, port=args.port, log_level="info", loop="uvloop")  # ubuntu
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")  # windows
+    logging.info("Prefill scheduler strategy: %s", args.prefill_scheduler_strategy)
+    run_gateway_server(
+        app,
+        args.host,
+        args.port,
+        "prefill",
+        storage,
+        args.no_cli,
+        request_batcher,
+    )
 
 
 if __name__ == "__main__":

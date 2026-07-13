@@ -7,7 +7,6 @@
 """
 
 import argparse
-import uvicorn
 from fastapi import FastAPI
 import logging
 import os
@@ -23,6 +22,7 @@ from config.gatewayD import *
 from core.lifespans.gatewayD import lifespan
 from store.gateway.manager import GatewayStoreManager
 from core.routers.gatewayD import router
+from core.consoles.gateway import run_gateway_server
 
 
 def setup_logger():
@@ -77,6 +77,12 @@ def parse_args():
         choices=["round_robin", "lowest_generate_throughput", "slo_tpot_admission"],
         default=DECODE_SCHEDULER_STRATEGY,
         help="Decode async scheduler strategy.",
+    )
+
+    parser.add_argument(
+        "--no-cli",
+        action="store_true",
+        help="Disable the interactive gateway CLI for background deployments.",
     )
 
     tpot_warmup_group = parser.add_mutually_exclusive_group()
@@ -160,7 +166,7 @@ def main():
     storage.rank = RANK
     storage.USE_SYN = USE_SYN
     storage.LOOP_TASK_TIME = LOOP_TASK_TIME
-    storage.DECODE_SCHEDULER_STRATEGY = args.decode_scheduler_strategy
+    storage.set_decode_scheduler_strategy(args.decode_scheduler_strategy)
 
     storage.TPOT_WARMUP_ENABLED = args.tpot_warmup
     storage.TPOT_WARMUP_REPEATS = args.tpot_warmup_repeats
@@ -181,9 +187,15 @@ def main():
     # 注册路由
     app.include_router(router)
 
-    # 启动服务器
-    # uvicorn.run(app, host=args.host, port=args.port, log_level="info", loop="uvloop")  # ubuntu
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")  # windows
+    logging.info("Decode scheduler strategy: %s", args.decode_scheduler_strategy)
+    run_gateway_server(
+        app,
+        args.host,
+        args.port,
+        "decode",
+        storage,
+        args.no_cli,
+    )
 
 
 if __name__ == "__main__":

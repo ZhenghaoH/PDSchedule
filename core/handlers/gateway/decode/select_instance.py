@@ -20,7 +20,7 @@ async def select_instance(raw_request: Request):
     instance = getattr(request.Task, "decode_instance", "")
     if not _active_decode_instance(storage, instance):
         scheduler = AsyncBaseScheduler(storage)
-        strategy = getattr(storage, "DECODE_SCHEDULER_STRATEGY", "slo_tpot_admission")
+        strategy = storage.get_decode_scheduler_strategy()
         instance = await scheduler.schedule_async(request, strategy=strategy)
 
     if not _active_decode_instance(storage, instance):

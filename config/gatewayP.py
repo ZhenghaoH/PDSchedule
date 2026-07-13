@@ -32,7 +32,7 @@ LOOP_TASK_TIME = 10  # 10s
 DEFAULT_CONTROLLER = f"{CONFIG_CONTROLLER_IP}:{CONFIG_CONTROLLER_PORT}" if CONFIG_CONTROLLER_IP else ""
 
 # 同步设置 是否启用同步
-USE_SYN = False
+USE_SYN = True
 
 SYN_BATCH_SIZE = 30  # 同步设置 批处理批次, 超过该批次，进行调度
 SYN_TIMEOUT = 15  # 同步设置 等待时间 秒， 超过该时间，进行调度

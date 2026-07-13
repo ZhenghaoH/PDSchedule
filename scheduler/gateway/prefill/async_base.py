@@ -18,7 +18,10 @@ class AsyncBaseScheduler:
         instances = self.storage.instance_table
         return min(
             prefill_instances,
-            key=lambda instance_ip: instances.get(instance_ip).prompt_throughput if instances.get(instance_ip) else 0.0
+            key=lambda instance_ip: (
+                instances.get(instance_ip).prompt_throughput if instances.get(instance_ip) else 0.0,
+                instance_ip,
+            ),
         )
 
     def schedule(self, request: BaseRequest, tag: str = "prefill", strategy: str = "lowest_prompt_throughput", **kwargs) -> str:

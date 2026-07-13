@@ -3,6 +3,7 @@ import logging
 import asyncio
 import time
 import threading
+from copy import deepcopy
 from typing import List, Dict, Any, Optional, Tuple
 from collections import defaultdict, deque
 from collections.abc import AsyncIterator
@@ -215,9 +216,11 @@ class SchedulingEngine:
                     self.b.dispatch_event.set()
                     continue  # <--- 直接跳过本次调度，让分发器先工作
 
-                # 获取待调度的候选请求（浅拷贝）
-                candidates = list(self.b.pending_queue)
+                # 使用深拷贝隔离调度计算；切换策略时旧计算结果不会污染真实队列。
+                candidates = deepcopy(self.b.pending_queue)
                 last_plan = getattr(self.b, "last_plan", None)
+                schedule_strategy = self.b.scheduler_mgr.strategy
+                schedule_version = self.b.strategy_version
                 inflight_prefill = []
                 for rid, req in self.b.inflight_prefill_reqs.items():
                     meta = dict(self.b.inflight_prefill_meta.get(rid, {}))
@@ -237,6 +240,7 @@ class SchedulingEngine:
                     candidates,
                     last_plan=last_plan,
                     inflight_prefill=inflight_prefill,
+                    strategy=schedule_strategy,
                 )
                 _log_timeline_event(
                     "SCHEDULE_RETURNED",
@@ -260,6 +264,17 @@ class SchedulingEngine:
 
             # 应用调度结果
             async with self.b.lock:
+                if schedule_version != self.b.strategy_version:
+                    _log_timeline_event(
+                        "STALE_SCHEDULE_DISCARDED",
+                        scheduled_strategy=schedule_strategy,
+                        current_strategy=self.b.scheduler_mgr.strategy,
+                        scheduled_version=schedule_version,
+                        current_version=self.b.strategy_version,
+                    )
+                    self.b.schedule_event.set()
+                    continue
+
                 self.b.dispatch_policy = new_policy
 
                 # 构建映射以便快速更新
@@ -924,12 +939,16 @@ class MonitoringEngine:
             # 策略切换逻辑
             if current_strategy == "round_robin" and v_rate > self.b.violation_threshold:
                 self.b.scheduler_mgr.strategy = self.b.optimized_strategy
+                storage.set_prefill_scheduler_strategy(self.b.optimized_strategy)
+                self.b.strategy_version += 1
                 self.b.stats_window.clear()
                 logging.warning(f"!!! High Violation ({v_rate:.1%}): Switching to {self.b.optimized_strategy}")
                 asyncio.create_task(self.b.preempt_heavy_requests())
 
             elif current_strategy != "round_robin" and v_rate < self.b.recovery_threshold:
                 self.b.scheduler_mgr.strategy = "round_robin"
+                storage.set_prefill_scheduler_strategy("round_robin")
+                self.b.strategy_version += 1
                 self.b.stats_window.clear()
                 logging.info(f"!!! Low Violation: Recovering to round_robin")
 
@@ -972,6 +991,8 @@ class RequestBatcher:
         self.trigger_mode = "ARRIVAL"
         self.profile_mode = False
         self.adaptive_switch = False
+        self.strategy_version = 0
+        self.event_loop: Optional[asyncio.AbstractEventLoop] = None
 
         if self.profile_mode:
             self.scheduler_mgr.strategy = "round_robin"
@@ -1014,6 +1035,7 @@ class RequestBatcher:
         return asyncio.create_task(_runner())
 
     async def start(self):
+        self.event_loop = asyncio.get_running_loop()
         self.syn_batch_size = int(getattr(storage, "SYN_BATCH_SIZE", self.syn_batch_size))
         self.syn_timeout = float(getattr(storage, "SYN_TIMEOUT", self.syn_timeout))
         self.trigger_mode = getattr(storage, "TRIGGER_MODE", self.trigger_mode)
@@ -1033,6 +1055,41 @@ class RequestBatcher:
             self._create_engine_task("MonitoringEngine", self.monitor_engine.run)
         )
         logging.info("RequestBatcher Engines Started.")
+
+    async def switch_strategy(self, strategy: str) -> Dict[str, Any]:
+        """Switch the Prefill strategy and reschedule requests not yet dispatched."""
+        if strategy not in storage.PREFILL_SCHEDULER_STRATEGIES:
+            raise ValueError(f"Unsupported Prefill scheduler strategy: {strategy}")
+
+        async with self.lock:
+            previous = self.scheduler_mgr.strategy
+            storage.set_prefill_scheduler_strategy(strategy)
+            self.scheduler_mgr.strategy = strategy
+            self.optimized_strategy = strategy
+            self.strategy_version += 1
+            self.last_plan = []
+
+            for request in self.pending_queue:
+                request.Task.batch_order = -1
+                request.Task.prefill_instance = ""
+
+            pending_count = len(self.pending_queue)
+            if pending_count:
+                self.schedule_event.set()
+
+            return {
+                "previous": previous,
+                "current": strategy,
+                "pending_count": pending_count,
+                "adaptive_switch": self.adaptive_switch,
+            }
+
+    def switch_strategy_threadsafe(self, strategy: str, timeout: float = 10.0) -> Dict[str, Any]:
+        """Submit a strategy switch from the foreground CLI thread."""
+        if self.event_loop is None or not self.event_loop.is_running():
+            raise RuntimeError("RequestBatcher is not running")
+        future = asyncio.run_coroutine_threadsafe(self.switch_strategy(strategy), self.event_loop)
+        return future.result(timeout=timeout)
 
     async def preempt_heavy_requests(self):
         """抢占逻辑"""
@@ -1076,6 +1133,12 @@ class RequestBatcher:
 
     async def _add_request(self, request: BaseRequest, mode: str) -> Dict[str, Any]:
         """前端调用入口"""
+        if not storage.active_prefill_objs:
+            return {
+                "success": False,
+                "error": "No active prefill instance",
+                "status_code": 503,
+            }
         request.Service.arrival_time = time.time()
         rid = request.Request_ID
         rid_key = _rid_key(rid)
@@ -1320,3 +1383,4 @@ class RequestBatcher:
         for task in self.worker_tasks:
             task.cancel()
         await asyncio.gather(*self.worker_tasks, return_exceptions=True)
+        self.event_loop = None

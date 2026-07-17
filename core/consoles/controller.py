@@ -68,6 +68,7 @@ def info():
     """展示命令信息"""
     print("  - show knowledge_base  : 显示知识库概况")
     print("  - show pool_id         : 显示推理池ID")
+    print("  - show scheduler       : 显示Controller路由模式或全局调度策略")
     print("  - pair pd -p <p> -d <d>: 配对PD池")
     print("  - switch scheduler -m <mode>: 切换全局调度策略，可选 pso/random/round_robin/paired_round_robin/least_load")
     print("  - history              : 查看历史记录")
@@ -133,6 +134,13 @@ def run_scheduler_cli(app: FastAPI, server: "object") -> None:
         # 展示池id与池的对应关系
         elif cmd == BaseCommand("show", "pool_id"):
             do_show_pool_id()
+
+        elif cmd == BaseCommand("show", "scheduler"):
+            scheduler = getattr(app.state, "global_scheduler", None)
+            if scheduler is None:
+                print("[CLI] Global scheduler is not initialized.")
+            else:
+                print(f"[CLI] Controller routing: {scheduler.routing_status()}")
 
         # 实例配对指令
         elif cmd == BaseCommand("pair", "pd"):

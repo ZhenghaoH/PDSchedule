@@ -83,6 +83,42 @@ Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `least_load`、`ro
 
 交互式网关 CLI 支持上下方向键查看历史，并支持 Tab 自动补全命令和当前网关可用的调度策略。
 
+#### 单 P/D 网关的固定路由模式
+
+论文调度实验可以使用一个 P 网关管理全部 Prefill 实例、一个 D 网关管理全部 Decode 实例。Controller 使用 `fixed_gateway` 后只写入这两个固定网关，不再执行 P/D 池选择；实例级策略仍由现有 P/D 网关调度器执行。
+
+```bash
+python entrypoints/controller.py \
+  --host 0.0.0.0 \
+  --port 5000 \
+  --routing-mode fixed_gateway \
+  --fixed-prefill-gateway 172.18.0.170:8081 \
+  --fixed-decode-gateway 172.18.0.166:8082
+```
+
+也可以使用环境变量：
+
+```bash
+export FLEXPD_CONTROLLER_ROUTING_MODE=fixed_gateway
+export FLEXPD_FIXED_PREFILL_GATEWAY=172.18.0.170:8081
+export FLEXPD_FIXED_DECODE_GATEWAY=172.18.0.166:8082
+```
+
+固定地址缺失或格式不是 `host:port` 时 Controller 会快速报错。原有 `global` 路由模式仍然保留。Controller CLI 可使用 `show scheduler` 核对当前路由模式和目标网关。
+
+#### 后续直接增加网关策略的检查表
+
+本项目继续使用现有策略管理器，不使用额外 registry 或 plugins 目录。增加策略时按以下位置逐项核对：
+
+- P 策略：在 `scheduler/gateway/prefill/` 增加实现，并在 `scheduler/gateway/prefill/manager.py` 中导入、初始化和增加 `schedule_batch()` 分支。
+- D 策略：在 `scheduler/gateway/decode/` 增加实现或选择函数，并在 `scheduler/gateway/decode/async_base.py` 的 `schedule_async()` 中增加即时选择分支。D 策略必须直接返回实例，不支持等待队列。
+- 将策略名加入 `store/gateway/manager.py` 对应的 P/D 白名单。
+- 将策略名加入 `entrypoints/gatewayP.py` 或 `entrypoints/gatewayD.py` 的启动参数合法值。
+- 将策略名加入 `core/consoles/gateway.py` 的对应角色列表，使在线切换和 Tab 自动补全一致。
+- 增加策略单元测试，并核对未知策略、无在线实例和在线切换边界。
+
+`Task.scheduler_metadata` 是 P→D 内部使用的空扩展容器。后续策略如需跨阶段传递少量 JSON 数据，应使用策略名作为一级命名空间；该字段不会进入发送给 vLLM 实例的标准或 NIXL payload。
+
 在 Ubuntu 部署机上可使用根目录的 `sync.sh` 同步代码并修复 Shell 脚本执行权限：
 
 ```bash

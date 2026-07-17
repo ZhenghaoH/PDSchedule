@@ -31,6 +31,12 @@ TEMPLATES_PATH = str(Path(__file__).resolve().parents[1] / "templates")
 DEFAULT_PORT = CONFIG_CONTROLLER_PORT
 DEFAULT_HOST = CONFIG_CONTROLLER_IP
 
+# Controller routing mode. Deployment-specific gateway addresses are supplied
+# through environment variables or command-line arguments, not Python topology.
+DEFAULT_ROUTING_MODE = os.getenv("FLEXPD_CONTROLLER_ROUTING_MODE", "global")
+DEFAULT_FIXED_PREFILL_GATEWAY = os.getenv("FLEXPD_FIXED_PREFILL_GATEWAY", "")
+DEFAULT_FIXED_DECODE_GATEWAY = os.getenv("FLEXPD_FIXED_DECODE_GATEWAY", "")
+
 # 把模型路径暴露给 scheduler（scheduler.py 里通过 os.getenv 读取），同时设置避免在线拉取模型
 os.environ["SCHEDULER_MODEL_PATH"] = DEFAULT_MODEL
 os.environ[

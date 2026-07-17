@@ -226,8 +226,17 @@ async def lifespan(app: FastAPI):
         logging.info("[Scheduler] NetworkManager instantiated.")
 
         # 实例化全局调度器
-        app.state.global_scheduler = GlobalScheduler(pool_manager, network_manager)
-        logging.info("[Scheduler] GlobalScheduler instantiated.")
+        app.state.global_scheduler = GlobalScheduler(
+            pool_manager,
+            network_manager,
+            routing_mode=getattr(app.state, "controller_routing_mode", "global"),
+            fixed_prefill_gateway=getattr(app.state, "fixed_prefill_gateway", ""),
+            fixed_decode_gateway=getattr(app.state, "fixed_decode_gateway", ""),
+        )
+        logging.info(
+            "[Scheduler] GlobalScheduler instantiated: %s",
+            app.state.global_scheduler.routing_status(),
+        )
 
         # 启动后台同步循环
         sync_pool_net_state_task = asyncio.create_task(scheduler_sync_loop(app.state.global_scheduler))

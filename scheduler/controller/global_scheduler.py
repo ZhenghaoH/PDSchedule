@@ -1,5 +1,6 @@
 import sys
 import os
+from urllib.parse import urlsplit
 
 from typing import List, Dict, Any, Optional, Tuple
 from dataclasses import dataclass
@@ -26,13 +27,55 @@ from core.schemas.request import Prompt, Service
 # ====================================================================================
 
 
+def parse_gateway_endpoint(value: str) -> Tuple[str, int]:
+    """Parse host:port (including bracketed IPv6) without guessing a port."""
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("Gateway address is empty")
+
+    parsed = urlsplit(raw if "://" in raw else f"//{raw}")
+    try:
+        host = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"Invalid gateway address {raw!r}: {exc}") from exc
+
+    if not host or port is None:
+        raise ValueError(f"Gateway address must be formatted as host:port: {raw!r}")
+    if not 1 <= port <= 65535:
+        raise ValueError(f"Gateway port is out of range: {port}")
+    return host, port
+
+
 class GlobalScheduler:
-    def __init__(self, pool_manager: PoolManager, network_manager: NetworkManager):
+    ROUTING_MODES = frozenset({"global", "fixed_gateway"})
+
+    def __init__(
+        self,
+        pool_manager: PoolManager,
+        network_manager: NetworkManager,
+        routing_mode: str = "global",
+        fixed_prefill_gateway: str = "",
+        fixed_decode_gateway: str = "",
+    ):
         """
         初始化全局调度器。
         """
         self.pool_manager = pool_manager
         self.network_manager = network_manager
+
+        normalized_routing_mode = str(routing_mode or "global").strip().lower()
+        if normalized_routing_mode not in self.ROUTING_MODES:
+            raise ValueError(
+                f"Unsupported Controller routing mode: {routing_mode!r}. "
+                f"Available: {sorted(self.ROUTING_MODES)}"
+            )
+        self.routing_mode = normalized_routing_mode
+        self.fixed_prefill_gateway: Optional[Tuple[str, int]] = None
+        self.fixed_decode_gateway: Optional[Tuple[str, int]] = None
+        if self.routing_mode == "fixed_gateway":
+            self.fixed_prefill_gateway = parse_gateway_endpoint(fixed_prefill_gateway)
+            self.fixed_decode_gateway = parse_gateway_endpoint(fixed_decode_gateway)
 
         # 1. 资源容器
         self.prefill_pools: List[PrefillPool] = []
@@ -52,7 +95,27 @@ class GlobalScheduler:
         self.current_mode: str = "pso" # 默认策略
         self.is_ready: bool = False
 
-        print("[GlobalScheduler] Initializing... performing automatic state setup.")
+        print(
+            "[GlobalScheduler] Initializing... "
+            f"routing={self.routing_status()}"
+        )
+
+    @staticmethod
+    def _format_endpoint(endpoint: Optional[Tuple[str, int]]) -> str:
+        if endpoint is None:
+            return ""
+        host, port = endpoint
+        display_host = f"[{host}]" if ":" in host else host
+        return f"{display_host}:{port}"
+
+    def routing_status(self) -> str:
+        if self.routing_mode == "fixed_gateway":
+            return (
+                "mode=fixed_gateway, "
+                f"prefill={self._format_endpoint(self.fixed_prefill_gateway)}, "
+                f"decode={self._format_endpoint(self.fixed_decode_gateway)}"
+            )
+        return f"mode=global, scheduler={self.current_mode}"
 
     def sync_state(self):
         """
@@ -81,13 +144,21 @@ class GlobalScheduler:
     # 可以在此处添加更多策略，例如 RoundRobin, Greedy
     def switch_mode(self, mode: str):
         """切换调度策略 (e.g., 'pso', 'random')"""
+        if self.routing_mode == "fixed_gateway":
+            print(
+                "[GlobalScheduler] Controller uses fixed_gateway routing; "
+                "global scheduler switching is disabled."
+            )
+            return False
         mode = mode.lower()
         if mode in self.strategies:
             self.current_mode = mode
             print(f"[GlobalScheduler] Switched strategy to: {self.current_mode.upper()}")
+            return True
         else:
             valid_modes = list(self.strategies.keys())
             print(f"[GlobalScheduler] Error: Mode '{mode}' invalid. Available: {valid_modes}")
+            return False
 
     def schedule(self, prompt_obj: Prompt, service_obj: Service, request_id: int) -> Dict[str, Any]:
         """
@@ -108,6 +179,18 @@ class GlobalScheduler:
         异常:
             RuntimeError: 当资源未初始化或为空时抛出异常，提示需要先调用update_state()
         """
+        if self.routing_mode == "fixed_gateway":
+            if self.fixed_prefill_gateway is None or self.fixed_decode_gateway is None:
+                raise RuntimeError("Fixed gateway routing is not configured")
+            p_ip, p_port = self.fixed_prefill_gateway
+            d_ip, d_port = self.fixed_decode_gateway
+            return {
+                "P_proxy_addr": p_ip,
+                "P_proxy_port": p_port,
+                "D_proxy_addr": d_ip,
+                "D_proxy_port": d_port,
+            }
+
         # 1. 基础检查 - 确保调度器已加载必要的资源
         if not self.prefill_pools or not self.decode_pools:
             raise RuntimeError("Resources empty. Call update_state first.")

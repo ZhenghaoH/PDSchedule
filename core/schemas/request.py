@@ -270,6 +270,7 @@ class Task:
     prefill_side_channel_addr: str = ""
     decode_side_channel_addr: str = ""
     decode_selection_stage: str = "after_prefill"
+    scheduler_metadata: Dict[str, Any] = field(default_factory=dict)
 
     def scheduler_method(self, scheduler_instance: GlobalScheduler, prompt_obj: Prompt, service_obj: Service,
                          request_id: int) -> Dict[str, Any]:
@@ -559,8 +560,16 @@ class BaseRequest:
         affinity_key = None
         affinity_hit = False
         affinity_result: Optional[Dict[str, Any]] = None
+        fixed_gateway_routing = (
+            getattr(scheduler_instance, "routing_mode", "global") == "fixed_gateway"
+        )
 
-        if service_obj.Enable_Affinity:
+        if service_obj.Enable_Affinity and fixed_gateway_routing:
+            print(
+                f"[Affinity] Req {request_id} skip cached pool routing because "
+                "Controller uses fixed_gateway mode."
+            )
+        elif service_obj.Enable_Affinity:
             print(f"[Affinity] Req {request_id} affinity enabled, user_id={user_id}, session_id={session_id}")
             if user_id and session_id:
                 affinity_key = (user_id, session_id)
@@ -596,6 +605,7 @@ class BaseRequest:
             if (
                     scheduled
                     and service_obj.Enable_Affinity
+                    and not fixed_gateway_routing
                     and affinity_store is not None
                     and affinity_key is not None
                     and not affinity_hit

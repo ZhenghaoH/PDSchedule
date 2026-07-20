@@ -79,7 +79,24 @@ redis-cli info memory | grep used_memory_human
 
 主要启动参数包括 `--host`、`--port`、`--controller`、`--gateway`、`--prefill`、`--decode`、`--side-channel-host`、`--side-channel-port` 和 `--tp-size`。可参考 `run_166.sh`、`run_167.sh`、`run_169.sh`、`run_170.sh`。
 
-Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `least_load`、`round_robin` 或 `pso_new`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generate_throughput` 或 `slo_tpot_admission`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。systemd、nohup 或无 TTY 容器部署时请增加 `--no-cli`。
+Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `least_load`、`round_robin`、`pso_new` 或 `distserve`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generate_throughput`、`slo_tpot_admission` 或 `distserve`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。systemd、nohup 或无 TTY 容器部署时请增加 `--no-cli`。
+
+#### DistServe 在线调度基线
+
+`distserve` 复现 DistServe 4.3 的网关在线调度部分：P 网关保持 FCFS，只从队首按 token 上限 `L_m` 组批，再以 `running_reqs + waiting_reqs` 和尚未被心跳反映的本地预留组成有效队列长度，选择最短 P 队列；D 网关以同样的有效负载定义立即选择最低负载实例。并列时按实例地址稳定选择。策略保留既有 NIXL Pull 参数链路，并关闭自适应策略切换和 Prefill 抢占。
+
+```bash
+python entrypoints/gatewayP.py \
+  --prefill-scheduler-strategy distserve \
+  --distserve-prefill-batch-tokens 2048 \
+  --no-ttft-warmup
+
+python entrypoints/gatewayD.py \
+  --decode-scheduler-strategy distserve \
+  --no-tpot-warmup
+```
+
+`L_m` 必须使用 `profile/profile_distserve_lm.py` 在目标模型、GPU、并行配置和负载上离线 profile；仓库默认值 `2048` 只是当前实验配置。该基线不包含论文的 placement algorithm、周期性 workload replan、模型迁移或资源重配置。四机中心网关部署参见 `DistServe启动脚本/README.md`。
 
 交互式网关 CLI 支持上下方向键查看历史，并支持 Tab 自动补全命令和当前网关可用的调度策略。
 

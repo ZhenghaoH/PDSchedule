@@ -51,6 +51,11 @@ async def update_instance_metric(raw_request: Request):
             instance.online = True
             instance.last_updated = time.time()
             storage.set_instance_table(report_label, instance)
+            storage.confirm_distserve_heartbeat(
+                "decode",
+                report_label,
+                int(running_reqs) + int(waiting_reqs),
+            )
             return Response(status_code=200)
         else:
             raise HTTPException(status_code=400, detail="Invalid json format, missing report_label")

@@ -27,6 +27,7 @@ from core.consoles.gateway import (
 )
 from core.schemas.request import BaseRequest, Prompt, Service, Task
 from proxy.sync import RequestBatcher, storage as shared_storage
+from scheduler.gateway.decode.async_base import AsyncBaseScheduler as DecodeScheduler
 from scheduler.gateway.prefill.manager import SchedulerManager
 from store.gateway.instance import Instance
 from store.gateway.manager import GatewayStoreManager
@@ -42,14 +43,15 @@ def make_store(prefills=None, decodes=None):
     manager._decode_round_robin_index = 0
     manager.SCHEDULER_STRATEGY = "pso_new"
     manager.DECODE_SCHEDULER_STRATEGY = "slo_tpot_admission"
+    manager.DIST_SERVE_PREFILL_BATCH_TOKENS = 2048
     return manager
 
 
-def make_request(request_id):
+def make_request(request_id, token_length=10):
     return BaseRequest(
         Request_ID=request_id,
         Request_type="request",
-        Prompt=Prompt("model", "hello", 10, 1, 16, True, 1.0, 1.0),
+        Prompt=Prompt("model", "hello", token_length, 1, 16, True, 1.0, 1.0),
         Service=Service(arrival_time=float(request_id)),
         Task=Task(
             User_addr="",
@@ -90,6 +92,8 @@ class GatewayStoreStrategyTest(unittest.TestCase):
     def test_strategy_setters_validate_modes(self):
         self.assertEqual(self.store.set_prefill_scheduler_strategy("least_load"), "pso_new")
         self.assertEqual(self.store.set_decode_scheduler_strategy("round_robin"), "slo_tpot_admission")
+        self.assertEqual(self.store.set_prefill_scheduler_strategy("distserve"), "least_load")
+        self.assertEqual(self.store.set_decode_scheduler_strategy("distserve"), "round_robin")
         with self.assertRaises(ValueError):
             self.store.set_prefill_scheduler_strategy("random")
         with self.assertRaises(ValueError):
@@ -135,6 +139,65 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scheduled, [request])
         self.assertEqual(policy, "FULL_OR_IDLE_WAIT")
 
+    async def test_distserve_batches_only_fcfs_prefix_up_to_lm(self):
+        requests = [
+            make_request(1, 1000),
+            make_request(2, 1000),
+            make_request(3, 100),
+        ]
+        scheduled, policy = await self.scheduler.schedule_batch(
+            requests, strategy="distserve"
+        )
+
+        self.assertEqual(policy, "IMMEDIATE")
+        self.assertEqual([request.Request_ID for request in scheduled], [1, 2])
+        self.assertEqual({request.Task.prefill_instance for request in scheduled}, {"p1"})
+        self.assertEqual(
+            scheduled[0].Task.scheduler_metadata["distserve"]["batch_tokens"],
+            2000,
+        )
+        self.assertEqual(requests[2].Task.batch_order, -1)
+
+    async def test_distserve_restores_fcfs_order_from_arrival_time(self):
+        later = make_request(2, 1000)
+        earlier = make_request(1, 1000)
+        scheduled, _ = await self.scheduler.schedule_batch(
+            [later, earlier], strategy="distserve"
+        )
+        self.assertEqual([request.Request_ID for request in scheduled], [1, 2])
+        self.assertEqual(
+            [request.Task.slo_plan_position for request in scheduled], [0, 1]
+        )
+
+    async def test_distserve_sends_long_fcfs_request_alone_and_reserves_jsq(self):
+        long_request = make_request(1, 2048)
+        scheduled, _ = await self.scheduler.schedule_batch(
+            [long_request, make_request(2, 10)], strategy="distserve"
+        )
+        self.assertEqual([request.Request_ID for request in scheduled], [1])
+        self.assertEqual(scheduled[0].Task.prefill_instance, "p1")
+
+        next_scheduled, _ = await self.scheduler.schedule_batch(
+            [make_request(3, 10)], strategy="distserve"
+        )
+        self.assertEqual(next_scheduled[0].Task.prefill_instance, "p2")
+
+
+class DecodeDistServeSchedulerTest(unittest.IsolatedAsyncioTestCase):
+    async def test_selects_and_reserves_least_effective_load(self):
+        store = make_store(decodes=["d2", "d1"])
+        store._instance_table = {
+            "d1": Instance("d1", running_reqs=1, online=True),
+            "d2": Instance("d2", waiting_reqs=1, online=True),
+        }
+        scheduler = DecodeScheduler(store)
+
+        first = await scheduler.schedule_async(make_request(1), strategy="distserve")
+        second = await scheduler.schedule_async(make_request(2), strategy="distserve")
+
+        self.assertEqual(first, "d1")
+        self.assertEqual(second, "d2")
+
 
 class RequestBatcherSwitchTest(unittest.IsolatedAsyncioTestCase):
     async def test_switch_resets_only_pending_requests(self):
@@ -162,6 +225,14 @@ class RequestBatcherSwitchTest(unittest.IsolatedAsyncioTestCase):
             shared_storage.set_prefill_scheduler_strategy(previous)
             await batcher.running_tasks_map["2"][0]
 
+    async def test_distserve_disables_prefill_preemption(self):
+        batcher = RequestBatcher(default_strategy="distserve")
+        task = asyncio.create_task(asyncio.sleep(0))
+        batcher.running_tasks_map["1"] = (task, make_request(1, 4096), 0.0)
+        await batcher.preempt_heavy_requests()
+        self.assertIn("1", batcher.running_tasks_map)
+        await task
+
 
 class GatewayConsoleStrategyTest(unittest.TestCase):
     def test_completion_words_are_role_specific_and_stable(self):
@@ -169,8 +240,10 @@ class GatewayConsoleStrategyTest(unittest.TestCase):
         decode_words = gateway_completion_words("decode")
         self.assertIn("show", prefill_words)
         self.assertIn("least_load", prefill_words)
+        self.assertIn("distserve", prefill_words)
         self.assertNotIn("slo_tpot_admission", prefill_words)
         self.assertIn("slo_tpot_admission", decode_words)
+        self.assertIn("distserve", decode_words)
         self.assertNotIn("pso_new", decode_words)
         self.assertEqual(len(prefill_words), len(set(prefill_words)))
         self.assertEqual(len(decode_words), len(set(decode_words)))
@@ -228,6 +301,17 @@ class GatewayConsoleStrategyTest(unittest.TestCase):
         with patch.dict(sys.modules, {"uvicorn": fake_uvicorn}):
             run_gateway_server(Mock(), "127.0.0.1", 8081, "decode", make_store(), True)
         fake_server.run.assert_called_once_with()
+
+    def test_entrypoint_arguments_accept_distserve(self):
+        prefill_source = (ROOT_DIR / "entrypoints" / "gatewayP.py").read_text(
+            encoding="utf-8"
+        )
+        decode_source = (ROOT_DIR / "entrypoints" / "gatewayD.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn('"--distserve-prefill-batch-tokens"', prefill_source)
+        self.assertIn('"distserve"', prefill_source)
+        self.assertIn('"distserve"', decode_source)
 
 
 if __name__ == "__main__":

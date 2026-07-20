@@ -265,6 +265,12 @@ class SchedulingEngine:
             # 应用调度结果
             async with self.b.lock:
                 if schedule_version != self.b.strategy_version:
+                    for scheduled_request in scheduled_plan:
+                        storage.release_distserve_reservation(
+                            "prefill",
+                            scheduled_request.Request_ID,
+                            getattr(scheduled_request.Task, "prefill_instance", ""),
+                        )
                     _log_timeline_event(
                         "STALE_SCHEDULE_DISCARDED",
                         scheduled_strategy=schedule_strategy,
@@ -289,6 +295,9 @@ class SchedulingEngine:
                         obj = id_map[rid_key]
                         r.Task.batch_order = obj.Task.batch_order
                         r.Task.prefill_instance = obj.Task.prefill_instance
+                        r.Task.scheduler_metadata = deepcopy(
+                            getattr(obj.Task, "scheduler_metadata", {}) or {}
+                        )
                         for attr in (
                             "slo_schedule_id",
                             "slo_planned_batch_order",
@@ -305,6 +314,15 @@ class SchedulingEngine:
                             if hasattr(obj.Task, attr):
                                 setattr(r.Task, attr, getattr(obj.Task, attr))
                         valid_reqs.append(r)
+
+                valid_request_ids = {_rid_key(request.Request_ID) for request in valid_reqs}
+                for scheduled_request in scheduled_plan:
+                    if _rid_key(scheduled_request.Request_ID) not in valid_request_ids:
+                        storage.release_distserve_reservation(
+                            "prefill",
+                            scheduled_request.Request_ID,
+                            getattr(scheduled_request.Task, "prefill_instance", ""),
+                        )
 
                 # 排序：batch_order > 0 的优先，同批次按到达时间
                 self.b.pending_queue.sort(key=lambda x: (
@@ -936,6 +954,9 @@ class MonitoringEngine:
             v_rate = sum(self.b.stats_window) / len(self.b.stats_window)
             current_strategy = self.b.scheduler_mgr.strategy
 
+            if current_strategy == "distserve":
+                return
+
             # 策略切换逻辑
             if current_strategy == "round_robin" and v_rate > self.b.violation_threshold:
                 self.b.scheduler_mgr.strategy = self.b.optimized_strategy
@@ -1043,6 +1064,8 @@ class RequestBatcher:
         self.adaptive_switch = bool(getattr(storage, "ENABLE_ADAPTIVE_SWITCH", self.adaptive_switch))
         self.optimized_strategy = getattr(storage, "SCHEDULER_STRATEGY", self.optimized_strategy)
         self.scheduler_mgr.strategy = "round_robin" if self.profile_mode else self.optimized_strategy
+        if self.scheduler_mgr.strategy == "distserve":
+            self.adaptive_switch = False
         self.dispatch_engine.configure_from_storage()
 
         self.worker_tasks.append(
@@ -1070,8 +1093,23 @@ class RequestBatcher:
             self.last_plan = []
 
             for request in self.pending_queue:
+                storage.release_distserve_reservation(
+                    "prefill",
+                    request.Request_ID,
+                    getattr(request.Task, "prefill_instance", ""),
+                )
                 request.Task.batch_order = -1
                 request.Task.prefill_instance = ""
+                metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
+                metadata.pop("distserve", None)
+                request.Task.scheduler_metadata = metadata
+
+            if strategy == "distserve":
+                self.pending_queue.sort(
+                    key=lambda request: float(
+                        getattr(request.Service, "arrival_time", 0.0) or 0.0
+                    )
+                )
 
             pending_count = len(self.pending_queue)
             if pending_count:
@@ -1081,7 +1119,7 @@ class RequestBatcher:
                 "previous": previous,
                 "current": strategy,
                 "pending_count": pending_count,
-                "adaptive_switch": self.adaptive_switch,
+                "adaptive_switch": self.adaptive_switch and strategy != "distserve",
             }
 
     def switch_strategy_threadsafe(self, strategy: str, timeout: float = 10.0) -> Dict[str, Any]:
@@ -1093,6 +1131,8 @@ class RequestBatcher:
 
     async def preempt_heavy_requests(self):
         """抢占逻辑"""
+        if self.scheduler_mgr.strategy == "distserve":
+            return
         async with self.lock:
             now = time.time()
             targets = []
@@ -1373,6 +1413,7 @@ class RequestBatcher:
                 self.inflight_prefill_sent_time.pop(rid_key, None)
                 self.inflight_prefill_meta.pop(rid_key, None)
         finally:
+            storage.release_distserve_reservation("prefill", rid_key, instance)
             # 清理全局运行映射
             async with self.lock:
                 self.running_tasks_map.pop(rid_key, None)

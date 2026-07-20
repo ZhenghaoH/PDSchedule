@@ -10,11 +10,12 @@ from .link import InstanceLink
 
 class GatewayStoreManager:
     """存储管理"""
-    PREFILL_SCHEDULER_STRATEGIES = frozenset({"least_load", "round_robin", "pso_new"})
+    PREFILL_SCHEDULER_STRATEGIES = frozenset({"least_load", "round_robin", "pso_new", "distserve"})
     DECODE_SCHEDULER_STRATEGIES = frozenset({
         "round_robin",
         "lowest_generate_throughput",
         "slo_tpot_admission",
+        "distserve",
     })
     _instance = None
     _lock = threading.RLock()
@@ -77,6 +78,12 @@ class GatewayStoreManager:
                     self.TPOT_STEP_PREDICTOR_READY = False
                     self.TPOT_STEP_PREDICT_FUNC: Optional[Callable[[int, int], Awaitable[float]]] = None
                     self._decode_active_batches: Dict[str, Dict[str, Dict[str, Any]]] = {}
+                    self._distserve_reservations: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = {
+                        "prefill": {},
+                        "decode": {},
+                    }
+                    self.DIST_SERVE_RESERVATION_TTL = 120.0
+                    self.DIST_SERVE_PREFILL_BATCH_TOKENS = 2048
                     self._prefill_round_robin_index = 0
                     self._decode_round_robin_index = 0
 
@@ -220,6 +227,134 @@ class GatewayStoreManager:
             index = self._prefill_round_robin_index % len(active_instances)
             self._prefill_round_robin_index = (index + 1) % len(active_instances)
             return active_instances[index]
+
+    def _ensure_distserve_state_locked(self):
+        if not hasattr(self, "_distserve_reservations"):
+            self._distserve_reservations = {"prefill": {}, "decode": {}}
+        if not hasattr(self, "DIST_SERVE_RESERVATION_TTL"):
+            self.DIST_SERVE_RESERVATION_TTL = 120.0
+
+    def _cleanup_distserve_reservations_locked(self, now: Optional[float] = None):
+        self._ensure_distserve_state_locked()
+        current = time.time() if now is None else float(now)
+        ttl = max(1.0, float(self.DIST_SERVE_RESERVATION_TTL))
+        for role_reservations in self._distserve_reservations.values():
+            for instance_ip in list(role_reservations):
+                reservations = role_reservations[instance_ip]
+                for request_id in list(reservations):
+                    if current - float(reservations[request_id].get("created_at", current)) > ttl:
+                        reservations.pop(request_id, None)
+                if not reservations:
+                    role_reservations.pop(instance_ip, None)
+
+    def _distserve_effective_load_locked(self, role: str, instance_ip: str) -> int:
+        self._cleanup_distserve_reservations_locked()
+        instance = self._instance_table.get(instance_ip)
+        heartbeat_load = 0
+        if instance is not None:
+            heartbeat_load = max(0, int(getattr(instance, "running_reqs", 0) or 0))
+            heartbeat_load += max(0, int(getattr(instance, "waiting_reqs", 0) or 0))
+        reservations = self._distserve_reservations[role].get(instance_ip, {})
+        highest_target = max(
+            (int(item.get("target_load", 0)) for item in reservations.values()),
+            default=0,
+        )
+        return max(heartbeat_load, highest_target)
+
+    def get_distserve_effective_load(self, role: str, instance_ip: str) -> int:
+        if role not in {"prefill", "decode"}:
+            raise ValueError(f"Unsupported DistServe role: {role}")
+        with self._data_lock:
+            return self._distserve_effective_load_locked(role, instance_ip)
+
+    def reserve_distserve_batch(self, role: str, request_ids: List[Any]) -> str:
+        """Atomically select the least-loaded active instance and reserve a batch."""
+        if role not in {"prefill", "decode"}:
+            raise ValueError(f"Unsupported DistServe role: {role}")
+        request_keys = [str(request_id) for request_id in request_ids if str(request_id)]
+        if not request_keys:
+            return ""
+
+        with self._data_lock:
+            self._cleanup_distserve_reservations_locked()
+            role_reservations = self._distserve_reservations[role]
+            existing_instances = {
+                instance_ip
+                for instance_ip, reservations in role_reservations.items()
+                if any(request_id in reservations for request_id in request_keys)
+            }
+            if len(existing_instances) == 1:
+                existing_instance = next(iter(existing_instances))
+                if all(request_id in role_reservations[existing_instance] for request_id in request_keys):
+                    return existing_instance
+            if existing_instances:
+                raise ValueError("DistServe request batch contains conflicting reservations")
+
+            configured = self._prefill_objs if role == "prefill" else self._decode_objs
+            candidates = [
+                instance_ip
+                for instance_ip in configured
+                if self._instance_table.get(instance_ip)
+                and self._instance_table[instance_ip].online
+            ]
+            if not candidates:
+                return ""
+            selected = min(
+                candidates,
+                key=lambda instance_ip: (
+                    self._distserve_effective_load_locked(role, instance_ip),
+                    instance_ip,
+                ),
+            )
+            next_load = self._distserve_effective_load_locked(role, selected)
+            reservations = role_reservations.setdefault(selected, {})
+            created_at = time.time()
+            for offset, request_id in enumerate(request_keys, start=1):
+                reservations[request_id] = {
+                    "target_load": next_load + offset,
+                    "created_at": created_at,
+                }
+            return selected
+
+    def release_distserve_reservation(
+        self,
+        role: str,
+        request_id: Any,
+        instance_ip: str = "",
+    ) -> bool:
+        if role not in {"prefill", "decode"}:
+            raise ValueError(f"Unsupported DistServe role: {role}")
+        request_key = str(request_id)
+        with self._data_lock:
+            self._ensure_distserve_state_locked()
+            role_reservations = self._distserve_reservations[role]
+            candidates = [instance_ip] if instance_ip else list(role_reservations)
+            removed = False
+            for candidate in candidates:
+                reservations = role_reservations.get(candidate)
+                if not reservations:
+                    continue
+                removed = reservations.pop(request_key, None) is not None or removed
+                if not reservations:
+                    role_reservations.pop(candidate, None)
+            return removed
+
+    def confirm_distserve_heartbeat(self, role: str, instance_ip: str, reported_load: int):
+        """Drop reservations already reflected by a newer heartbeat snapshot."""
+        if role not in {"prefill", "decode"}:
+            raise ValueError(f"Unsupported DistServe role: {role}")
+        with self._data_lock:
+            self._cleanup_distserve_reservations_locked()
+            reservations = self._distserve_reservations[role].get(instance_ip, {})
+            confirmed = [
+                request_id
+                for request_id, item in reservations.items()
+                if int(item.get("target_load", 0)) <= max(0, int(reported_load))
+            ]
+            for request_id in confirmed:
+                reservations.pop(request_id, None)
+            if not reservations:
+                self._distserve_reservations[role].pop(instance_ip, None)
 
     def get_prefill_scheduler_strategy(self) -> str:
         with self._data_lock:
@@ -388,6 +523,9 @@ class GatewayStoreManager:
             instance.gpu_util_percent = 0.0
             instance.gpu_memory_util_percent = 0.0
             instance.last_updated = time.time()
+            self._ensure_distserve_state_locked()
+            self._distserve_reservations["prefill"].pop(instance_ip, None)
+            self._distserve_reservations["decode"].pop(instance_ip, None)
             self._remove_instance_links_locked(instance_ip)
             return True
 

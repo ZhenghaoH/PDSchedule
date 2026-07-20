@@ -32,6 +32,9 @@ class AsyncBaseScheduler:
             return self.storage.next_decode_round_robin()
         return self.lowest_generate_throughput()
 
+    def distserve(self, request: BaseRequest) -> str:
+        return self.storage.reserve_distserve_batch("decode", [request.Request_ID])
+
     def _decode_instance_generate_throughput(self, instance_ip: str) -> float:
         instance = self.storage.instance_table.get(instance_ip)
         if instance is None:
@@ -221,6 +224,8 @@ class AsyncBaseScheduler:
             return self.round_robin()
         if strategy == "lowest_generate_throughput":
             return self.lowest_generate_throughput()
+        if strategy == "distserve":
+            return self.distserve(request)
         logging.warning(
             "[Decode Scheduler] Unknown strategy %s; fallback to lowest_generate_throughput",
             strategy,

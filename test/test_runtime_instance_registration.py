@@ -12,6 +12,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from store.gateway.manager import GatewayStoreManager
+from store.gateway.instance import Instance
 import config.ADDRESS_CONFIG as address_config
 
 
@@ -22,6 +23,7 @@ class RuntimeInstanceRegistrationTest(unittest.TestCase):
         self.manager._prefill_objs = []
         self.manager._decode_objs = []
         self.manager._instance_table = {}
+        self.manager._link_table = {}
 
     def test_registers_nixl_metadata_without_static_topology(self) -> None:
         instance = self.manager.register_instance(
@@ -80,6 +82,31 @@ class RuntimeInstanceRegistrationTest(unittest.TestCase):
             self.manager.register_instance(
                 "10.0.0.5:7001", "prefill", "NixlConnector", "", 0, 0
             )
+
+    def test_distserve_reservation_covers_heartbeat_lag_and_can_be_released(self) -> None:
+        self.manager._decode_objs = ["d1", "d2"]
+        self.manager._instance_table = {
+            "d1": Instance("d1", online=True),
+            "d2": Instance("d2", online=True),
+        }
+
+        self.assertEqual(self.manager.reserve_distserve_batch("decode", ["r1"]), "d1")
+        self.assertEqual(self.manager.get_distserve_effective_load("decode", "d1"), 1)
+        self.assertEqual(self.manager.reserve_distserve_batch("decode", ["r2"]), "d2")
+        self.assertTrue(self.manager.release_distserve_reservation("decode", "r1", "d1"))
+        self.assertEqual(self.manager.get_distserve_effective_load("decode", "d1"), 0)
+
+    def test_distserve_heartbeat_confirms_reservation_and_offline_clears_it(self) -> None:
+        self.manager._prefill_objs = ["p1"]
+        self.manager._instance_table = {"p1": Instance("p1", online=True)}
+        self.manager.reserve_distserve_batch("prefill", ["r1", "r2"])
+
+        self.manager._instance_table["p1"].running_reqs = 1
+        self.manager.confirm_distserve_heartbeat("prefill", "p1", 1)
+        self.assertEqual(self.manager.get_distserve_effective_load("prefill", "p1"), 2)
+
+        self.assertTrue(self.manager.mark_instance_offline("p1"))
+        self.assertEqual(self.manager.get_distserve_effective_load("prefill", "p1"), 0)
 
 
 class PublicAddressConfigTest(unittest.TestCase):

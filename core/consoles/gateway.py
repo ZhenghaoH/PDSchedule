@@ -22,11 +22,12 @@ else:
         readline = None
 
 
-PREFILL_STRATEGIES = ("least_load", "round_robin", "pso_new")
+PREFILL_STRATEGIES = ("least_load", "round_robin", "pso_new", "distserve")
 DECODE_STRATEGIES = (
     "round_robin",
     "lowest_generate_throughput",
     "slo_tpot_admission",
+    "distserve",
 )
 COMMON_COMPLETION_WORDS = (
     "history",

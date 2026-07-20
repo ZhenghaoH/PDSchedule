@@ -22,6 +22,7 @@ async def _track_decode_stream(generator, storage: GatewayStoreManager, instance
             yield chunk
     finally:
         storage.remove_decode_active_request(instance, request_id)
+        storage.release_distserve_reservation("decode", request_id, instance)
 
 
 def _log_decode_instance_status(storage: GatewayStoreManager, selected_instance: str) -> None:
@@ -88,6 +89,13 @@ async def _select_decode_instance(storage: GatewayStoreManager, request: BaseReq
         raise HTTPException(status_code=503, detail="No active decode instance")
 
     request.Task.decode_instance = selected_decode
+    if strategy == "distserve":
+        metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
+        metadata["distserve_decode"] = {
+            "role": "decode",
+            "selected_instance": selected_decode,
+        }
+        request.Task.scheduler_metadata = metadata
     print(f"[Decode Schedule] strategy={strategy} selected={selected_decode}")
     _log_decode_instance_status(storage, selected_decode)
     return selected_decode
@@ -113,11 +121,12 @@ def _bind_and_validate_nixl_metadata(
 
 
 async def handle_completion_request(raw_request: Request, endpoint_type: str):
+    storage = GatewayStoreManager()
+    selected_decode = ""
     try:
         request_json = await raw_request.json()
         request = BaseRequest.recover_request(request_json, endpoint_type)
 
-        storage = GatewayStoreManager()
         if storage.USE_SYN:
             batch_result = await request_batcher.add_request(request)
             if batch_result.get("error"):
@@ -151,9 +160,17 @@ async def handle_completion_request(raw_request: Request, endpoint_type: str):
             raise http_exc
         return StreamingResponse(generator)
     except HTTPException:
+        if selected_decode:
+            storage.release_distserve_reservation(
+                "decode", getattr(request, "Request_ID", ""), selected_decode
+            )
         raise
     except Exception:
         exc_info = sys.exc_info()
+        if selected_decode:
+            storage.release_distserve_reservation(
+                "decode", getattr(request, "Request_ID", ""), selected_decode
+            )
         print("Error occurred in handle_completion_request")
         print(exc_info)
         raise HTTPException(status_code=500, detail=str(exc_info[1]))

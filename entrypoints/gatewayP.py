@@ -93,7 +93,7 @@ def parse_args():
         "--distserve-prefill-batch-tokens",
         type=int,
         default=DIST_SERVE_PREFILL_BATCH_TOKENS,
-        help="DistServe Prefill FCFS batch token limit (L_m).",
+        help="Deprecated compatibility option; direct-JSQ DistServe ignores this value.",
     )
 
     parser.add_argument(
@@ -170,9 +170,6 @@ def main():
         raise SystemExit("TTFT warmup requires --ttft-target or at least one --prefill instance")
     if not args.ttft_target and args.prefill:
         args.ttft_target = args.prefill[0]
-    if args.distserve_prefill_batch_tokens <= 0:
-        raise SystemExit("--distserve-prefill-batch-tokens must be greater than zero")
-
     # 初始化核心组件
     storage = GatewayStoreManager()
     storage.set_config(args.prefill, args.decode)
@@ -213,7 +210,8 @@ def main():
     logging.info("Prefill scheduler strategy: %s", args.prefill_scheduler_strategy)
     if args.prefill_scheduler_strategy == "distserve":
         logging.info(
-            "DistServe Prefill batch token limit (L_m): %d",
+            "DistServe Prefill uses immediate request-level JSQ; "
+            "--distserve-prefill-batch-tokens=%d is deprecated and ignored.",
             args.distserve_prefill_batch_tokens,
         )
     run_gateway_server(

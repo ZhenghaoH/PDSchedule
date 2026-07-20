@@ -76,6 +76,7 @@ class StartedPrefillBatch:
     instance_id: str
     start_ms: float
     end_ms: float
+    request_ids: List[str]
     completions: List[PrefillCompletion]
 
 
@@ -97,6 +98,7 @@ class PrefillInstanceState:
     prompt_throughput: float = 0.0
     batches: List[PrefillBatch] = field(default_factory=list)
     completed: Dict[str, PrefillCompletion] = field(default_factory=dict)
+    running_request_ids: set[str] = field(default_factory=set)
 
     def enqueue(self, request_id: str, arrival_ms: float, prompt_tokens: int) -> None:
         self.queue.append(
@@ -110,6 +112,13 @@ class PrefillInstanceState:
 
     def has_work(self) -> bool:
         return bool(self.queue)
+
+    def effective_request_load(self) -> int:
+        """Count unique queued and currently executing requests."""
+        return len({req.request_id for req in self.queue} | self.running_request_ids)
+
+    def complete_running_batch(self, request_ids: List[str]) -> None:
+        self.running_request_ids.difference_update(request_ids)
 
     def can_start_batch(self, now_ms: float) -> bool:
         return bool(self.queue) and self.available_time_ms <= now_ms and self.queue[0].arrival_ms <= now_ms
@@ -204,6 +213,7 @@ class PrefillInstanceState:
                 completed_request_ids=[item.request_id for item in completions],
             )
         )
+        self.running_request_ids = set(request_ids)
         return completions
 
     def start_next_batch(self, now_ms: float, slo_ttft_ms: float) -> Optional[StartedPrefillBatch]:
@@ -217,6 +227,7 @@ class PrefillInstanceState:
             instance_id=self.instance_id,
             start_ms=batch.start_ms,
             end_ms=batch.end_ms,
+            request_ids=list(batch.request_ids),
             completions=completions,
         )
 
@@ -242,6 +253,24 @@ class SLOAwarePrefillPoolSimulator:
         best = self._select_instance(arrival_ms, slo_ttft_ms)
         best.enqueue(request_id, arrival_ms, prompt_tokens)
         return best.instance_id
+
+    def enqueue_to_instance(
+        self,
+        instance_id: str,
+        request_id: str,
+        arrival_ms: float,
+        prompt_tokens: int,
+    ) -> None:
+        self.get_instance(instance_id).enqueue(request_id, arrival_ms, prompt_tokens)
+
+    def get_instance(self, instance_id: str) -> PrefillInstanceState:
+        for instance in self.instances:
+            if instance.instance_id == instance_id:
+                return instance
+        raise ValueError(f"unknown prefill instance: {instance_id}")
+
+    def complete_batch(self, instance_id: str, request_ids: List[str]) -> None:
+        self.get_instance(instance_id).complete_running_batch(request_ids)
 
     def _select_instance(self, arrival_ms: float, slo_ttft_ms: float) -> PrefillInstanceState:
         if self.policy == "round_robin":
@@ -269,6 +298,7 @@ class SLOAwarePrefillPoolSimulator:
             inst = min(candidates, key=lambda item: (item.available_time_ms, item.queue[0].arrival_ms))
             now_ms = max(inst.available_time_ms, inst.queue[0].arrival_ms)
             completions.extend(inst.run_next_batch(now_ms, slo_ttft_ms))
+            inst.complete_running_batch(inst.batches[-1].request_ids)
         return completions
 
     def start_ready_batches(self, now_ms: float, slo_ttft_ms: float) -> List[StartedPrefillBatch]:
@@ -311,6 +341,14 @@ class DecodeInstanceState:
     def load_score(self) -> int:
         running_batch_size = len(self.running_step.request_ids) if self.running_step is not None else 0
         return len(self.active) + len(self.waiting) + running_batch_size
+
+    def effective_request_load(self) -> int:
+        """Count each active/waiting/running request exactly once."""
+        request_ids = {req.request_id for req in self.active}
+        request_ids.update(req.request_id for req in self.waiting)
+        if self.running_step is not None:
+            request_ids.update(self.running_step.request_ids)
+        return len(request_ids)
 
     def enqueue(self, req: DecodeRuntimeRequest) -> None:
         self.waiting.append(req)
@@ -477,6 +515,23 @@ class SLOAwareDecodePoolSimulator:
         target = self._select_instance(req, slo_tpot_ms)
         target.enqueue(req)
         return target.instance_id
+
+    def enqueue_to_instance(
+        self,
+        instance_id: str,
+        request_id: str,
+        kv_ready_ms: float,
+        prompt_tokens: int,
+        response_tokens: int,
+    ) -> None:
+        req = DecodeRuntimeRequest(request_id, kv_ready_ms, prompt_tokens, response_tokens)
+        self.get_instance(instance_id).enqueue(req)
+
+    def get_instance(self, instance_id: str) -> DecodeInstanceState:
+        for instance in self.instances:
+            if instance.instance_id == instance_id:
+                return instance
+        raise ValueError(f"unknown decode instance: {instance_id}")
 
     def _select_instance(self, req: DecodeRuntimeRequest, slo_tpot_ms: float) -> DecodeInstanceState:
         if self.policy == "round_robin":

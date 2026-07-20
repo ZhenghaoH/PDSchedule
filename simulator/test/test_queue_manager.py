@@ -13,6 +13,13 @@ if str(ROOT_DIR) not in sys.path:
 from simulator.gateway.queue_manager import QueueManager  # noqa: E402
 from simulator.dataset.request_workload import GeneratedRequest, generate_requests  # noqa: E402
 from simulator.gateway.scheduling_strategies import DirectSchedulingStrategy, PSOSchedulingStrategy, QueueRequestView  # noqa: E402
+from simulator.gateway.slo_instance_scheduler import (  # noqa: E402
+    DecodeInstanceState,
+    PrefillInstanceState,
+    TPOTProfile,
+    TTFTProfile,
+)
+from simulator.gateway.vllm_continuous_batching import DecodeRuntimeRequest, DecodeStep  # noqa: E402
 from simulator.instance.vllm_execution_calculator import VllmQueuedRequestSnapshot, VllmQueueSnapshot  # noqa: E402
 
 
@@ -204,6 +211,58 @@ class QueueManagerTest(unittest.TestCase):
 
         self.assertEqual(no_snapshot.planned_requests[0].planned_finish_ms, 100.0)
         self.assertEqual(with_snapshot.planned_requests[0].planned_finish_ms, 1600.0)
+
+
+class DistServeInstanceLoadTest(unittest.TestCase):
+    def test_prefill_load_counts_unique_queued_and_running_requests(self) -> None:
+        instance = PrefillInstanceState("P1", TTFTProfile(0.001, 0.0))
+        instance.enqueue("req-1", 0.0, 128)
+        instance.enqueue("req-2", 0.0, 256)
+        instance.running_request_ids = {"req-1", "req-3"}
+
+        self.assertEqual(instance.effective_request_load(), 3)
+
+    def test_prefill_load_is_released_only_after_running_batch_finishes(self) -> None:
+        instance = PrefillInstanceState(
+            "P1",
+            TTFTProfile(0.001, 0.0),
+            max_num_batched_tokens=2048,
+        )
+        instance.enqueue("req-1", 0.0, 1024)
+
+        batch = instance.start_next_batch(0.0, 6000.0)
+
+        self.assertIsNotNone(batch)
+        self.assertEqual(instance.effective_request_load(), 1)
+        self.assertFalse(instance.queue)
+
+        instance.complete_running_batch(batch.request_ids)
+
+        self.assertEqual(instance.effective_request_load(), 0)
+
+    def test_chunked_prefill_remains_in_load_between_2048_token_steps(self) -> None:
+        instance = PrefillInstanceState(
+            "P1",
+            TTFTProfile(0.001, 0.0),
+            max_num_batched_tokens=2048,
+        )
+        instance.enqueue("long", 0.0, 3000)
+
+        batch = instance.start_next_batch(0.0, 6000.0)
+        instance.complete_running_batch(batch.request_ids)
+
+        self.assertEqual(instance.effective_request_load(), 1)
+        self.assertEqual(instance.queue[0].remaining_tokens, 952)
+
+    def test_decode_load_does_not_double_count_running_active_requests(self) -> None:
+        instance = DecodeInstanceState("D1", TPOTProfile(0.0, 0.0, 0.0, 0.001), max_active=8)
+        active = DecodeRuntimeRequest("req-1", 0.0, 128, 8)
+        waiting = DecodeRuntimeRequest("req-2", 10.0, 256, 8)
+        instance.active.append(active)
+        instance.waiting.append(waiting)
+        instance.running_step = DecodeStep("D1", 0.0, 1.0, 1, ["req-1"])
+
+        self.assertEqual(instance.effective_request_load(), 2)
 
 
 if __name__ == "__main__":

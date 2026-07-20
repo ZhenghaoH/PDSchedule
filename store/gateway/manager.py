@@ -82,7 +82,7 @@ class GatewayStoreManager:
                         "prefill": {},
                         "decode": {},
                     }
-                    self.DIST_SERVE_RESERVATION_TTL = 120.0
+                    self.DIST_SERVE_RESERVATION_TTL = 240.0
                     self.DIST_SERVE_PREFILL_BATCH_TOKENS = 2048
                     self._prefill_round_robin_index = 0
                     self._decode_round_robin_index = 0
@@ -232,7 +232,7 @@ class GatewayStoreManager:
         if not hasattr(self, "_distserve_reservations"):
             self._distserve_reservations = {"prefill": {}, "decode": {}}
         if not hasattr(self, "DIST_SERVE_RESERVATION_TTL"):
-            self.DIST_SERVE_RESERVATION_TTL = 120.0
+            self.DIST_SERVE_RESERVATION_TTL = 240.0
 
     def _cleanup_distserve_reservations_locked(self, now: Optional[float] = None):
         self._ensure_distserve_state_locked()
@@ -340,11 +340,18 @@ class GatewayStoreManager:
             return removed
 
     def confirm_distserve_heartbeat(self, role: str, instance_ip: str, reported_load: int):
-        """Drop reservations already reflected by a newer heartbeat snapshot."""
+        """Reconcile reservations with heartbeat state.
+
+        Prefill reservations are request-level JSQ bookkeeping and remain until
+        the request completion path releases them. Decode keeps the original
+        heartbeat-confirmation behavior.
+        """
         if role not in {"prefill", "decode"}:
             raise ValueError(f"Unsupported DistServe role: {role}")
         with self._data_lock:
             self._cleanup_distserve_reservations_locked()
+            if role == "prefill":
+                return
             reservations = self._distserve_reservations[role].get(instance_ip, {})
             confirmed = [
                 request_id

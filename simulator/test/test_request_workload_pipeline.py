@@ -4,6 +4,8 @@ from __future__ import annotations
 import sys
 import tempfile
 import unittest
+from argparse import Namespace
+from collections import deque
 from pathlib import Path
 
 
@@ -13,9 +15,116 @@ if str(ROOT_DIR) not in sys.path:
 
 from simulator.dataset.request_workload import generate_requests, load_burstgpt_request_tokens, requests_to_dicts  # noqa: E402
 from simulator.experiment.pipeline import load_latest_result, run_comparison, save_latest_result  # noqa: E402
+from simulator.controller.joint_controller_instance_simulation import (  # noqa: E402
+    DIST_SERVE_DIRECT_PREFILL_BATCH_TOKENS,
+    POLICIES,
+    simulate,
+    take_distserve_prefill_batch,
+)
 
 
 class RequestWorkloadPipelineTest(unittest.TestCase):
+    def test_distserve_is_available_in_joint_comparison(self) -> None:
+        self.assertIn("distserve", POLICIES)
+        self.assertIn("distserve_batched", POLICIES)
+
+    def test_distserve_lm_batching_is_fcfs_and_does_not_skip(self) -> None:
+        pending = deque(
+            [
+                {"request_id": "req-1", "prompt_tokens": 1000},
+                {"request_id": "req-2", "prompt_tokens": 1200},
+                {"request_id": "req-3", "prompt_tokens": 500},
+            ]
+        )
+
+        first = take_distserve_prefill_batch(pending, 2048)
+        second = take_distserve_prefill_batch(pending, 2048)
+
+        self.assertEqual([item["request_id"] for item in first], ["req-1"])
+        self.assertEqual([item["request_id"] for item in second], ["req-2", "req-3"])
+
+    def test_distserve_request_at_lm_or_above_runs_alone(self) -> None:
+        pending = deque(
+            [
+                {"request_id": "long", "prompt_tokens": 2048},
+                {"request_id": "short", "prompt_tokens": 64},
+            ]
+        )
+
+        batch = take_distserve_prefill_batch(pending, 2048)
+
+        self.assertEqual([item["request_id"] for item in batch], ["long"])
+        self.assertEqual(pending[0]["request_id"], "short")
+
+    def _distserve_simulation_args(self, dataset: Path, policy: str) -> Namespace:
+        return Namespace(
+            dataset=dataset,
+            limit=None,
+            scenario="dynamic",
+            policy=policy,
+            qps=None,
+            time_scale=1.0,
+            slo_ttft_ms=6000.0,
+            slo_tpot_ms=40.0,
+            slo_e2e_ms=21500.0,
+            max_num_batched_tokens=4096,
+            distserve_prefill_batch_tokens=2048,
+            local_bandwidth_mbps=36000.0,
+            cross_bandwidth_mbps=1000.0,
+            compress_factor=1.0,
+        )
+
+    def test_distserve_batched_joint_simulation_keeps_gateway_lm_batching(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dataset = Path(tmpdir) / "requests.csv"
+            dataset.write_text(
+                "Timestamp,Request tokens,Response tokens\n"
+                "0,1000,2\n"
+                "0,800,2\n"
+                "0,400,2\n"
+                "0,2500,2\n",
+                encoding="utf-8",
+            )
+            result = simulate(self._distserve_simulation_args(dataset, "distserve_batched"))
+
+        self.assertEqual(result["requests"], 4)
+        self.assertEqual(result["distserve"]["mode"], "gateway_fcfs_batching")
+        self.assertEqual(result["distserve"]["prefill_max_num_batched_tokens"], 4096)
+        self.assertEqual(len(result["request_records"]), 4)
+        self.assertEqual(sum(result["pair_counts"].values()), 4)
+        self.assertEqual(
+            sum(result["decode_instance_counts"].values()),
+            4,
+        )
+
+    def test_distserve_direct_jsq_uses_configured_vllm_budget_without_gateway_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dataset = Path(tmpdir) / "requests.csv"
+            dataset.write_text(
+                "Timestamp,Request tokens,Response tokens\n"
+                "0,1000,2\n"
+                "0,800,2\n"
+                "0,400,2\n"
+                "0,2500,2\n",
+                encoding="utf-8",
+            )
+            result = simulate(self._distserve_simulation_args(dataset, "distserve"))
+
+        self.assertEqual(result["requests"], 4)
+        self.assertEqual(result["distserve"]["mode"], "direct_jsq_vllm_batching")
+        self.assertEqual(
+            result["distserve"]["prefill_max_num_batched_tokens"],
+            DIST_SERVE_DIRECT_PREFILL_BATCH_TOKENS,
+        )
+        self.assertNotIn("duration_s", result)
+        self.assertNotIn("prefill_batches", result)
+        self.assertNotIn("gateway_batch_count", result["distserve"])
+        self.assertNotIn("gateway_batches", result["distserve"])
+        self.assertEqual(sum(result["prefill_instance_counts"].values()), 4)
+        self.assertEqual(sorted(result["prefill_instance_counts"].values()), [1, 1, 1, 1])
+        self.assertEqual(sum(result["decode_instance_counts"].values()), 4)
+        self.assertEqual(len(result["request_records"]), 4)
+
     def test_seed_reproduces_same_50_requests(self) -> None:
         first = generate_requests(seed=42)
         second = generate_requests(seed=42)

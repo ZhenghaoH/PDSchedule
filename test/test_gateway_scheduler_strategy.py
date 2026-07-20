@@ -139,7 +139,7 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scheduled, [request])
         self.assertEqual(policy, "FULL_OR_IDLE_WAIT")
 
-    async def test_distserve_batches_only_fcfs_prefix_up_to_lm(self):
+    async def test_distserve_dispatches_every_request_with_independent_jsq(self):
         requests = [
             make_request(1, 1000),
             make_request(2, 1000),
@@ -150,37 +150,45 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(policy, "IMMEDIATE")
-        self.assertEqual([request.Request_ID for request in scheduled], [1, 2])
-        self.assertEqual({request.Task.prefill_instance for request in scheduled}, {"p1"})
+        self.assertEqual([request.Request_ID for request in scheduled], [1, 2, 3])
         self.assertEqual(
-            scheduled[0].Task.scheduler_metadata["distserve"]["batch_tokens"],
-            2000,
+            [request.Task.prefill_instance for request in scheduled],
+            ["p1", "p2", "p1"],
         )
-        self.assertEqual(requests[2].Task.batch_order, -1)
+        self.assertTrue(all(request.Task.batch_order == 1 for request in scheduled))
+        self.assertTrue(
+            all(
+                request.Task.scheduler_metadata["distserve"]["dispatch_mode"] == "direct_jsq"
+                for request in scheduled
+            )
+        )
+        self.assertNotIn("batch_tokens", scheduled[0].Task.scheduler_metadata["distserve"])
 
-    async def test_distserve_restores_fcfs_order_from_arrival_time(self):
+    async def test_distserve_does_not_reorder_or_group_pending_requests(self):
         later = make_request(2, 1000)
         earlier = make_request(1, 1000)
         scheduled, _ = await self.scheduler.schedule_batch(
             [later, earlier], strategy="distserve"
         )
-        self.assertEqual([request.Request_ID for request in scheduled], [1, 2])
+        self.assertEqual([request.Request_ID for request in scheduled], [2, 1])
         self.assertEqual(
-            [request.Task.slo_plan_position for request in scheduled], [0, 1]
+            [request.Task.prefill_instance for request in scheduled], ["p1", "p2"]
         )
 
-    async def test_distserve_sends_long_fcfs_request_alone_and_reserves_jsq(self):
+    async def test_distserve_prompt_length_does_not_affect_direct_jsq(self):
         long_request = make_request(1, 2048)
         scheduled, _ = await self.scheduler.schedule_batch(
             [long_request, make_request(2, 10)], strategy="distserve"
         )
-        self.assertEqual([request.Request_ID for request in scheduled], [1])
-        self.assertEqual(scheduled[0].Task.prefill_instance, "p1")
+        self.assertEqual([request.Request_ID for request in scheduled], [1, 2])
+        self.assertEqual(
+            [request.Task.prefill_instance for request in scheduled], ["p1", "p2"]
+        )
 
         next_scheduled, _ = await self.scheduler.schedule_batch(
             [make_request(3, 10)], strategy="distserve"
         )
-        self.assertEqual(next_scheduled[0].Task.prefill_instance, "p2")
+        self.assertEqual(next_scheduled[0].Task.prefill_instance, "p1")
 
 
 class DecodeDistServeSchedulerTest(unittest.IsolatedAsyncioTestCase):
@@ -200,6 +208,16 @@ class DecodeDistServeSchedulerTest(unittest.IsolatedAsyncioTestCase):
 
 
 class RequestBatcherSwitchTest(unittest.IsolatedAsyncioTestCase):
+    async def test_distserve_arrival_triggers_immediately_in_batch_size_mode(self):
+        batcher = RequestBatcher(default_strategy="distserve")
+        batcher.trigger_mode = "BATCH_SIZE"
+        batcher.syn_batch_size = 30
+        batcher.pending_queue.append(make_request(1))
+
+        batcher._unified_trigger(is_new_arrival=True)
+
+        self.assertTrue(batcher.schedule_event.is_set())
+
     async def test_switch_resets_only_pending_requests(self):
         batcher = RequestBatcher(default_strategy="pso_new")
         pending = make_request(1)

@@ -96,14 +96,39 @@ class RuntimeInstanceRegistrationTest(unittest.TestCase):
         self.assertTrue(self.manager.release_distserve_reservation("decode", "r1", "d1"))
         self.assertEqual(self.manager.get_distserve_effective_load("decode", "d1"), 0)
 
-    def test_distserve_heartbeat_confirms_reservation_and_offline_clears_it(self) -> None:
+    def test_prefill_distserve_keeps_reservation_until_explicit_release(self) -> None:
         self.manager._prefill_objs = ["p1"]
         self.manager._instance_table = {"p1": Instance("p1", online=True)}
         self.manager.reserve_distserve_batch("prefill", ["r1", "r2"])
 
-        self.manager._instance_table["p1"].running_reqs = 1
-        self.manager.confirm_distserve_heartbeat("prefill", "p1", 1)
+        self.manager._instance_table["p1"].running_reqs = 2
+        self.manager.confirm_distserve_heartbeat("prefill", "p1", 2)
+        self.assertEqual(
+            set(self.manager._distserve_reservations["prefill"]["p1"]),
+            {"r1", "r2"},
+        )
         self.assertEqual(self.manager.get_distserve_effective_load("prefill", "p1"), 2)
+        self.assertEqual(self.manager.DIST_SERVE_RESERVATION_TTL, 240.0)
+
+        self.assertTrue(self.manager.release_distserve_reservation("prefill", "r1", "p1"))
+        self.assertTrue(self.manager.release_distserve_reservation("prefill", "r2", "p1"))
+        self.manager._instance_table["p1"].running_reqs = 0
+        self.assertEqual(self.manager.get_distserve_effective_load("prefill", "p1"), 0)
+
+    def test_decode_distserve_still_confirms_reservation_from_heartbeat(self) -> None:
+        self.manager._decode_objs = ["d1"]
+        self.manager._instance_table = {"d1": Instance("d1", online=True)}
+        self.manager.reserve_distserve_batch("decode", ["r1"])
+
+        self.manager._instance_table["d1"].running_reqs = 1
+        self.manager.confirm_distserve_heartbeat("decode", "d1", 1)
+
+        self.assertNotIn("d1", self.manager._distserve_reservations["decode"])
+
+    def test_distserve_offline_clears_prefill_reservations(self) -> None:
+        self.manager._prefill_objs = ["p1"]
+        self.manager._instance_table = {"p1": Instance("p1", online=True)}
+        self.manager.reserve_distserve_batch("prefill", ["r1", "r2"])
 
         self.assertTrue(self.manager.mark_instance_offline("p1"))
         self.assertEqual(self.manager.get_distserve_effective_load("prefill", "p1"), 0)

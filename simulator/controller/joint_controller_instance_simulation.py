@@ -65,7 +65,15 @@ PROFILE_ROOT = Path(__file__).resolve().parents[1] / "profile"
 DEFAULT_RESULT = Path(__file__).resolve().parents[1] / "result" / "latest_joint_result.json"
 DEFAULT_COMPARISON_RESULT = Path(__file__).resolve().parents[1] / "result" / "latest_joint_comparison.json"
 DEFAULT_COMPARISON_FIGURE = Path(__file__).resolve().parents[1] / "result" / "latest_joint_comparison.png"
-POLICIES = ("pso_slo", "round_robin", "least_load", "adaptive_variance")
+POLICIES = (
+    "pso_slo",
+    "round_robin",
+    "least_load",
+    "adaptive_variance",
+    "distserve_batched",
+    "distserve",
+)
+DIST_SERVE_DIRECT_PREFILL_BATCH_TOKENS = 4096
 
 
 @dataclass
@@ -87,6 +95,7 @@ class RequestRecord:
     ttft_met: bool
     tpot_met: bool
     e2e_met: bool
+    all_slo_met: bool
 
 
 class RequestRanker:
@@ -160,7 +169,55 @@ def instance_policies_for_controller_policy(policy: str) -> Tuple[str, str]:
         return "slo_aware", "slo_aware_least_load_safe"
     if policy in ("round_robin", "least_load"):
         return policy, policy
+    if policy in ("distserve", "distserve_batched"):
+        # DistServe performs global instance selection in the gateway simulation.
+        return "slo_aware", "slo_aware"
     raise ValueError(f"unknown policy: {policy}")
+
+
+def take_distserve_prefill_batch(pending: deque, max_batch_tokens: int) -> List[Dict]:
+    """Pop one FCFS DistServe logical batch from the gateway queue.
+
+    A head request whose prompt is at least L_m runs alone. Otherwise requests
+    are admitted in arrival order until the next one would exceed L_m.
+    """
+    if not pending:
+        return []
+    limit = max(1, int(max_batch_tokens))
+    first_tokens = int(pending[0]["prompt_tokens"])
+    if first_tokens >= limit:
+        return [pending.popleft()]
+    batch: List[Dict] = []
+    total_tokens = 0
+    while pending:
+        next_tokens = int(pending[0]["prompt_tokens"])
+        if batch and total_tokens + next_tokens > limit:
+            break
+        batch.append(pending.popleft())
+        total_tokens += next_tokens
+        if total_tokens >= limit:
+            break
+    return batch
+
+
+def select_distserve_prefill_instance(prefill_pools) -> Tuple[str, str]:
+    candidates = (
+        (instance.effective_request_load(), instance.instance_id, pool_name)
+        for pool_name, pool in prefill_pools.items()
+        for instance in pool.instances
+    )
+    _load, instance_id, pool_name = min(candidates)
+    return pool_name, instance_id
+
+
+def select_distserve_decode_instance(decode_pools) -> Tuple[str, str]:
+    candidates = (
+        (instance.effective_request_load(), instance.instance_id, pool_name)
+        for pool_name, pool in decode_pools.items()
+        for instance in pool.instances
+    )
+    _load, instance_id, pool_name = min(candidates)
+    return pool_name, instance_id
 
 
 def build_prefill_pools(max_num_batched_tokens: int, instance_policy: str):
@@ -340,7 +397,12 @@ def simulate(args: argparse.Namespace) -> Dict:
     time_scale = args.time_scale if args.time_scale else (100.0 if args.scenario == "burst" else 1.0)
     qps = args.qps if args.qps and args.qps > 0 else None
     prefill_instance_policy, decode_instance_policy = instance_policies_for_controller_policy(args.policy)
-    prefill_pools = build_prefill_pools(args.max_num_batched_tokens, prefill_instance_policy)
+    prefill_max_num_batched_tokens = (
+        DIST_SERVE_DIRECT_PREFILL_BATCH_TOKENS
+        if args.policy == "distserve"
+        else args.max_num_batched_tokens
+    )
+    prefill_pools = build_prefill_pools(prefill_max_num_batched_tokens, prefill_instance_policy)
     decode_pools = build_decode_pools(decode_instance_policy)
     prefill_profiles = load_prefill_profiles()
     decode_profiles = load_decode_profiles()
@@ -361,6 +423,8 @@ def simulate(args: argparse.Namespace) -> Dict:
     event_counts: Counter[str] = Counter()
     prefill_completions = {}
     decode_completions = {}
+    distserve_pending: deque = deque()
+    distserve_dispatch_scheduled = False
     events = []
 
     def push_event(time_ms: float, event_type: str, payload: Dict) -> None:
@@ -376,6 +440,7 @@ def simulate(args: argparse.Namespace) -> Dict:
                 {
                     "pool_name": pool_name,
                     "instance_id": batch.instance_id,
+                    "request_ids": batch.request_ids,
                     "completions": batch.completions,
                 },
             )
@@ -391,7 +456,7 @@ def simulate(args: argparse.Namespace) -> Dict:
                 },
             )
 
-    def schedule_kv_transfer(request_id: str, prompt_tokens: int, p_name: str, d_name: str, ready_ms: float) -> None:
+    def schedule_kv_transfer(request_id: str, prompt_tokens: int, p_name: str, d_name: str, ready_ms: float) -> float:
         bandwidth = link_bandwidth_mbps(p_name, d_name, args.local_bandwidth_mbps, args.cross_bandwidth_mbps)
         transfer_ms = kv_transfer_ms(prompt_tokens, bandwidth, args.compress_factor)
         link_key = f"{p_name}->{d_name}"
@@ -411,6 +476,7 @@ def simulate(args: argparse.Namespace) -> Dict:
         }
         push_event(transfer_start, "kv_start", payload)
         push_event(transfer_end, "kv_done", payload)
+        return transfer_end
 
     raw_requests = list(iter_dataset(args.dataset, args.limit, qps, time_scale))
     request_by_id = {rid: (arrival, prompt, response) for rid, arrival, prompt, response in raw_requests}
@@ -434,6 +500,26 @@ def simulate(args: argparse.Namespace) -> Dict:
             request_id = payload["request_id"]
             prompt_tokens = payload["prompt_tokens"]
             response_tokens = payload["response_tokens"]
+            if args.policy == "distserve_batched":
+                distserve_pending.append(payload)
+                if not distserve_dispatch_scheduled:
+                    distserve_dispatch_scheduled = True
+                    push_event(now_ms, "distserve_dispatch", {})
+                continue
+
+            if args.policy == "distserve":
+                p_name, instance_id = select_distserve_prefill_instance(prefill_pools)
+                selected_pairs[request_id] = (p_name, "")
+                prefill_pools[p_name].enqueue_to_instance(
+                    instance_id,
+                    request_id,
+                    now_ms,
+                    prompt_tokens,
+                )
+                prefill_instance_counts[instance_id] += 1
+                start_prefill_ready(p_name, now_ms)
+                continue
+
             prefill_loads = normalized_prefill_loads(prefill_pools, now_ms)
             decode_loads = normalized_decode_loads(decode_pools)
             req_rank = prompt_ranker.rank_after_update(prompt_tokens)
@@ -474,18 +560,57 @@ def simulate(args: argparse.Namespace) -> Dict:
             start_prefill_ready(p_name, now_ms)
             continue
 
+        if event_type == "distserve_dispatch":
+            distserve_dispatch_scheduled = False
+            batch = take_distserve_prefill_batch(
+                distserve_pending,
+                args.distserve_prefill_batch_tokens,
+            )
+            if batch:
+                p_name, instance_id = select_distserve_prefill_instance(prefill_pools)
+                for request in batch:
+                    request_id = request["request_id"]
+                    selected_pairs[request_id] = (p_name, "")
+                    prefill_pools[p_name].enqueue_to_instance(
+                        instance_id,
+                        request_id,
+                        request["arrival_ms"],
+                        request["prompt_tokens"],
+                    )
+                    prefill_instance_counts[instance_id] += 1
+                start_prefill_ready(p_name, now_ms)
+            if distserve_pending:
+                distserve_dispatch_scheduled = True
+                push_event(now_ms, "distserve_dispatch", {})
+            continue
+
         if event_type == "prefill_done":
             pool_name = payload["pool_name"]
+            prefill_pools[pool_name].complete_batch(payload["instance_id"], payload["request_ids"])
             for completion in payload["completions"]:
                 prefill_completions[completion.request_id] = completion
                 p_name, d_name = selected_pairs[completion.request_id]
-                schedule_kv_transfer(
+                if args.policy in ("distserve", "distserve_batched"):
+                    d_name, d_instance_id = select_distserve_decode_instance(decode_pools)
+                    selected_pairs[completion.request_id] = (p_name, d_name)
+                    pair_counts[f"{p_name}->{d_name}"] += 1
+                transfer_end = schedule_kv_transfer(
                     completion.request_id,
                     completion.prompt_tokens,
                     p_name,
                     d_name,
                     completion.complete_ms,
                 )
+                if args.policy in ("distserve", "distserve_batched"):
+                    _arrival_ms, prompt_tokens, response_tokens = request_by_id[completion.request_id]
+                    decode_pools[d_name].enqueue_to_instance(
+                        d_instance_id,
+                        completion.request_id,
+                        transfer_end,
+                        prompt_tokens,
+                        response_tokens,
+                    )
+                    decode_instance_counts[d_instance_id] += 1
             start_prefill_ready(pool_name, now_ms)
             continue
 
@@ -506,9 +631,10 @@ def simulate(args: argparse.Namespace) -> Dict:
             capacity = link_bandwidth_mbps(p_name, d_name, args.local_bandwidth_mbps, args.cross_bandwidth_mbps)
             network_active_mbps[(p_name, d_name)] = max(0.0, network_active_mbps[(p_name, d_name)] - active_mbps)
             network_loads[(p_name, d_name)] = clamp(network_active_mbps[(p_name, d_name)] / max(capacity, 1e-9), 0.0, 1.0)
-            _arrival_ms, prompt_tokens, response_tokens = request_by_id[request_id]
-            instance_id = decode_pools[d_name].enqueue(request_id, now_ms, prompt_tokens, response_tokens, args.slo_tpot_ms)
-            decode_instance_counts[instance_id] += 1
+            if args.policy not in ("distserve", "distserve_batched"):
+                _arrival_ms, prompt_tokens, response_tokens = request_by_id[request_id]
+                instance_id = decode_pools[d_name].enqueue(request_id, now_ms, prompt_tokens, response_tokens, args.slo_tpot_ms)
+                decode_instance_counts[instance_id] += 1
             start_decode_ready(d_name, now_ms)
             continue
 
@@ -548,6 +674,11 @@ def simulate(args: argparse.Namespace) -> Dict:
                 ttft_met=pc.ttft_ms <= args.slo_ttft_ms,
                 tpot_met=dc.tpot_ms <= args.slo_tpot_ms,
                 e2e_met=e2e <= args.slo_e2e_ms,
+                all_slo_met=(
+                    pc.ttft_ms <= args.slo_ttft_ms
+                    and dc.tpot_ms <= args.slo_tpot_ms
+                    and e2e <= args.slo_e2e_ms
+                ),
             )
         )
 
@@ -589,7 +720,6 @@ def simulate(args: argparse.Namespace) -> Dict:
         },
         "arrival_mode": "fixed_qps" if qps else "dataset_timestamp",
         "qps": qps,
-        "duration_s": duration_s,
         "slo": {"ttft_ms": args.slo_ttft_ms, "tpot_ms": args.slo_tpot_ms, "e2e_ms": args.slo_e2e_ms},
         "pair_counts": dict(pair_counts),
         "prefill_instance_counts": dict(prefill_instance_counts),
@@ -601,8 +731,19 @@ def simulate(args: argparse.Namespace) -> Dict:
             "ttft": sum(r.ttft_met for r in records) / max(1, len(records)),
             "tpot": sum(r.tpot_met for r in records) / max(1, len(records)),
             "e2e": sum(r.e2e_met for r in records) / max(1, len(records)),
+            "all": sum(r.all_slo_met for r in records) / max(1, len(records)),
         },
-        "prefill_batches": sum(len(inst.batches) for pool in prefill_pools.values() for inst in pool.instances),
+        "goodput_requests_per_second": sum(r.all_slo_met for r in records) / duration_s,
+        "request_records": [asdict(record) for record in records],
+        "distserve": {
+            "mode": (
+                "direct_jsq_vllm_batching"
+                if args.policy == "distserve"
+                else "gateway_fcfs_batching"
+            ),
+            "prefill_max_num_batched_tokens": prefill_max_num_batched_tokens,
+            "prefill_batch_tokens": args.distserve_prefill_batch_tokens,
+        } if args.policy in ("distserve", "distserve_batched") else None,
         "decode_steps": sum(len(inst.steps) for pool in decode_pools.values() for inst in pool.instances),
     }
     return result
@@ -614,8 +755,15 @@ def print_summary(result: Dict) -> None:
     print(f"simulation_mode: {result.get('simulation_mode')}")
     print(f"policy: {result['policy']}, instance_policy: {result['instance_policy']}")
     print(f"requests: {result['requests']}, arrival_mode: {result['arrival_mode']}, qps: {result['qps']}")
-    print(f"duration_s: {result['duration_s']:.3f}")
     print(f"slo_attainment: {result['slo_attainment']}")
+    print(f"goodput_requests_per_second: {result['goodput_requests_per_second']:.3f}")
+    if result.get("distserve"):
+        distserve = result["distserve"]
+        print(
+            "distserve: "
+            f"mode={distserve['mode']}, "
+            f"prefill_max_num_batched_tokens={distserve['prefill_max_num_batched_tokens']}"
+        )
     print(f"latency: {result['latency']}")
     print("-" * 100)
     print("Pair counts:")
@@ -627,7 +775,7 @@ def print_summary(result: Dict) -> None:
     print("Network:")
     for key, value in sorted(result["network"].items()):
         print(f"  {key}: {value['gib']:.3f} GiB, avg={value['avg_mbps']:.3f} Mbps, util={value['utilization_percent']:.3f}%")
-    print(f"prefill_batches: {result['prefill_batches']}, decode_steps: {result['decode_steps']}")
+    print(f"decode_steps: {result['decode_steps']}")
     print("=" * 100)
 
 
@@ -646,6 +794,11 @@ def comparison_metrics(result: Dict) -> Dict[str, float]:
         for name, value in result["instance_utilization"].items()
         if name.startswith("D")
     ]
+    prefill_instance_values = [
+        value * 100.0
+        for name, value in result["instance_utilization"].items()
+        if name.startswith("P")
+    ]
 
     def coefficient_of_variation(values: List[float]) -> float:
         if not values:
@@ -660,6 +813,8 @@ def comparison_metrics(result: Dict) -> Dict[str, float]:
         "ttft_slo": result["slo_attainment"]["ttft"],
         "tpot_slo": result["slo_attainment"]["tpot"],
         "e2e_slo": result["slo_attainment"]["e2e"],
+        "all_slo": result["slo_attainment"]["all"],
+        "goodput_requests_per_second": result["goodput_requests_per_second"],
         "ttft_avg_ms": result["latency"]["ttft"]["avg"],
         "ttft_p95_ms": result["latency"]["ttft"]["p95"],
         "ttft_p99_ms": result["latency"]["ttft"]["p99"],
@@ -677,6 +832,7 @@ def comparison_metrics(result: Dict) -> Dict[str, float]:
         "instance_avg_util_percent": (mean(instance_values) * 100.0) if instance_values else 0.0,
         "instance_max_util_percent": (max(instance_values) * 100.0) if instance_values else 0.0,
         "decode_instance_util_cv": coefficient_of_variation(decode_instance_values),
+        "prefill_instance_util_cv": coefficient_of_variation(prefill_instance_values),
     }
 
 
@@ -699,24 +855,26 @@ def build_comparison_result(args: argparse.Namespace) -> Dict:
 
 def print_comparison_summary(result: Dict) -> None:
     print("\nJoint Controller/Instance Simulation Comparison")
-    print("=" * 120)
+    print("=" * 145)
     header = (
-        f"{'policy':<18} {'TTFT':>7} {'TPOT':>7} {'E2E':>7} "
+        f"{'policy':<18} {'TTFT':>7} {'TPOT':>7} {'E2E':>7} {'ALL':>7} {'goodput':>9} "
         f"{'TTFT_p95':>10} {'TPOT_p95':>10} {'E2E_p95':>10} "
-        f"{'net_cv':>8} {'max_net%':>9} {'dec_inst_cv':>11} {'max_inst%':>10}"
+        f"{'net_cv':>8} {'max_net%':>9} {'pre_cv':>8} {'dec_cv':>8} {'max_inst%':>10}"
     )
     print(header)
-    print("-" * 120)
+    print("-" * 145)
     for policy in result["policies"]:
         metrics = result["comparison"][policy]
         print(
             f"{policy:<18} "
             f"{metrics['ttft_slo']:>7.3f} {metrics['tpot_slo']:>7.3f} {metrics['e2e_slo']:>7.3f} "
+            f"{metrics['all_slo']:>7.3f} {metrics['goodput_requests_per_second']:>9.3f} "
             f"{metrics['ttft_p95_ms']:>10.2f} {metrics['tpot_p95_ms']:>10.2f} {metrics['e2e_p95_ms']:>10.2f} "
             f"{metrics['network_util_cv']:>8.3f} {metrics['network_max_util_percent']:>9.3f} "
-            f"{metrics['decode_instance_util_cv']:>11.3f} {metrics['instance_max_util_percent']:>10.2f}"
+            f"{metrics['prefill_instance_util_cv']:>8.3f} {metrics['decode_instance_util_cv']:>8.3f} "
+            f"{metrics['instance_max_util_percent']:>10.2f}"
         )
-    print("=" * 120)
+    print("=" * 145)
 
 
 def save_comparison_png(result: Dict, output_path: Path) -> Path:
@@ -731,17 +889,18 @@ def save_comparison_png(result: Dict, output_path: Path) -> Path:
 
     policies = result["policies"]
     comparison = result["comparison"]
-    colors = ["#4c78a8", "#f58518", "#54a24b", "#b279a2"]
+    colors = ["#4c78a8", "#f58518", "#54a24b", "#b279a2", "#72b7b2", "#e45756"]
 
-    fig, axes = plt.subplots(2, 2, figsize=(15, 10), dpi=160)
+    fig, axes = plt.subplots(2, 3, figsize=(19, 10), dpi=160)
     fig.suptitle("Joint Controller/Instance Baseline Comparison", fontsize=15, fontweight="bold")
 
     def grouped_bars(ax, groups, metric_names, title, ylabel):
-        width = 0.22
+        width = min(0.8 / max(1, len(policies)), 0.22)
         x_positions = list(range(len(metric_names)))
         for offset, policy in enumerate(policies):
             values = [comparison[policy][name] for name in metric_names]
-            xs = [x + (offset - 1) * width for x in x_positions]
+            center = (len(policies) - 1) / 2.0
+            xs = [x + (offset - center) * width for x in x_positions]
             ax.bar(xs, values, width=width, label=policy, color=colors[offset % len(colors)])
         ax.set_xticks(x_positions)
         ax.set_xticklabels(groups)
@@ -752,8 +911,8 @@ def save_comparison_png(result: Dict, output_path: Path) -> Path:
 
     grouped_bars(
         axes[0][0],
-        ["TTFT", "TPOT", "E2E"],
-        ["ttft_slo", "tpot_slo", "e2e_slo"],
+        ["TTFT", "TPOT", "E2E", "ALL"],
+        ["ttft_slo", "tpot_slo", "e2e_slo", "all_slo"],
         "SLO Attainment",
         "ratio",
     )
@@ -765,6 +924,14 @@ def save_comparison_png(result: Dict, output_path: Path) -> Path:
         ["ttft_p95_ms", "ttft_p99_ms", "tpot_p95_ms", "tpot_p99_ms", "e2e_p95_ms", "e2e_p99_ms"],
         "Latency Tail",
         "ms",
+    )
+
+    grouped_bars(
+        axes[0][2],
+        ["Goodput"],
+        ["goodput_requests_per_second"],
+        "Fixed-workload Goodput",
+        "requests/s",
     )
 
     grouped_bars(
@@ -783,6 +950,14 @@ def save_comparison_png(result: Dict, output_path: Path) -> Path:
         "CV / percent",
     )
 
+    grouped_bars(
+        axes[1][2],
+        ["Cross pair ratio"],
+        ["cross_pair_ratio"],
+        "Cross-machine Routing",
+        "ratio",
+    )
+
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, format="png")
@@ -797,12 +972,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--scenario", choices=["dynamic", "burst"], default="dynamic")
     parser.add_argument("--policy", choices=POLICIES, default="pso_slo")
     parser.add_argument("--compare-all", action="store_true")
-    parser.add_argument("--qps", type=float, default=300)
+    parser.add_argument("--qps", type=float, default=200)
     parser.add_argument("--time-scale", type=float, default=None)
     parser.add_argument("--slo-ttft-ms", type=float, default=3000.0)
     parser.add_argument("--slo-tpot-ms", type=float, default=40.0)
     parser.add_argument("--slo-e2e-ms", type=float, default=21500.0)
     parser.add_argument("--max-num-batched-tokens", type=int, default=4096)
+    parser.add_argument(
+        "--distserve-prefill-batch-tokens",
+        type=int,
+        default=2048,
+        help="DistServe gateway FCFS logical-batch limit L_m (independent of vLLM batching).",
+    )
     parser.add_argument("--local-bandwidth-mbps", type=float, default=36000.0)
     parser.add_argument("--cross-bandwidth-mbps", type=float, default=1000.0)
     parser.add_argument("--compress-factor", type=float, default=1.0)

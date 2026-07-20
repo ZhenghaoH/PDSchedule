@@ -1159,6 +1159,9 @@ class RequestBatcher:
     def _unified_trigger(self, is_new_arrival: bool):
         q_len = len(self.pending_queue)
         if q_len == 0: return
+        if self.scheduler_mgr.strategy == "distserve" and is_new_arrival:
+            self.schedule_event.set()
+            return
         if (self.trigger_mode == "ARRIVAL" and is_new_arrival) or \
                 (self.trigger_mode == "BATCH_SIZE" and q_len >= self.syn_batch_size):
             self.schedule_event.set()

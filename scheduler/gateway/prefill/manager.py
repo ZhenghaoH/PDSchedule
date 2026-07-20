@@ -57,53 +57,27 @@ class SchedulerManager:
             return queue, "IMMEDIATE"
 
         if selected_strategy == "distserve":
-            fcfs_queue = sorted(
-                queue,
-                key=lambda request: float(
-                    getattr(request.Service, "arrival_time", 0.0) or 0.0
-                ),
-            )
-            token_limit = max(
-                1,
-                int(getattr(
-                    self.basic_scheduler.storage,
-                    "DIST_SERVE_PREFILL_BATCH_TOKENS",
-                    2048,
-                )),
-            )
-            batch = []
-            batch_tokens = 0
-            for request in fcfs_queue:
-                request_tokens = max(
-                    0,
-                    int(getattr(request.Prompt, "token_length", 0) or 0),
-                )
-                if batch and batch_tokens + request_tokens > token_limit:
-                    break
-                batch.append(request)
-                batch_tokens += request_tokens
-                if request_tokens >= token_limit or batch_tokens >= token_limit:
-                    break
-
-            selected_instance = self.basic_scheduler.reserve_distserve_batch(batch)
-            if not selected_instance:
-                return [], "IMMEDIATE"
-
-            request_ids = [str(request.Request_ID) for request in batch]
-            for position, request in enumerate(batch):
+            scheduled = []
+            for position, request in enumerate(queue):
+                # Reserve each request independently. The reservation is visible
+                # to the next iteration immediately, so this is request-level JSQ
+                # rather than assigning one gateway batch to a single instance.
+                selected_instance = self.basic_scheduler.reserve_distserve_batch([request])
+                if not selected_instance:
+                    continue
                 request.Task.batch_order = 1
                 request.Task.prefill_instance = selected_instance
                 request.Task.slo_plan_position = position
                 metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
                 metadata["distserve"] = {
                     "role": "prefill",
-                    "lm_tokens": token_limit,
-                    "batch_tokens": batch_tokens,
-                    "batch_request_ids": request_ids,
+                    "dispatch_mode": "direct_jsq",
+                    "request_id": str(request.Request_ID),
                     "selected_instance": selected_instance,
                 }
                 request.Task.scheduler_metadata = metadata
-            return batch, "IMMEDIATE"
+                scheduled.append(request)
+            return scheduled, "IMMEDIATE"
 
         # ================= [策略：PSO 优化] =================
         elif selected_strategy == "pso":

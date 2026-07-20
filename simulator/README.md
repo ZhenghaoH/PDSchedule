@@ -189,6 +189,61 @@ python .\simulator\experiment\run_prefill_vllm_simulation.py --seed 42 --strateg
 - `--schedule-log-output`
 - `--schedule-log-strategy direct|pso`
 
+## Controller + Gateway + Instance 联合仿真
+
+联合事件仿真支持 `pso_slo`、`round_robin`、`least_load`、`adaptive_variance`、
+`distserve_batched` 和 `distserve`。两个 DistServe baseline 都使用一个中心 P 网关和
+一个中心 D 网关，并在 Prefill 完成后由 D 侧按唯一的 active + waiting 请求数选择
+全局负载最低的 D 实例。
+
+旧 `distserve_batched` 在 P 网关按 FCFS 从队首形成不超过 `L_m` 的逻辑 batch
+（队首请求大于等于 `L_m` 时独占一批），再把整批预约到请求数最少的 P 实例；实例
+内部继续使用 `--max-num-batched-tokens`，默认 4096：
+
+```powershell
+python .\simulator\controller\joint_controller_instance_simulation.py --policy distserve_batched --distserve-prefill-batch-tokens 2048 --max-num-batched-tokens 4096
+```
+
+新 `distserve` 不在 P 网关组批。每个请求到达后立即根据全部 P 实例 queued 与
+running 的唯一未完成请求数执行 JSQ，并直接进入选中的实例；实例内部 vLLM
+`max_num_batched_tokens` 由代码常量控制，长 prompt 由实例执行 chunked prefill：
+
+```powershell
+python .\simulator\controller\joint_controller_instance_simulation.py --policy distserve
+```
+
+运行全部 baseline 对比（输出 JSON 和 PNG）：
+
+```powershell
+python .\simulator\controller\joint_controller_instance_simulation.py --compare-all
+```
+
+联合仿真结果包含以下 DistServe 和 SLO 验证数据：
+
+- `slo_attainment.all`：TTFT、TPOT、E2E 三项同时达标的请求比例。
+- `goodput_requests_per_second`：固定工作负载中三项 SLO 同时达标的请求吞吐。
+- `distserve.mode`：`gateway_fcfs_batching` 或 `direct_jsq_vllm_batching`。
+- `distserve.prefill_max_num_batched_tokens`：该次运行实际使用的 P 实例 token budget。
+
+goodput 的计算公式为：
+
+```text
+goodput_requests_per_second
+= 同时满足 TTFT、TPOT、E2E 三项 SLO 的请求数
+  /（最后一个请求完成时间 - 第一个请求到达时间，单位为秒）
+```
+
+它表示固定 workload 的“每秒达标请求数”，不是输入 QPS、token/s、模型原始吞吐量，
+也不是仅满足其中一项 SLO 的请求吞吐。仿真内部仍计算有效时长以作为 goodput 和网络
+平均带宽的分母，但不把 duration 或 P/Gateway batch 统计写入单策略及多策略结果。
+
+`--distserve-prefill-batch-tokens` 只影响 `distserve_batched`。新 `distserve` 的实例内部
+vLLM 每轮可调度 token 上限当前在
+`controller/joint_controller_instance_simulation.py` 的
+`DIST_SERVE_DIRECT_PREFILL_BATCH_TOKENS` 常量中调整（当前工作区值为 4096）；
+`--max-num-batched-tokens` 只会影响旧 `distserve_batched` 和其他策略。两种 DistServe
+的性能差异同时包含“是否在网关组批”和“实例 token budget”两项因素，不能单独归因于其中一项。
+
 ## 输出
 
 最近一次完整结果默认保存在：

@@ -25,7 +25,9 @@ chmod u+x DistServe启动脚本/run_*.sh
 ./DistServe启动脚本/run_169.sh
 ```
 
-170 脚本显式启用 P/D 的 `distserve`，P 侧使用 `--distserve-prefill-batch-tokens 2048`，并关闭 TTFT/TPOT predictor warmup。这里的 `L_m=2048` 来自当前实验 profile；更换模型、GPU 或并行配置后，应重新运行 `profile/profile_distserve_lm.py` 并同步修改启动参数。
+170 脚本显式启用 P/D 的 `distserve`，并关闭 TTFT/TPOT predictor warmup。P 网关不再按 `L_m` 等待或形成逻辑 batch：每个请求到达后立即按全部在线 P 实例的有效未完成请求数执行 JSQ，并直接转发到选中的 vLLM 实例。网关以 request ID 保留未完成请求预约，正常情况下在请求成功、失败或取消后释放；预约 TTL 为 240 秒，用于异常泄漏保护。
+
+脚本中的 `--distserve-prefill-batch-tokens 2048` 仅为兼容旧部署命令而保留，当前 direct-JSQ DistServe 会忽略该参数。vLLM 实例如何 continuous batch 由实例自身的 `max_num_batched_tokens` 等参数控制，而不是由 P 网关的旧 `L_m` 参数控制。
 
 ## 核对与在线切换
 

@@ -26,9 +26,7 @@ recorded in the JSON output against the GPUs assigned to vLLM.
 
 ```bash
 python profile/profile_distserve_lm.py \
-  --base-url http://127.0.0.1:8100/v1 \
-  --model /workspace/models/Qwen \
-  --tokenizer /workspace/models/Qwen \
+  --host 127.0.0.1:8001 \
   --gpu-indices 0,1 \
   --prompt-lengths 128,256,512,1024,2048,4096,8192 \
   --warmup-repeats 2 \
@@ -37,9 +35,17 @@ python profile/profile_distserve_lm.py \
   --gpu-util-threshold 90
 ```
 
-`--model` may be omitted; the script then uses the first model returned by
-`/v1/models`. The tokenizer remains required because each request prompt is
-constructed and verified to contain exactly the requested number of tokens.
+The script turns `--host IP:PORT` into `http://<IP:PORT>/v1`; do not include a
+protocol, URL path, or endpoint. Use `[IPv6]:port` for IPv6. The default served
+model and tokenizer are both:
+
+```text
+/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
+```
+
+Override `--model` when vLLM exposes a different served-model name, and
+override `--tokenizer` when the tokenizer is stored elsewhere. The tokenizer
+is used to construct and verify exact-token prompts.
 
 ### Selection rule
 

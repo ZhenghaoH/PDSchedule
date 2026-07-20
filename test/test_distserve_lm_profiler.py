@@ -72,11 +72,33 @@ def make_summary(prompt_tokens, throughput, gpu_p95, stable=True):
 
 
 def test_parser_defaults_to_20_ms_sampling():
-    args = lm.build_parser().parse_args(
-        ["--base-url", "http://localhost:8000/v1", "--tokenizer", "model"]
-    )
+    args = lm.build_parser().parse_args(["--host", "localhost:8000"])
     assert args.gpu_sample_interval_ms == 20
+    assert args.host == "localhost:8000"
+    assert args.model == lm.DEFAULT_MODEL_PATH
+    assert args.tokenizer == lm.DEFAULT_MODEL_PATH
     assert lm.parse_prompt_lengths(args.prompt_lengths) == [128, 256, 512, 1024, 2048, 4096, 8192]
+
+
+@pytest.mark.parametrize(
+    ("host", "expected"),
+    [
+        ("127.0.0.1:8001", "http://127.0.0.1:8001/v1"),
+        ("prefill.local:8100", "http://prefill.local:8100/v1"),
+        ("[2001:db8::1]:8001", "http://[2001:db8::1]:8001/v1"),
+    ],
+)
+def test_build_base_url_from_host(host, expected):
+    assert lm.build_base_url(host) == expected
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["http://127.0.0.1:8001", "127.0.0.1:8001/v1", "127.0.0.1", "2001:db8::1:8001", "host:0", "host:65536"],
+)
+def test_host_rejects_protocol_paths_and_invalid_ports(host):
+    with pytest.raises(Exception):
+        lm.parse_host(host)
 
 
 def test_prompt_lengths_must_be_strictly_increasing():

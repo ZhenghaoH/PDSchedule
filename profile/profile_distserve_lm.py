@@ -20,6 +20,9 @@ from typing import Any, Iterable, Optional, Sequence
 
 
 DEFAULT_PROMPT_LENGTHS = "128,256,512,1024,2048,4096,8192"
+DEFAULT_MODEL_PATH = (
+    "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+)
 
 
 def parse_positive_ints(value: str, *, strictly_increasing: bool = False) -> list[int]:
@@ -48,6 +51,42 @@ def parse_gpu_indices(value: str) -> list[int]:
     if len(set(values)) != len(values):
         raise argparse.ArgumentTypeError("GPU indices must not contain duplicates")
     return values
+
+
+def parse_host(value: str) -> str:
+    host = value.strip()
+    if not host:
+        raise argparse.ArgumentTypeError("host must not be empty")
+    if "://" in host or any(character in host for character in "/?#"):
+        raise argparse.ArgumentTypeError(
+            "host must be IP:PORT or hostname:port without protocol or URL path"
+        )
+    if any(character.isspace() for character in host):
+        raise argparse.ArgumentTypeError("host must not contain whitespace")
+
+    if host.startswith("["):
+        closing_bracket = host.find("]")
+        if closing_bracket <= 1 or closing_bracket + 1 >= len(host):
+            raise argparse.ArgumentTypeError("IPv6 host must use [IPv6]:port format")
+        if host[closing_bracket + 1] != ":" or "]" in host[closing_bracket + 1 :]:
+            raise argparse.ArgumentTypeError("IPv6 host must use [IPv6]:port format")
+        hostname = host[1:closing_bracket]
+        port_text = host[closing_bracket + 2 :]
+    else:
+        if host.count(":") != 1:
+            raise argparse.ArgumentTypeError("host must use IP:PORT or hostname:port format")
+        hostname, port_text = host.rsplit(":", 1)
+
+    if not hostname or not port_text.isdigit():
+        raise argparse.ArgumentTypeError("host port must be an integer")
+    port = int(port_text)
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("host port must be in [1, 65535]")
+    return host
+
+
+def build_base_url(host: str) -> str:
+    return f"http://{parse_host(host)}/v1"
 
 
 def percentile(values: Sequence[float], quantile: float) -> Optional[float]:
@@ -289,17 +328,6 @@ def generate_exact_token_prompt(tokenizer: Any, target_tokens: int, marker: str)
         prompt = tokenizer.decode(current, clean_up_tokenization_spaces=False)
     actual = len(tokenizer.encode(prompt, add_special_tokens=False))
     raise ValueError(f"failed to create exact-token prompt: expected={target_tokens}, actual={actual}")
-
-
-async def detect_model(session: Any, base_url: str, headers: dict[str, str]) -> str:
-    async with session.get(f"{base_url.rstrip('/')}/models", headers=headers) as response:
-        if response.status != 200:
-            raise RuntimeError(f"model discovery failed with HTTP {response.status}: {await response.text()}")
-        payload = await response.json()
-    models = payload.get("data") or []
-    if not models or not models[0].get("id"):
-        raise RuntimeError("model discovery returned no served model")
-    return str(models[0]["id"])
 
 
 async def measure_request(
@@ -571,14 +599,14 @@ async def run(args: argparse.Namespace, monitor_factory: Any = NvmlMonitor) -> i
         "Authorization": f"Bearer {os.environ.get(args.api_key_env, 'EMPTY')}",
         "Content-Type": "application/json",
     }
-    base_url = args.base_url.rstrip("/")
+    base_url = build_base_url(args.host)
     monitor = monitor_factory(gpu_indices, args.gpu_sample_interval_ms)
     monitor.initialize()
     try:
         tokenizer = load_tokenizer(args.tokenizer)
         timeout = aiohttp.ClientTimeout(total=args.timeout_seconds)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            model = args.model or await detect_model(session, base_url, headers)
+            model = args.model
             measurements: list[RequestMeasurement] = []
             url = f"{base_url}/chat/completions"
             for prompt_tokens in prompt_lengths:
@@ -647,10 +675,26 @@ async def run(args: argparse.Namespace, monitor_factory: Any = NvmlMonitor) -> i
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Profile DistServe Prefill saturation length L_m")
-    parser.add_argument("--base-url", required=True, help="OpenAI API root, e.g. http://127.0.0.1:8100/v1")
-    parser.add_argument("--model", help="served model name; discovered from /models when omitted")
-    parser.add_argument("--tokenizer", required=True, help="local tokenizer path or Hugging Face ID")
+    parser = argparse.ArgumentParser(
+        description="Profile DistServe Prefill saturation length L_m",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--host",
+        required=True,
+        type=parse_host,
+        help="Prefill vLLM IP:PORT or hostname:port (without protocol or path)",
+    )
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL_PATH,
+        help="served model name sent to the OpenAI-compatible endpoint",
+    )
+    parser.add_argument(
+        "--tokenizer",
+        default=DEFAULT_MODEL_PATH,
+        help="local tokenizer path or Hugging Face ID",
+    )
     parser.add_argument("--prompt-lengths", default=DEFAULT_PROMPT_LENGTHS)
     parser.add_argument("--warmup-repeats", type=int, default=2)
     parser.add_argument("--measure-repeats", type=int, default=8)
@@ -671,6 +715,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    parse_host(args.host)
     parse_prompt_lengths(args.prompt_lengths)
     parse_gpu_indices(args.gpu_indices)
     if args.warmup_repeats < 0 or args.measure_repeats <= 0:

@@ -166,9 +166,9 @@ class Service:
         else:
             return {
                 "Enable_PD_Disaggregation": True,
-                "SLO_TTFT": 6000,
+                "SLO_TTFT": 20000,
                 "SLO_TPOT": 40,
-                "SLO_E2E": 21500,
+                "SLO_E2E": 25336,
             }
 
     @classmethod

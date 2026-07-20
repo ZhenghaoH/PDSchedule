@@ -31,4 +31,5 @@ httpx~=0.28.1
 setuptools~=78.1.0
 huggingface-hub~=0.36.0
 psutil~=7.0.0
+nvidia-ml-py>=12.535.108
 openai~=2.2.0

@@ -1,14 +1,17 @@
 import logging
+import os
 import requests
+import time
 from typing import List, Optional
 
 from store.instance.store import InstanceStore
 from instance.perception.metric import (
     fetch_prometheus_metrics,
-    get_gpu_bandwidth_utilization,
+    get_gpu_device_metrics,
     get_mock_prometheus_metrics,
 )
 from instance.perception.compute_metric_h import ThroughputMonitor
+from utils.network_metric import get_interface_metrics
 
 
 def instance_register():
@@ -22,6 +25,7 @@ def instance_register():
         "side_channel_port": storage.side_channel_port,
         "tp_size": storage.tp_size,
         "vllm_port": storage.vllm_port,
+        "gpu_indices": storage.gpu_indices,
     }
     try:
         response = requests.post(target_url, json=payload)
@@ -51,6 +55,40 @@ def _get_kv_cache_usage_percent(metrics: dict) -> float:
     return usage * 100.0 if usage <= 1.0 else usage
 
 
+def _cached_network_metrics(storage: InstanceStore) -> dict:
+    now = time.monotonic()
+    sample_interval = max(
+        0.1,
+        float(os.getenv("FLEXPD_INSTANCE_NETWORK_SAMPLE_SEC", "1")),
+    )
+    if (
+        storage.network_metric
+        and now - float(storage.network_metric_sampled_at) < sample_interval
+    ):
+        return dict(storage.network_metric)
+
+    try:
+        sampled = get_interface_metrics(storage.host, interval=min(0.05, sample_interval))
+    except Exception as exc:
+        logging.debug("[Instance] Network metric collection failed: %s", exc)
+        sampled = None
+    storage.network_metric = dict(sampled or {})
+    storage.network_metric_sampled_at = now
+    return dict(storage.network_metric)
+
+
+def _aggregate_gpu_metrics(gpu_devices: List[dict]) -> tuple[float, float]:
+    if not gpu_devices:
+        return 0.0, 0.0
+    gpu_util = sum(float(item.get("gpu_util_percent", 0.0) or 0.0) for item in gpu_devices)
+    memory_util = sum(
+        float(item.get("gpu_memory_util_percent", 0.0) or 0.0)
+        for item in gpu_devices
+    )
+    count = len(gpu_devices)
+    return gpu_util / count, memory_util / count
+
+
 def metric_update(monitor: Optional[ThroughputMonitor] = None):
     endpoint = "instance/update"
     storage = InstanceStore()
@@ -63,13 +101,21 @@ def metric_update(monitor: Optional[ThroughputMonitor] = None):
             prompt_throughput = 0.0
             generate_throughput = 0.0
             kv_cache_usage_percent = 0.0
-            gpu_util_percent = 0.0
-            gpu_memory_util_percent = 0.0
+            gpu_devices = [
+                {
+                    "gpu_index": index,
+                    "device_name": "mock",
+                    "gpu_util_percent": 0.0,
+                    "gpu_memory_used_bytes": 0,
+                    "gpu_memory_total_bytes": 0,
+                    "gpu_memory_util_percent": 0.0,
+                    "metric_source": "mock",
+                }
+                for index in storage.gpu_indices
+            ]
         else:
             prometheus_metrics = fetch_prometheus_metrics(storage.vllm_addr())
-            gpu_bandwidth_metrics = get_gpu_bandwidth_utilization()
-            gpu_util_percent = float(gpu_bandwidth_metrics.get("gpu_util_percent", 0.0))
-            gpu_memory_util_percent = float(gpu_bandwidth_metrics.get("memory_util_percent", 0.0))
+            gpu_devices = get_gpu_device_metrics(storage.gpu_indices)
 
             if prometheus_metrics:
                 running_reqs = int(prometheus_metrics['vllm:num_requests_running']['samples'][0]['value'])
@@ -112,6 +158,9 @@ def metric_update(monitor: Optional[ThroughputMonitor] = None):
                 prompt_throughput = 0.0
                 generate_throughput = 0.0
 
+        gpu_util_percent, gpu_memory_util_percent = _aggregate_gpu_metrics(gpu_devices)
+        network_metric = _cached_network_metrics(storage)
+
         payload = {
             "report_label": storage.report_label(),
             "running_reqs": running_reqs,
@@ -121,6 +170,8 @@ def metric_update(monitor: Optional[ThroughputMonitor] = None):
             "kv_cache_usage_percent": kv_cache_usage_percent,
             "gpu_util_percent": gpu_util_percent,
             "gpu_memory_util_percent": gpu_memory_util_percent,
+            "gpu_devices": gpu_devices,
+            "network_metric": network_metric,
         }
         resp = requests.post(target_url, json=payload)
         if resp.status_code == 404:

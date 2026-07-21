@@ -100,6 +100,25 @@ python entrypoints/gatewayD.py \
 
 DistServe P 侧未完成 token 预约保存在网关进程内存中；网关重启后不能从仅包含请求数的实例心跳恢复原 token 负载。正常请求结束会立即释放预约，异常情况下预约最多保留 240 秒。
 
+#### 网关调度、时间追踪与资源日志
+
+P/D 网关会在项目根目录自动创建 `gateway_logs/`，并将三类日志严格分开：
+
+- `prefill_gateway_schedule.log`、`decode_gateway_schedule.log`：策略、候选实例、选择结果、选择来源和选择理由。
+- `prefill_gateway_timing.log`、`decode_gateway_timing.log`：请求生命周期事件及 Prefill 排队/执行、D 网关排队、首响应等待、Decode 流式生成和端到端耗时。
+- `prefill_gateway_resource.log`、`decode_gateway_resource.log`：实例逐卡 GPU 利用率、真实显存容量占用率和实例网卡利用率。
+
+日志为 UTF-8 JSON Lines，每行可独立解析。可通过 `FLEXPD_GATEWAY_LOG_DIR` 修改统一日志目录，通过 `FLEXPD_RESOURCE_LOG_INTERVAL_SEC` 修改资源日志最小写入间隔（默认 1 秒），通过 `FLEXPD_RESOURCE_ZERO_PAUSE_SEC` 修改连续全零静默阈值（默认 30 秒）。资源组全零达到阈值后仅写一次 `logging_paused`，后台继续采样；恢复非零时写 `logging_resumed` 并自动恢复记录。
+
+实例代理使用 `--gpu-indices` 声明其对应的物理 GPU，TP 实例使用逗号分隔，例如：
+
+```bash
+python entrypoints/instanceP.py ... --tp-size 2 --gpu-indices 0,1
+python entrypoints/instanceD.py ... --tp-size 1 --gpu-indices 2
+```
+
+时间日志中的 `observed_network_transfer_ms` 是 D 网关从向 D 实例发出请求到收到首个响应 chunk 的可观测时间，包含 NIXL KV 拉取、vLLM 接纳/内部排队和首 token 计算，并非纯链路传输时间。网关排队时间只统计网关可直接观测的等待，不伪造 vLLM 内部阶段。
+
 交互式网关 CLI 支持上下方向键查看历史，并支持 Tab 自动补全命令和当前网关可用的调度策略。
 
 #### 单 P/D 网关的固定路由模式

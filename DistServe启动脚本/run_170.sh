@@ -173,28 +173,28 @@ case "$MODE" in
 
         echo -e "\033[36m=== [8/13] 启动 Decode Instance Proxy 1 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 instanceD.py --host 172.18.0.170 --port 7003 --vllm_port 8003 --gateway 172.18.0.170:8082 --side-channel-host 172.18.0.170 --side-channel-port 5559 --tp-size 2
+        python3 instanceD.py --host 172.18.0.170 --port 7003 --vllm_port 8003 --gateway 172.18.0.170:8082 --side-channel-host 172.18.0.170 --side-channel-port 5559 --tp-size 2 --gpu-indices 4,5
         ;;
     "id2")
         wait_for_loading 55 "Decode Instance 2"
 
         echo -e "\033[36m=== [9/13] 启动 Decode Instance Proxy 2 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 instanceD.py --host 172.18.0.170 --port 7004 --vllm_port 8004 --gateway 172.18.0.170:8082 --side-channel-host 172.18.0.170 --side-channel-port 5560 --tp-size 2
+        python3 instanceD.py --host 172.18.0.170 --port 7004 --vllm_port 8004 --gateway 172.18.0.170:8082 --side-channel-host 172.18.0.170 --side-channel-port 5560 --tp-size 2 --gpu-indices 6,7
         ;;
     "ip1")
         wait_for_loading 57 "Prefill Instance 1"
 
         echo -e "\033[36m=== [10/13] 启动 Prefill Instance Proxy 1 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 instanceP.py --host 172.18.0.170 --port 7001 --vllm_port 8001 --gateway 172.18.0.170:8081 --side-channel-host 172.18.0.170 --side-channel-port 5557 --tp-size 2
+        python3 instanceP.py --host 172.18.0.170 --port 7001 --vllm_port 8001 --gateway 172.18.0.170:8081 --side-channel-host 172.18.0.170 --side-channel-port 5557 --tp-size 2 --gpu-indices 0,1
         ;;
     "ip2")
         wait_for_loading 57 "Prefill Instance 2"
 
         echo -e "\033[36m=== [11/13] 启动 Prefill Instance Proxy 2 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        python3 instanceP.py --host 172.18.0.170 --port 7002 --vllm_port 8002 --gateway 172.18.0.170:8081 --side-channel-host 172.18.0.170 --side-channel-port 5558 --tp-size 2
+        python3 instanceP.py --host 172.18.0.170 --port 7002 --vllm_port 8002 --gateway 172.18.0.170:8081 --side-channel-host 172.18.0.170 --side-channel-port 5558 --tp-size 2 --gpu-indices 2,3
         ;;
     "kdn")
         echo -e "\033[36m=== [12/13] 启动 KDN Server ===\033[0m"

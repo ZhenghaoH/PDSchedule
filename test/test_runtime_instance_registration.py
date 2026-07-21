@@ -3,6 +3,8 @@ import unittest
 import sys
 import importlib
 import os
+import asyncio
+import types
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +16,30 @@ if str(ROOT_DIR) not in sys.path:
 from store.gateway.manager import GatewayStoreManager
 from store.gateway.instance import Instance
 import config.ADDRESS_CONFIG as address_config
+
+
+def import_update_handler(module_name):
+    fastapi = types.ModuleType("fastapi")
+    responses = types.ModuleType("fastapi.responses")
+
+    class HTTPException(Exception):
+        def __init__(self, status_code, detail):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+
+    class Response:
+        def __init__(self, status_code=200):
+            self.status_code = status_code
+
+    fastapi.HTTPException = HTTPException
+    fastapi.Request = object
+    responses.Response = Response
+    with patch.dict(
+        sys.modules,
+        {"fastapi": fastapi, "fastapi.responses": responses},
+    ):
+        return importlib.import_module(module_name)
 
 
 class RuntimeInstanceRegistrationTest(unittest.TestCase):
@@ -34,9 +60,11 @@ class RuntimeInstanceRegistrationTest(unittest.TestCase):
             side_channel_port=5557,
             tp_size=2,
             vllm_port=8001,
+            gpu_indices=[2, 3],
         )
 
         self.assertEqual(instance.role, "prefill")
+        self.assertEqual(instance.gpu_indices, [2, 3])
         self.assertEqual(self.manager.prefill_objs, ["10.0.0.2:7001"])
         self.assertEqual(
             self.manager.get_nixl_metadata("10.0.0.2:7001"),
@@ -148,6 +176,75 @@ class RuntimeInstanceRegistrationTest(unittest.TestCase):
 
         self.assertTrue(self.manager.mark_instance_offline("p1"))
         self.assertEqual(self.manager.get_distserve_effective_load("prefill", "p1"), 0)
+
+    def test_new_heartbeat_updates_per_gpu_and_network_resources(self) -> None:
+        prefill_update = import_update_handler(
+            "core.handlers.gateway.prefill.update"
+        )
+
+        self.manager.register_instance(
+            "p1", "prefill", "NixlConnector", "10.0.0.1", 5557, 2,
+            gpu_indices=[2, 3],
+        )
+
+        class JsonRequest:
+            async def json(self):
+                return {
+                    "report_label": "p1",
+                    "running_reqs": 1,
+                    "waiting_reqs": 2,
+                    "gpu_devices": [
+                        {"gpu_index": 2, "gpu_util_percent": 10, "gpu_memory_util_percent": 30},
+                        {"gpu_index": 3, "gpu_util_percent": 20, "gpu_memory_util_percent": 40},
+                    ],
+                    "network_metric": {"interface": "eth0", "tx_mbps": 5},
+                }
+
+        with (
+            patch.object(prefill_update, "GatewayStoreManager", return_value=self.manager),
+            patch.object(prefill_update, "observer") as observer,
+        ):
+            response = asyncio.run(prefill_update.update_instance_metric(JsonRequest()))
+
+        instance = self.manager.instance_table["p1"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(instance.gpu_indices, [2, 3])
+        self.assertEqual(len(instance.gpu_devices), 2)
+        self.assertEqual(instance.network_metric["interface"], "eth0")
+        observer.record_instance_resources.assert_called_once()
+
+    def test_old_heartbeat_remains_accepted_and_preserves_registered_gpu_indices(self) -> None:
+        decode_update = import_update_handler(
+            "core.handlers.gateway.decode.update"
+        )
+
+        self.manager.register_instance(
+            "d1", "decode", "NixlConnector", "10.0.0.2", 5558, 1,
+            gpu_indices=[4],
+        )
+
+        class JsonRequest:
+            async def json(self):
+                return {
+                    "report_label": "d1",
+                    "running_reqs": 0,
+                    "waiting_reqs": 1,
+                    "gpu_util_percent": 12.5,
+                    "gpu_memory_util_percent": 50.0,
+                }
+
+        with (
+            patch.object(decode_update, "GatewayStoreManager", return_value=self.manager),
+            patch.object(decode_update, "observer") as observer,
+        ):
+            response = asyncio.run(decode_update.update_instance_metric(JsonRequest()))
+
+        instance = self.manager.instance_table["d1"]
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(instance.gpu_indices, [4])
+        self.assertEqual(instance.gpu_devices, [])
+        self.assertEqual(instance.network_metric, {})
+        observer.record_instance_resources.assert_called_once()
 
 
 class PublicAddressConfigTest(unittest.TestCase):

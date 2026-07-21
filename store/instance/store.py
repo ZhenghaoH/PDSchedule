@@ -40,6 +40,9 @@ class InstanceStore:
                     self.side_channel_host = ""
                     self.side_channel_port = 0
                     self.tp_size = 0
+                    self.gpu_indices = [0]
+                    self.network_metric = {}
+                    self.network_metric_sampled_at = 0.0
 
                     self.LOOP_TASK_TIME = 0.02  # 轮询上报任务时间
 

@@ -117,6 +117,10 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(policy, "IMMEDIATE")
         self.assertEqual([request.Task.prefill_instance for request in scheduled], ["p2", "p2"])
         self.assertTrue(all(request.Task.batch_order == 1 for request in scheduled))
+        self.assertEqual(
+            scheduled[0].Task.scheduler_metadata["gateway_prefill_selection"]["reason"],
+            "minimum_prompt_throughput",
+        )
 
         self.store._instance_table["p2"].prompt_throughput = 3.0
         tied, _ = await self.scheduler.schedule_batch([make_request(3)], strategy="least_load")
@@ -156,6 +160,10 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
             ["p1", "p2", "p1"],
         )
         self.assertTrue(all(request.Task.batch_order == 1 for request in scheduled))
+        self.assertEqual(
+            scheduled[0].Task.scheduler_metadata["gateway_prefill_selection"]["reason"],
+            "minimum_unfinished_prompt_tokens",
+        )
         self.assertTrue(
             all(
                 request.Task.scheduler_metadata["distserve"]["dispatch_mode"] == "direct_jsq"
@@ -221,6 +229,10 @@ class DecodeDistServeSchedulerTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(first, "d1")
         self.assertEqual(second, "d2")
+        self.assertEqual(
+            scheduler.last_decision["reason"], "minimum_effective_request_load"
+        )
+        self.assertTrue(scheduler.last_decision["candidates"])
 
 
 class RequestBatcherSwitchTest(unittest.IsolatedAsyncioTestCase):

@@ -11,6 +11,33 @@ class AsyncBaseScheduler:
 
     def __init__(self, storage=None):
         self.storage = storage if storage is not None else GatewayStoreManager()
+        self.last_decision: Dict[str, Any] = {}
+
+    def _candidate_snapshot(self) -> List[Dict[str, Any]]:
+        instances = self.storage.instance_table
+        snapshot = []
+        for instance_ip in self.storage.active_decode_objs:
+            instance = instances.get(instance_ip)
+            heartbeat_load = int(getattr(instance, "running_reqs", 0) or 0)
+            heartbeat_load += int(getattr(instance, "waiting_reqs", 0) or 0)
+            snapshot.append(
+                {
+                    "instance": instance_ip,
+                    "running_reqs": int(getattr(instance, "running_reqs", 0) or 0),
+                    "waiting_reqs": int(getattr(instance, "waiting_reqs", 0) or 0),
+                    "heartbeat_request_load": heartbeat_load,
+                    "effective_request_load": self.storage.get_distserve_effective_load(
+                        "decode", instance_ip
+                    ),
+                    "generate_throughput": self._decode_instance_generate_throughput(
+                        instance_ip
+                    ),
+                    "kv_cache_usage_percent": float(
+                        getattr(instance, "kv_cache_usage_percent", 0.0) or 0.0
+                    ),
+                }
+            )
+        return snapshot
 
     def lowest_generate_throughput(self) -> str:
         decode_instances = self.storage.active_decode_objs
@@ -18,7 +45,8 @@ class AsyncBaseScheduler:
             return ""
 
         instances = self.storage.instance_table
-        return min(
+        candidates = self._candidate_snapshot()
+        selected = min(
             decode_instances,
             key=lambda instance_ip: (
                 instances.get(instance_ip).generate_throughput
@@ -26,14 +54,45 @@ class AsyncBaseScheduler:
                 else 0.0
             ),
         )
+        self.last_decision = {
+            "strategy": "lowest_generate_throughput",
+            "selected_instance": selected,
+            "selection_source": "decode_gateway_scheduler",
+            "reason": "minimum_generate_throughput",
+            "candidates": candidates,
+        }
+        return selected
 
     def round_robin(self) -> str:
         if hasattr(self.storage, "next_decode_round_robin"):
-            return self.storage.next_decode_round_robin()
+            candidates = self._candidate_snapshot()
+            selected = self.storage.next_decode_round_robin()
+            self.last_decision = {
+                "strategy": "round_robin",
+                "selected_instance": selected,
+                "selection_source": "decode_gateway_scheduler",
+                "reason": "next_round_robin_instance_load_ignored",
+                "candidates": candidates,
+            }
+            return selected
         return self.lowest_generate_throughput()
 
     def distserve(self, request: BaseRequest) -> str:
-        return self.storage.reserve_distserve_batch("decode", [request.Request_ID])
+        candidates = self._candidate_snapshot()
+        selected = self.storage.reserve_distserve_batch("decode", [request.Request_ID])
+        self.last_decision = {
+            "strategy": "distserve",
+            "selected_instance": selected,
+            "selection_source": "decode_gateway_scheduler",
+            "reason": "minimum_effective_request_load",
+            "candidates": candidates,
+            "selected_effective_request_load_after": (
+                self.storage.get_distserve_effective_load("decode", selected)
+                if selected
+                else None
+            ),
+        }
+        return selected
 
     def _decode_instance_generate_throughput(self, instance_ip: str) -> float:
         instance = self.storage.instance_table.get(instance_ip)
@@ -183,6 +242,14 @@ class AsyncBaseScheduler:
                 best_unsafe = evaluation
 
         if best_safe is not None:
+            self.last_decision = {
+                "strategy": "slo_tpot_admission",
+                "selected_instance": best_safe["instance_ip"],
+                "selection_source": "decode_gateway_scheduler",
+                "reason": "safe_candidate_minimum_load_score",
+                "selected_evaluation": best_safe,
+                "candidates": self._candidate_snapshot(),
+            }
             logging.info(
                 "[Decode SLO Admission] Selected %s with load_score=%s and TPOT margin %.3f ms; "
                 "worst_request=%s predicted_tpot=%.3f ms slo=%.3f ms",
@@ -196,6 +263,14 @@ class AsyncBaseScheduler:
             return best_safe["instance_ip"]
 
         if best_unsafe is not None:
+            self.last_decision = {
+                "strategy": "slo_tpot_admission",
+                "selected_instance": best_unsafe["instance_ip"],
+                "selection_source": "decode_gateway_scheduler",
+                "reason": "no_safe_candidate_minimum_slo_violations",
+                "selected_evaluation": best_unsafe,
+                "candidates": self._candidate_snapshot(),
+            }
             logging.info(
                 "[Decode SLO Admission] No safe active batch found; selected %s with "
                 "minimum violations=%d, load_score=%s, worst_margin=%.3f ms; worst_request=%s "
@@ -211,6 +286,13 @@ class AsyncBaseScheduler:
             return best_unsafe["instance_ip"]
 
         fallback = self.lowest_generate_throughput()
+        fallback_decision = dict(self.last_decision)
+        self.last_decision = {
+            **fallback_decision,
+            "strategy": "slo_tpot_admission",
+            "selected_instance": fallback,
+            "reason": "tpot_prediction_unavailable_fallback_minimum_generate_throughput",
+        }
         logging.info(
             "[Decode SLO Admission] No valid TPOT prediction; fallback to lowest generate_throughput: %s",
             fallback,

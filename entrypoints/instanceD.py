@@ -25,6 +25,16 @@ from core.routers.instance import router
 from core.lifespans.instance import lifespan
 
 
+def parse_gpu_indices(value: str):
+    try:
+        indices = [int(item.strip()) for item in str(value).split(",") if item.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("GPU indices must be comma-separated integers") from exc
+    if not indices or any(index < 0 for index in indices) or len(indices) != len(set(indices)):
+        raise argparse.ArgumentTypeError("GPU indices must be unique non-negative integers")
+    return indices
+
+
 def setup_logger():
     """配置全局日志系统"""
     logging.basicConfig(
@@ -73,6 +83,12 @@ def parse_args():
     parser.add_argument("--side-channel-port", type=int, default=int(os.getenv("VLLM_NIXL_SIDE_CHANNEL_PORT", "0")))
     parser.add_argument("--tp-size", type=int, default=int(os.getenv("FLEXPD_TP_SIZE", "0")))
     parser.add_argument("--connector", default=NIXL_CONNECTOR)
+    parser.add_argument(
+        "--gpu-indices",
+        type=parse_gpu_indices,
+        default=parse_gpu_indices(os.getenv("FLEXPD_GPU_INDICES", "0")),
+        help="Physical GPU indices used by this instance proxy, e.g. 0 or 0,1.",
+    )
     return parser.parse_args()
 
 
@@ -102,6 +118,7 @@ def main():
     storage.side_channel_host = args.side_channel_host
     storage.side_channel_port = args.side_channel_port
     storage.tp_size = args.tp_size
+    storage.gpu_indices = list(args.gpu_indices)
 
     storage.rank = RANK
     storage.USE_MOCK = USE_MOCK

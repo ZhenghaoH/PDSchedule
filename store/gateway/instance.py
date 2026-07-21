@@ -34,6 +34,9 @@ class Instance:
     kv_cache_usage_percent: float = 0.0
     gpu_util_percent: float = 0.0
     gpu_memory_util_percent: float = 0.0
+    gpu_indices: List[int] = field(default_factory=list)
+    gpu_devices: List[Dict[str, Any]] = field(default_factory=list)
+    network_metric: Dict[str, Any] = field(default_factory=dict)
     online: bool = False
     role: str = ""
     connector: str = ""

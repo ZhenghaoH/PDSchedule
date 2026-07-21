@@ -499,6 +499,7 @@ class GatewayStoreManager:
         side_channel_port: int,
         tp_size: int,
         vllm_port: int = 0,
+        gpu_indices: Optional[List[int]] = None,
     ) -> Instance:
         """Register or idempotently refresh an instance and its NIXL identity."""
         if role not in {"prefill", "decode"}:
@@ -523,6 +524,15 @@ class GatewayStoreManager:
             instance.side_channel_port = int(side_channel_port)
             instance.tp_size = int(tp_size)
             instance.vllm_port = int(vllm_port or 0)
+            if gpu_indices is not None:
+                normalized_gpu_indices = []
+                for value in gpu_indices:
+                    index = int(value)
+                    if index < 0:
+                        raise ValueError("gpu_indices must be non-negative")
+                    if index not in normalized_gpu_indices:
+                        normalized_gpu_indices.append(index)
+                instance.gpu_indices = normalized_gpu_indices
             instance.last_updated = time.time()
             self._instance_table[instance_ip] = instance
             target = self._prefill_objs if role == "prefill" else self._decode_objs
@@ -570,6 +580,8 @@ class GatewayStoreManager:
             instance.kv_cache_usage_percent = 0.0
             instance.gpu_util_percent = 0.0
             instance.gpu_memory_util_percent = 0.0
+            instance.gpu_devices = []
+            instance.network_metric = {}
             instance.last_updated = time.time()
             self._ensure_distserve_state_locked()
             self._distserve_reservations["prefill"].pop(instance_ip, None)

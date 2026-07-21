@@ -17,11 +17,13 @@ from utils.nixl_request import (
     extract_kv_transfer_params,
     nixl_headers_for_request,
 )
+from utils.gateway_observability import get_gateway_observer
 
 from store.gateway.manager import GatewayStoreManager
 
 # 导入配置参数
 storage = GatewayStoreManager()
+prefill_observer = get_gateway_observer("prefill")
 PREFILL_WAITING_TOKEN_BUDGET = 4096
 
 
@@ -314,6 +316,24 @@ class SchedulingEngine:
                             if hasattr(obj.Task, attr):
                                 setattr(r.Task, attr, getattr(obj.Task, attr))
                         valid_reqs.append(r)
+
+                for request in valid_reqs:
+                    selection = dict(
+                        getattr(request.Task, "scheduler_metadata", {}).get(
+                            "gateway_prefill_selection", {}
+                        )
+                    )
+                    prefill_observer.record_schedule(
+                        request_id=str(request.Request_ID),
+                        **selection,
+                    )
+                    logging.info(
+                        "[Prefill Schedule] request=%s strategy=%s selected=%s reason=%s",
+                        request.Request_ID,
+                        selection.get("strategy"),
+                        selection.get("selected_instance"),
+                        selection.get("reason"),
+                    )
 
                 valid_request_ids = {_rid_key(request.Request_ID) for request in valid_reqs}
                 for scheduled_request in scheduled_plan:
@@ -1187,6 +1207,19 @@ class RequestBatcher:
         rid_key = _rid_key(rid)
         event = asyncio.Event()
 
+        metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
+        timing = dict(metadata.get("gateway_timing", {}) or {})
+        timing["prefill_arrival_s"] = request.Service.arrival_time
+        metadata["gateway_timing"] = timing
+        request.Task.scheduler_metadata = metadata
+        prefill_observer.record_timing(
+            "request_arrived",
+            request_id=rid_key,
+            timestamp_s=request.Service.arrival_time,
+            prompt_tokens=getattr(request.Prompt, "token_length", None),
+            mode=mode,
+        )
+
         async with self.lock:
             self.batch_manager[rid_key] = {
                 "event": event,
@@ -1287,6 +1320,22 @@ class RequestBatcher:
         rid = request.Request_ID
         rid_key = _rid_key(rid)
         tracker = None
+        prefill_started_s = time.time()
+        prefill_finished_s = None
+        final_status = "failed"
+        final_error = None
+        metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
+        timing = dict(metadata.get("gateway_timing", {}) or {})
+        timing["prefill_start_s"] = prefill_started_s
+        timing["prefill_instance"] = instance
+        metadata["gateway_timing"] = timing
+        request.Task.scheduler_metadata = metadata
+        prefill_observer.record_timing(
+            "prefill_dispatched",
+            request_id=rid_key,
+            timestamp_s=prefill_started_s,
+            instance=instance,
+        )
         try:
             async with self.lock:
                 batch_entry = self.batch_manager.get(rid_key, {})
@@ -1315,6 +1364,28 @@ class RequestBatcher:
                 kv_transfer_params = extract_kv_transfer_params(prefill_response)
                 request.Task.prefill_instance = instance
                 request.Task.nixl_kv_transfer_params = kv_transfer_params
+                prefill_finished_s = time.time()
+                metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
+                timing = dict(metadata.get("gateway_timing", {}) or {})
+                timing["prefill_end_s"] = prefill_finished_s
+                metadata["gateway_timing"] = timing
+                request.Task.scheduler_metadata = metadata
+                final_status = "completed"
+                prefill_observer.record_timing(
+                    "prefill_finished",
+                    request_id=rid_key,
+                    timestamp_s=prefill_finished_s,
+                    instance=instance,
+                    prefill_ms=max(0.0, (prefill_finished_s - prefill_started_s) * 1000.0),
+                    prefill_queue_ms=max(
+                        0.0,
+                        (
+                            prefill_started_s
+                            - float(timing.get("prefill_arrival_s", prefill_started_s))
+                        )
+                        * 1000.0,
+                    ),
+                )
 
                 async with self.lock:
                     if rid_key in self.batch_manager:
@@ -1379,6 +1450,28 @@ class RequestBatcher:
             await tracker.wait_for_completion()
 
             logging.info(f"Req {str(rid)[-4:]} finished on {instance}.")
+            prefill_finished_s = time.time()
+            metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
+            timing = dict(metadata.get("gateway_timing", {}) or {})
+            timing["prefill_end_s"] = prefill_finished_s
+            metadata["gateway_timing"] = timing
+            request.Task.scheduler_metadata = metadata
+            prefill_observer.record_timing(
+                "prefill_finished",
+                request_id=rid_key,
+                timestamp_s=prefill_finished_s,
+                instance=instance,
+                prefill_ms=max(0.0, (prefill_finished_s - prefill_started_s) * 1000.0),
+                prefill_queue_ms=max(
+                    0.0,
+                    (
+                        prefill_started_s
+                        - float(timing.get("prefill_arrival_s", prefill_started_s))
+                    )
+                    * 1000.0,
+                ),
+            )
+            final_status = "completed"
 
         except asyncio.CancelledError:
             # 处理抢占或关闭
@@ -1386,6 +1479,8 @@ class RequestBatcher:
                 logging.info(f"🔄 [Bounced] Req {str(rid)[-4:]} preempted...")
             else:
                 logging.debug(f"Req {rid} cancelled.")
+            final_status = "cancelled"
+            final_error = "request_cancelled"
 
             # 确保通知 add_request，防止死锁
             async with self.lock:
@@ -1403,6 +1498,8 @@ class RequestBatcher:
         except Exception as e:
             # 异常处理
             logging.error(f"Req {rid} failed: {e}")
+            final_status = "failed"
+            final_error = str(e)
             self.monitor_engine.handle_ttft_stats(999, True, rid_key)
             async with self.lock:
                 if rid_key in self.batch_manager:
@@ -1416,6 +1513,15 @@ class RequestBatcher:
                 self.inflight_prefill_sent_time.pop(rid_key, None)
                 self.inflight_prefill_meta.pop(rid_key, None)
         finally:
+            if final_status != "completed":
+                prefill_observer.record_timing(
+                    "prefill_failed" if final_status == "failed" else "prefill_cancelled",
+                    request_id=rid_key,
+                    timestamp_s=time.time(),
+                    instance=instance,
+                    status=final_status,
+                    error=final_error,
+                )
             storage.release_distserve_reservation("prefill", rid_key, instance)
             # 清理全局运行映射
             async with self.lock:

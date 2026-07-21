@@ -1,6 +1,7 @@
 import re
 import requests
 import os
+from typing import Iterable, List
 from config.network.default import NetworkConfig
 # pip install prometheus-client -i https://pypi.tuna.tsinghua.edu.cn/simple/
 from prometheus_client.parser import text_string_to_metric_families
@@ -111,54 +112,109 @@ def fetch_prometheus_metrics(host: str):
         return None
 
 
-def get_gpu_bandwidth_utilization():
-    """
-    读取 GPU memory utilization，作为测试期的“GPU 带宽占用率”代理指标。
-    仅用于实例侧日志观测，不参与当前正式上报链路。
-    """
-    gpu_index = int(os.getenv("MY_PCIE_GPU_INDEX", "0"))
+def _normalize_gpu_indices(gpu_indices: Iterable[int] | None) -> List[int]:
+    if gpu_indices is None:
+        gpu_indices = [int(os.getenv("MY_PCIE_GPU_INDEX", "0"))]
+    normalized = []
+    for value in gpu_indices:
+        index = int(value)
+        if index < 0:
+            raise ValueError("GPU indices must be non-negative")
+        if index not in normalized:
+            normalized.append(index)
+    return normalized or [0]
 
+
+def get_gpu_device_metrics(gpu_indices: Iterable[int] | None = None):
+    """Return per-device GPU utilization and real VRAM capacity occupancy."""
+    indices = _normalize_gpu_indices(gpu_indices)
     if pynvml is None:
-        return {
-            "gpu_index": gpu_index,
-            "device_name": "unknown",
-            "memory_util_percent": 0.0,
-            "gpu_util_percent": 0.0,
-            "source": "pynvml_unavailable",
-        }
+        return [
+            {
+                "gpu_index": index,
+                "device_name": "unknown",
+                "gpu_util_percent": 0.0,
+                "gpu_memory_used_bytes": 0,
+                "gpu_memory_total_bytes": 0,
+                "gpu_memory_util_percent": 0.0,
+                "metric_source": "pynvml_unavailable",
+            }
+            for index in indices
+        ]
 
+    results = []
     try:
         pynvml.nvmlInit()
-        handle = pynvml.nvmlDeviceGetHandleByIndex(gpu_index)
-        device_name = pynvml.nvmlDeviceGetName(handle)
-        if isinstance(device_name, bytes):
-            device_name = device_name.decode("utf-8", errors="ignore")
-
-        utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
-        gpu_util_percent = _smooth_gpu_util_percent(
-            gpu_index,
-            float(getattr(utilization, "gpu", 0.0)),
-        )
-        return {
-            "gpu_index": gpu_index,
-            "device_name": device_name,
-            "memory_util_percent": float(getattr(utilization, "memory", 0.0)),
-            "gpu_util_percent": gpu_util_percent,
-            "source": "nvml",
-        }
+        for index in indices:
+            try:
+                handle = pynvml.nvmlDeviceGetHandleByIndex(index)
+                device_name = pynvml.nvmlDeviceGetName(handle)
+                if isinstance(device_name, bytes):
+                    device_name = device_name.decode("utf-8", errors="ignore")
+                utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
+                memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                memory_total = max(0, int(getattr(memory, "total", 0) or 0))
+                memory_used = max(0, int(getattr(memory, "used", 0) or 0))
+                memory_percent = (
+                    memory_used / memory_total * 100.0 if memory_total > 0 else 0.0
+                )
+                results.append(
+                    {
+                        "gpu_index": index,
+                        "device_name": str(device_name),
+                        "gpu_util_percent": _smooth_gpu_util_percent(
+                            index,
+                            float(getattr(utilization, "gpu", 0.0)),
+                        ),
+                        "gpu_memory_used_bytes": memory_used,
+                        "gpu_memory_total_bytes": memory_total,
+                        "gpu_memory_util_percent": memory_percent,
+                        "metric_source": "nvml",
+                    }
+                )
+            except Exception as exc:
+                results.append(
+                    {
+                        "gpu_index": index,
+                        "device_name": "unknown",
+                        "gpu_util_percent": 0.0,
+                        "gpu_memory_used_bytes": 0,
+                        "gpu_memory_total_bytes": 0,
+                        "gpu_memory_util_percent": 0.0,
+                        "metric_source": f"nvml_error:{type(exc).__name__}",
+                    }
+                )
+        return results
     except Exception as exc:
-        return {
-            "gpu_index": gpu_index,
-            "device_name": "unknown",
-            "memory_util_percent": 0.0,
-            "gpu_util_percent": 0.0,
-            "source": f"nvml_error:{type(exc).__name__}",
-        }
+        return [
+            {
+                "gpu_index": index,
+                "device_name": "unknown",
+                "gpu_util_percent": 0.0,
+                "gpu_memory_used_bytes": 0,
+                "gpu_memory_total_bytes": 0,
+                "gpu_memory_util_percent": 0.0,
+                "metric_source": f"nvml_error:{type(exc).__name__}",
+            }
+            for index in indices
+        ]
     finally:
         try:
             pynvml.nvmlShutdown()
         except Exception:
             pass
+
+
+def get_gpu_bandwidth_utilization():
+    """Backward-compatible single-device aggregate for existing callers."""
+    device = get_gpu_device_metrics()[0]
+    return {
+        "gpu_index": device["gpu_index"],
+        "device_name": device["device_name"],
+        "memory_util_percent": device["gpu_memory_util_percent"],
+        "gpu_util_percent": device["gpu_util_percent"],
+        "source": device["metric_source"],
+    }
 
 
 def get_mock_network_metrics():

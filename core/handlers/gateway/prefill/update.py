@@ -3,6 +3,10 @@ from fastapi.responses import Response
 import time
 
 from store.gateway.manager import GatewayStoreManager
+from utils.gateway_observability import get_gateway_observer
+
+
+observer = get_gateway_observer("prefill")
 
 
 async def register_instance(raw_request: Request):
@@ -18,6 +22,7 @@ async def register_instance(raw_request: Request):
             side_channel_port=data.get("side_channel_port", 0),
             tp_size=data.get("tp_size", 0),
             vllm_port=data.get("vllm_port", 0),
+            gpu_indices=data.get("gpu_indices"),
         )
         return {"report_label": instance.instance_ip, "role": instance.role}
     except HTTPException:
@@ -37,6 +42,8 @@ async def update_instance_metric(raw_request: Request):
         kv_cache_usage_percent = request_json.get('kv_cache_usage_percent', 0.0)
         gpu_util_percent = request_json.get('gpu_util_percent', 0.0)
         gpu_memory_util_percent = request_json.get('gpu_memory_util_percent', 0.0)
+        gpu_devices = request_json.get("gpu_devices", [])
+        network_metric = request_json.get("network_metric", {})
 
         if report_label:
             storage = GatewayStoreManager()
@@ -50,6 +57,21 @@ async def update_instance_metric(raw_request: Request):
             instance.kv_cache_usage_percent = kv_cache_usage_percent
             instance.gpu_util_percent = gpu_util_percent
             instance.gpu_memory_util_percent = gpu_memory_util_percent
+            instance.gpu_devices = gpu_devices if isinstance(gpu_devices, list) else []
+            instance.network_metric = network_metric if isinstance(network_metric, dict) else {}
+            if instance.gpu_devices:
+                reported_gpu_indices = []
+                for item in instance.gpu_devices:
+                    if not isinstance(item, dict) or item.get("gpu_index") is None:
+                        continue
+                    try:
+                        gpu_index = int(item["gpu_index"])
+                    except (TypeError, ValueError):
+                        continue
+                    if gpu_index >= 0 and gpu_index not in reported_gpu_indices:
+                        reported_gpu_indices.append(gpu_index)
+                if reported_gpu_indices:
+                    instance.gpu_indices = reported_gpu_indices
             instance.online = True
             instance.last_updated = time.time()
             storage.set_instance_table(report_label, instance)
@@ -57,6 +79,11 @@ async def update_instance_metric(raw_request: Request):
                 "prefill",
                 report_label,
                 int(running_reqs) + int(waiting_reqs),
+            )
+            observer.record_instance_resources(
+                report_label,
+                gpu_devices=instance.gpu_devices,
+                network=instance.network_metric,
             )
             return Response(status_code=200)
         else:

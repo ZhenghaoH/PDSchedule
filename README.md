@@ -83,7 +83,7 @@ Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `least_load`、`ro
 
 #### DistServe 在线调度基线
 
-`distserve` 复现 DistServe 4.3 的网关在线调度部分。P 网关不再等待或按 token 形成逻辑 batch：每个请求到达后立即以 `running_reqs + waiting_reqs` 和网关保存的未完成请求预约组成有效队列长度，独立执行 JSQ 并直接转发到最短 P 队列。每次预约会立即影响下一个请求的选择，并在请求成功、失败或取消后释放；P heartbeat 不提前删除未完成预约，异常泄漏保护 TTL 为 240 秒。D 网关继续以原有有效负载定义立即选择最低负载实例。并列时按实例地址稳定选择。策略保留既有 NIXL Pull 参数链路，并关闭自适应策略切换和 Prefill 抢占。
+`distserve` 复现 DistServe 4.3 的网关在线调度部分。P 网关不等待或按 token 形成逻辑 batch：每个请求到达后，以网关维护的各实例“未完成输入 token 总数”独立执行 token-weighted JSQ，并立即转发到负载最低的 P 实例。每个请求使用 `Prompt.token_length` 作为权重，不包含主要属于 Decode 阶段的输出预算 `max_tokens`；预约会立即影响下一个请求的选择，并在请求成功、失败或取消后释放。P heartbeat 上报的是请求数，不能与 token 负载混加，因此不会覆盖 P 网关维护的 token 预约；异常泄漏保护 TTL 为 240 秒。D 网关继续以原有请求数有效负载定义立即选择最低负载实例。并列时按实例地址稳定选择。策略保留既有 NIXL Pull 参数链路，并关闭自适应策略切换和 Prefill 抢占。
 
 ```bash
 python entrypoints/gatewayP.py \
@@ -97,6 +97,8 @@ python entrypoints/gatewayD.py \
 ```
 
 `--distserve-prefill-batch-tokens` 仅作为旧部署命令的兼容参数保留，当前 request-level direct-JSQ P 调度会忽略它；vLLM 的 continuous batching 由实例自身的 `max_num_batched_tokens` 等参数控制。该基线不包含论文的 placement algorithm、周期性 workload replan、模型迁移或资源重配置。四机中心网关部署参见 `DistServe启动脚本/README.md`。
+
+DistServe P 侧未完成 token 预约保存在网关进程内存中；网关重启后不能从仅包含请求数的实例心跳恢复原 token 负载。正常请求结束会立即释放预约，异常情况下预约最多保留 240 秒。
 
 交互式网关 CLI 支持上下方向键查看历史，并支持 Tab 自动补全命令和当前网关可用的调度策略。
 

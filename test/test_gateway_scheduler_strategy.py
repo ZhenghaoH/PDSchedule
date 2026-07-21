@@ -162,6 +162,20 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
                 for request in scheduled
             )
         )
+        self.assertTrue(
+            all(
+                request.Task.scheduler_metadata["distserve"]["load_metric"]
+                == "unfinished_prompt_tokens"
+                for request in scheduled
+            )
+        )
+        self.assertEqual(
+            [
+                request.Task.scheduler_metadata["distserve"]["prompt_tokens"]
+                for request in scheduled
+            ],
+            [1000, 1000, 100],
+        )
         self.assertNotIn("batch_tokens", scheduled[0].Task.scheduler_metadata["distserve"])
 
     async def test_distserve_does_not_reorder_or_group_pending_requests(self):
@@ -175,7 +189,7 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
             [request.Task.prefill_instance for request in scheduled], ["p1", "p2"]
         )
 
-    async def test_distserve_prompt_length_does_not_affect_direct_jsq(self):
+    async def test_distserve_uses_unfinished_prompt_tokens_for_jsq(self):
         long_request = make_request(1, 2048)
         scheduled, _ = await self.scheduler.schedule_batch(
             [long_request, make_request(2, 10)], strategy="distserve"
@@ -188,7 +202,9 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         next_scheduled, _ = await self.scheduler.schedule_batch(
             [make_request(3, 10)], strategy="distserve"
         )
-        self.assertEqual(next_scheduled[0].Task.prefill_instance, "p1")
+        self.assertEqual(next_scheduled[0].Task.prefill_instance, "p2")
+        self.assertEqual(self.store.get_distserve_effective_load("prefill", "p1"), 2048)
+        self.assertEqual(self.store.get_distserve_effective_load("prefill", "p2"), 20)
 
 
 class DecodeDistServeSchedulerTest(unittest.IsolatedAsyncioTestCase):

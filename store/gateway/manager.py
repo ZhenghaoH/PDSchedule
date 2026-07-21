@@ -249,12 +249,18 @@ class GatewayStoreManager:
 
     def _distserve_effective_load_locked(self, role: str, instance_ip: str) -> int:
         self._cleanup_distserve_reservations_locked()
+        reservations = self._distserve_reservations[role].get(instance_ip, {})
+        if role == "prefill":
+            return sum(
+                max(1, int(item.get("load_units", 1) or 1))
+                for item in reservations.values()
+            )
+
         instance = self._instance_table.get(instance_ip)
         heartbeat_load = 0
         if instance is not None:
             heartbeat_load = max(0, int(getattr(instance, "running_reqs", 0) or 0))
             heartbeat_load += max(0, int(getattr(instance, "waiting_reqs", 0) or 0))
-        reservations = self._distserve_reservations[role].get(instance_ip, {})
         highest_target = max(
             (int(item.get("target_load", 0)) for item in reservations.values()),
             default=0,
@@ -267,11 +273,40 @@ class GatewayStoreManager:
         with self._data_lock:
             return self._distserve_effective_load_locked(role, instance_ip)
 
-    def reserve_distserve_batch(self, role: str, request_ids: List[Any]) -> str:
-        """Atomically select the least-loaded active instance and reserve a batch."""
+    def reserve_distserve_batch(
+        self,
+        role: str,
+        request_ids: List[Any],
+        request_loads: Optional[List[int]] = None,
+    ) -> str:
+        """Atomically select the least-loaded active instance and reserve requests.
+
+        Prefill load is measured in unfinished prompt tokens. Decode retains its
+        request-count load metric, including heartbeat reconciliation.
+        """
         if role not in {"prefill", "decode"}:
             raise ValueError(f"Unsupported DistServe role: {role}")
-        request_keys = [str(request_id) for request_id in request_ids if str(request_id)]
+        if role == "prefill" and (
+            request_loads is None or len(request_loads) != len(request_ids)
+        ):
+            raise ValueError(
+                "Prefill DistServe reservations require one prompt-token load per request"
+            )
+
+        reservation_items = []
+        for index, request_id in enumerate(request_ids):
+            request_key = str(request_id)
+            if not request_key:
+                continue
+            load_units = 1
+            if role == "prefill":
+                try:
+                    load_units = max(1, int(request_loads[index]))
+                except (TypeError, ValueError):
+                    load_units = 1
+            reservation_items.append((request_key, load_units))
+
+        request_keys = [request_key for request_key, _ in reservation_items]
         if not request_keys:
             return ""
 
@@ -309,11 +344,17 @@ class GatewayStoreManager:
             next_load = self._distserve_effective_load_locked(role, selected)
             reservations = role_reservations.setdefault(selected, {})
             created_at = time.time()
-            for offset, request_id in enumerate(request_keys, start=1):
-                reservations[request_id] = {
-                    "target_load": next_load + offset,
-                    "created_at": created_at,
-                }
+            for offset, (request_id, load_units) in enumerate(reservation_items, start=1):
+                if role == "prefill":
+                    reservations[request_id] = {
+                        "load_units": load_units,
+                        "created_at": created_at,
+                    }
+                else:
+                    reservations[request_id] = {
+                        "target_load": next_load + offset,
+                        "created_at": created_at,
+                    }
             return selected
 
     def release_distserve_reservation(

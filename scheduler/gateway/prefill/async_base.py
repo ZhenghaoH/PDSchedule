@@ -26,7 +26,18 @@ class AsyncBaseScheduler:
 
     def reserve_distserve_batch(self, requests) -> str:
         request_ids = [request.Request_ID for request in requests]
-        return self.storage.reserve_distserve_batch("prefill", request_ids)
+        prompt_token_loads = []
+        for request in requests:
+            try:
+                prompt_tokens = int(getattr(request.Prompt, "token_length", 0) or 0)
+            except (TypeError, ValueError):
+                prompt_tokens = 0
+            prompt_token_loads.append(max(1, prompt_tokens))
+        return self.storage.reserve_distserve_batch(
+            "prefill",
+            request_ids,
+            request_loads=prompt_token_loads,
+        )
 
     def schedule(self, request: BaseRequest, tag: str = "prefill", strategy: str = "lowest_prompt_throughput", **kwargs) -> str:
         if tag == "prefill":

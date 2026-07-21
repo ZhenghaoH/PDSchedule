@@ -68,12 +68,26 @@ class SchedulerManager:
                 request.Task.batch_order = 1
                 request.Task.prefill_instance = selected_instance
                 request.Task.slo_plan_position = position
+                try:
+                    prompt_tokens = int(
+                        getattr(request.Prompt, "token_length", 0) or 0
+                    )
+                except (TypeError, ValueError):
+                    prompt_tokens = 0
+                prompt_tokens = max(1, prompt_tokens)
                 metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
                 metadata["distserve"] = {
                     "role": "prefill",
                     "dispatch_mode": "direct_jsq",
+                    "load_metric": "unfinished_prompt_tokens",
                     "request_id": str(request.Request_ID),
+                    "prompt_tokens": prompt_tokens,
                     "selected_instance": selected_instance,
+                    "selected_unfinished_tokens": (
+                        self.basic_scheduler.storage.get_distserve_effective_load(
+                            "prefill", selected_instance
+                        )
+                    ),
                 }
                 request.Task.scheduler_metadata = metadata
                 scheduled.append(request)

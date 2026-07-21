@@ -5,6 +5,7 @@ import importlib
 import os
 import asyncio
 import types
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -123,6 +124,100 @@ class RuntimeInstanceRegistrationTest(unittest.TestCase):
         self.assertEqual(self.manager.reserve_distserve_batch("decode", ["r2"]), "d2")
         self.assertTrue(self.manager.release_distserve_reservation("decode", "r1", "d1"))
         self.assertEqual(self.manager.get_distserve_effective_load("decode", "d1"), 0)
+
+    def test_distserve_prefill_ties_round_robin_in_configuration_order(self) -> None:
+        self.manager._prefill_objs = ["p1", "p2", "p3"]
+        self.manager._instance_table = {
+            instance: Instance(instance, online=True)
+            for instance in self.manager._prefill_objs
+        }
+
+        selected = []
+        for index in range(6):
+            request_id = f"p-{index}"
+            instance = self.manager.reserve_distserve_batch(
+                "prefill", [request_id], request_loads=[10]
+            )
+            selected.append(instance)
+            self.manager.release_distserve_reservation(
+                "prefill", request_id, instance
+            )
+
+        self.assertEqual(selected, ["p1", "p2", "p3", "p1", "p2", "p3"])
+
+    def test_distserve_decode_ties_use_an_independent_round_robin_cursor(self) -> None:
+        self.manager._prefill_objs = ["p1", "p2"]
+        self.manager._decode_objs = ["d1", "d2"]
+        self.manager._instance_table = {
+            instance: Instance(instance, online=True)
+            for instance in [*self.manager._prefill_objs, *self.manager._decode_objs]
+        }
+
+        selected_prefill = self.manager.reserve_distserve_batch(
+            "prefill", ["p-request"], request_loads=[10]
+        )
+        self.manager.release_distserve_reservation(
+            "prefill", "p-request", selected_prefill
+        )
+        selected_decode = self.manager.reserve_distserve_batch(
+            "decode", ["d-request"]
+        )
+
+        self.assertEqual(selected_prefill, "p1")
+        self.assertEqual(selected_decode, "d1")
+
+    def test_distserve_tie_break_never_overrides_unique_minimum_load(self) -> None:
+        self.manager._decode_objs = ["d1", "d2", "d3"]
+        self.manager._instance_table = {
+            "d1": Instance("d1", online=True, running_reqs=3),
+            "d2": Instance("d2", online=True, running_reqs=1),
+            "d3": Instance("d3", online=True, running_reqs=2),
+        }
+        self.manager._distserve_tie_break_cursor = {"prefill": 0, "decode": 2}
+
+        selected = self.manager.reserve_distserve_batch("decode", ["r1"])
+
+        self.assertEqual(selected, "d2")
+
+    def test_distserve_tie_break_skips_offline_candidates(self) -> None:
+        self.manager._prefill_objs = ["p1", "p2", "p3"]
+        self.manager._instance_table = {
+            instance: Instance(instance, online=True)
+            for instance in self.manager._prefill_objs
+        }
+        self.manager.mark_instance_offline("p2")
+
+        selected = []
+        for index in range(4):
+            request_id = f"online-{index}"
+            instance = self.manager.reserve_distserve_batch(
+                "prefill", [request_id], request_loads=[10]
+            )
+            selected.append(instance)
+            self.manager.release_distserve_reservation(
+                "prefill", request_id, instance
+            )
+
+        self.assertEqual(selected, ["p1", "p3", "p1", "p3"])
+
+    def test_distserve_prefill_tie_break_is_atomic_under_concurrency(self) -> None:
+        self.manager._prefill_objs = ["p1", "p2", "p3"]
+        self.manager._instance_table = {
+            instance: Instance(instance, online=True)
+            for instance in self.manager._prefill_objs
+        }
+
+        def reserve(index):
+            return self.manager.reserve_distserve_batch(
+                "prefill", [f"concurrent-{index}"], request_loads=[1]
+            )
+
+        with ThreadPoolExecutor(max_workers=12) as executor:
+            selected = list(executor.map(reserve, range(120)))
+
+        self.assertEqual(selected.count("p1"), 40)
+        self.assertEqual(selected.count("p2"), 40)
+        self.assertEqual(selected.count("p3"), 40)
 
     def test_prefill_distserve_keeps_reservation_until_explicit_release(self) -> None:
         self.manager._prefill_objs = ["p1"]

@@ -41,6 +41,7 @@ def make_store(prefills=None, decodes=None):
     manager._instance_table = {}
     manager._prefill_round_robin_index = 0
     manager._decode_round_robin_index = 0
+    manager._distserve_tie_break_cursor = {"prefill": 0, "decode": 0}
     manager.SCHEDULER_STRATEGY = "pso_new"
     manager.DECODE_SCHEDULER_STRATEGY = "slo_tpot_admission"
     manager.DIST_SERVE_PREFILL_BATCH_TOKENS = 2048
@@ -157,7 +158,7 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([request.Request_ID for request in scheduled], [1, 2, 3])
         self.assertEqual(
             [request.Task.prefill_instance for request in scheduled],
-            ["p1", "p2", "p1"],
+            ["p2", "p1", "p2"],
         )
         self.assertTrue(all(request.Task.batch_order == 1 for request in scheduled))
         self.assertEqual(
@@ -194,7 +195,7 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual([request.Request_ID for request in scheduled], [2, 1])
         self.assertEqual(
-            [request.Task.prefill_instance for request in scheduled], ["p1", "p2"]
+            [request.Task.prefill_instance for request in scheduled], ["p2", "p1"]
         )
 
     async def test_distserve_uses_unfinished_prompt_tokens_for_jsq(self):
@@ -204,15 +205,15 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual([request.Request_ID for request in scheduled], [1, 2])
         self.assertEqual(
-            [request.Task.prefill_instance for request in scheduled], ["p1", "p2"]
+            [request.Task.prefill_instance for request in scheduled], ["p2", "p1"]
         )
 
         next_scheduled, _ = await self.scheduler.schedule_batch(
             [make_request(3, 10)], strategy="distserve"
         )
-        self.assertEqual(next_scheduled[0].Task.prefill_instance, "p2")
-        self.assertEqual(self.store.get_distserve_effective_load("prefill", "p1"), 2048)
-        self.assertEqual(self.store.get_distserve_effective_load("prefill", "p2"), 20)
+        self.assertEqual(next_scheduled[0].Task.prefill_instance, "p1")
+        self.assertEqual(self.store.get_distserve_effective_load("prefill", "p1"), 20)
+        self.assertEqual(self.store.get_distserve_effective_load("prefill", "p2"), 2048)
 
 
 class DecodeDistServeSchedulerTest(unittest.IsolatedAsyncioTestCase):
@@ -227,8 +228,8 @@ class DecodeDistServeSchedulerTest(unittest.IsolatedAsyncioTestCase):
         first = await scheduler.schedule_async(make_request(1), strategy="distserve")
         second = await scheduler.schedule_async(make_request(2), strategy="distserve")
 
-        self.assertEqual(first, "d1")
-        self.assertEqual(second, "d2")
+        self.assertEqual(first, "d2")
+        self.assertEqual(second, "d1")
         self.assertEqual(
             scheduler.last_decision["reason"], "minimum_effective_request_load"
         )

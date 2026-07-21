@@ -82,6 +82,10 @@ class GatewayStoreManager:
                         "prefill": {},
                         "decode": {},
                     }
+                    self._distserve_tie_break_cursor = {
+                        "prefill": 0,
+                        "decode": 0,
+                    }
                     self.DIST_SERVE_RESERVATION_TTL = 240.0
                     self.DIST_SERVE_PREFILL_BATCH_TOKENS = 2048
                     self._prefill_round_robin_index = 0
@@ -231,8 +235,40 @@ class GatewayStoreManager:
     def _ensure_distserve_state_locked(self):
         if not hasattr(self, "_distserve_reservations"):
             self._distserve_reservations = {"prefill": {}, "decode": {}}
+        if not hasattr(self, "_distserve_tie_break_cursor"):
+            self._distserve_tie_break_cursor = {"prefill": 0, "decode": 0}
+        else:
+            self._distserve_tie_break_cursor.setdefault("prefill", 0)
+            self._distserve_tie_break_cursor.setdefault("decode", 0)
         if not hasattr(self, "DIST_SERVE_RESERVATION_TTL"):
             self.DIST_SERVE_RESERVATION_TTL = 240.0
+
+    def _select_distserve_tie_break_locked(
+        self,
+        role: str,
+        candidates: List[str],
+        effective_loads: Dict[str, int],
+    ) -> str:
+        """Round-robin only among candidates sharing the minimum load."""
+        self._ensure_distserve_state_locked()
+        if not candidates:
+            return ""
+
+        minimum_load = min(effective_loads[instance_ip] for instance_ip in candidates)
+        minimum_candidates = {
+            instance_ip
+            for instance_ip in candidates
+            if effective_loads[instance_ip] == minimum_load
+        }
+        start = int(self._distserve_tie_break_cursor[role]) % len(candidates)
+        for offset in range(len(candidates)):
+            index = (start + offset) % len(candidates)
+            selected = candidates[index]
+            if selected in minimum_candidates:
+                self._distserve_tie_break_cursor[role] = (index + 1) % len(candidates)
+                return selected
+
+        return ""
 
     def _cleanup_distserve_reservations_locked(self, now: Optional[float] = None):
         self._ensure_distserve_state_locked()
@@ -334,14 +370,16 @@ class GatewayStoreManager:
             ]
             if not candidates:
                 return ""
-            selected = min(
+            effective_loads = {
+                instance_ip: self._distserve_effective_load_locked(role, instance_ip)
+                for instance_ip in candidates
+            }
+            selected = self._select_distserve_tie_break_locked(
+                role,
                 candidates,
-                key=lambda instance_ip: (
-                    self._distserve_effective_load_locked(role, instance_ip),
-                    instance_ip,
-                ),
+                effective_loads,
             )
-            next_load = self._distserve_effective_load_locked(role, selected)
+            next_load = effective_loads[selected]
             reservations = role_reservations.setdefault(selected, {})
             created_at = time.time()
             for offset, (request_id, load_units) in enumerate(reservation_items, start=1):

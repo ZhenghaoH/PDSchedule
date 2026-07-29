@@ -1,15 +1,34 @@
 [CmdletBinding()]
 param(
-    [string]$Message,
     [string]$Remote = "origin",
-    [string]$Branch = "p2p-flexpd",
+    [string]$Branch = "PDSchedule",
+    [string]$WorkflowMessage = "chore: update PDSchedule publishing workflow",
+    [string]$RefactorMessage = "refactor: remove knowledge modules and retain PD scheduling",
     [switch]$Yes,
-    [switch]$DryRun,
-    [switch]$NoPause
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
 $script:GitExecutable = $null
+$workflowPlanPath = [System.Text.Encoding]::UTF8.GetString(
+    [System.Convert]::FromBase64String(
+        "cGxhbi/ku6PnoIHkv67mlLnliY3orqHliJLnoa7orqTmtYHnqIsubWQ="
+    )
+)
+$taskPlanPath = [System.Text.Encoding]::UTF8.GetString(
+    [System.Convert]::FromBase64String(
+        "cGxhbi/pgILphY1QRFNjaGVkdWxl5Y+M6ISa5pys5Y+R5biD6K6h5YiSLm1k"
+    )
+)
+$script:WorkflowPaths = @(
+    $workflowPlanPath,
+    "create_pdschedule.ps1",
+    "publish.ps1"
+)
+$script:ForbiddenPaths = @(
+    "run_arrival_experiments.sh",
+    $taskPlanPath
+)
 
 function Write-Step {
     param([string]$Text)
@@ -28,8 +47,6 @@ function ConvertTo-NativeArgument {
         return $Value
     }
 
-    # Quote according to the Windows CommandLineToArgvW rules. In particular,
-    # backslashes immediately before a quote or the closing quote are doubled.
     $builder = [System.Text.StringBuilder]::new()
     [void]$builder.Append('"')
     $backslashes = 0
@@ -61,11 +78,6 @@ function ConvertTo-OutputLines {
     return @([regex]::Split($Text.TrimEnd("`r", "`n"), '\r?\n'))
 }
 
-function Get-SafeRemoteUrl {
-    param([string]$Url)
-    return ($Url -replace '^(https?://)[^/@]+@', '$1')
-}
-
 function Invoke-Git {
     param(
         [Parameter(Mandatory = $true)]
@@ -77,6 +89,7 @@ function Invoke-Git {
     $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
     $startInfo.FileName = $script:GitExecutable
     $startInfo.Arguments = (($Arguments | ForEach-Object { ConvertTo-NativeArgument $_ }) -join ' ')
+    $startInfo.WorkingDirectory = (Get-Location).Path
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
     $startInfo.RedirectStandardOutput = $true
@@ -117,6 +130,27 @@ function Get-GitText {
     return (($result.Output -join "`n").Trim())
 }
 
+function Get-GitLines {
+    param([Parameter(Mandatory = $true)][string[]]$Arguments)
+    $result = Invoke-Git -Arguments $Arguments -Quiet
+    return @($result.Output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+}
+
+function Get-RemoteHead {
+    param(
+        [string]$RemoteName,
+        [string]$BranchName
+    )
+    $result = Invoke-Git -Arguments @(
+        "ls-remote", "--heads", $RemoteName, "refs/heads/$BranchName"
+    ) -Quiet
+    $line = $result.Output | Select-Object -First 1
+    if ([string]::IsNullOrWhiteSpace($line)) {
+        return $null
+    }
+    return (($line -split "\s+")[0]).Trim()
+}
+
 function Assert-NoGitOperation {
     $markers = @(
         "MERGE_HEAD",
@@ -133,19 +167,79 @@ function Assert-NoGitOperation {
     }
 }
 
-function Get-RemoteHead {
-    param(
-        [string]$RemoteName,
-        [string]$BranchName
-    )
-    $result = Invoke-Git -Arguments @(
-        "ls-remote", "--heads", $RemoteName, "refs/heads/$BranchName"
-    ) -Quiet
-    $line = ($result.Output | Select-Object -First 1)
-    if ([string]::IsNullOrWhiteSpace($line)) {
-        Stop-Publish "Remote branch does not exist: $RemoteName/$BranchName"
+function Assert-EmptyIndex {
+    $result = Invoke-Git -Arguments @("diff", "--cached", "--quiet") -AllowFailure -Quiet
+    if ($result.ExitCode -gt 1) {
+        Stop-Publish "Could not inspect the Git index."
     }
-    return (($line -split "\s+")[0]).Trim()
+    if ($result.ExitCode -eq 1) {
+        Stop-Publish "The Git index is not empty. Unstage existing changes before publishing."
+    }
+}
+
+function Get-WorkflowStatus {
+    return @(Get-GitLines -Arguments (
+        @("-c", "core.quotepath=false", "status", "--porcelain=v1", "--") +
+        $script:WorkflowPaths
+    ))
+}
+
+function Get-TrackedWorktreeChanges {
+    return @(Get-GitLines -Arguments @(
+        "-c", "core.quotepath=false",
+        "diff", "--name-only", "--diff-filter=ACDMRTUXB"
+    ))
+}
+
+function Get-StagedPaths {
+    return @(Get-GitLines -Arguments @(
+        "-c", "core.quotepath=false",
+        "diff", "--cached", "--name-only", "--diff-filter=ACDMRTUXB"
+    ))
+}
+
+function Assert-NoForbiddenStagedPath {
+    $stagedPaths = @(Get-StagedPaths)
+    foreach ($path in $stagedPaths) {
+        if ($script:ForbiddenPaths -contains $path) {
+            Stop-Publish "Forbidden path entered the index: $path"
+        }
+    }
+}
+
+function Assert-WorkflowStage {
+    $stagedPaths = @(Get-StagedPaths)
+    if ($stagedPaths.Count -eq 0) {
+        Stop-Publish "No workflow changes were staged for the first commit."
+    }
+    foreach ($path in $stagedPaths) {
+        if ($script:WorkflowPaths -notcontains $path) {
+            Stop-Publish "Unexpected path in the workflow commit: $path"
+        }
+    }
+    Assert-NoForbiddenStagedPath
+}
+
+function Assert-RefactorStage {
+    $stagedPaths = @(Get-StagedPaths)
+    if ($stagedPaths.Count -eq 0) {
+        Stop-Publish "No tracked changes were staged for the refactor commit."
+    }
+    foreach ($path in $stagedPaths) {
+        if ($script:WorkflowPaths -contains $path) {
+            Stop-Publish "Workflow path entered the refactor commit: $path"
+        }
+    }
+    Assert-NoForbiddenStagedPath
+}
+
+function Get-CommitSubject {
+    param([string]$Revision)
+    $result = Invoke-Git -Arguments @("show", "-s", "--format=%s", $Revision) -AllowFailure -Quiet
+    if ($result.ExitCode -ne 0) {
+        return $null
+    }
+    return (($result.Output -join "`n").Trim())
 }
 
 try {
@@ -154,6 +248,7 @@ try {
         Stop-Publish "Git is not installed or is unavailable in PATH."
     }
     $script:GitExecutable = $gitCommand.Source
+
     if ($Remote -notmatch '^[A-Za-z0-9._-]+$') {
         Stop-Publish "Invalid remote name: $Remote"
     }
@@ -161,17 +256,28 @@ try {
     if ($branchCheck.ExitCode -ne 0) {
         Stop-Publish "Invalid branch name: $Branch"
     }
+    if ($Branch -ne "PDSchedule") {
+        Stop-Publish "This project requires the exact branch name 'PDSchedule'."
+    }
+    if ([string]::IsNullOrWhiteSpace($WorkflowMessage)) {
+        Stop-Publish "Workflow commit message cannot be empty."
+    }
+    if ([string]::IsNullOrWhiteSpace($RefactorMessage)) {
+        Stop-Publish "Refactor commit message cannot be empty."
+    }
 
-    $scriptDirectory = $PSScriptRoot
-    Set-Location -LiteralPath $scriptDirectory
+    Set-Location -LiteralPath $PSScriptRoot
     $repositoryRoot = Get-GitText -Arguments @("rev-parse", "--show-toplevel")
     Set-Location -LiteralPath $repositoryRoot
 
     Assert-NoGitOperation
+    Assert-EmptyIndex
 
-    $currentBranchResult = Invoke-Git -Arguments @("symbolic-ref", "--quiet", "--short", "HEAD") -AllowFailure -Quiet
+    $currentBranchResult = Invoke-Git -Arguments @(
+        "symbolic-ref", "--quiet", "--short", "HEAD"
+    ) -AllowFailure -Quiet
     if ($currentBranchResult.ExitCode -ne 0) {
-        Stop-Publish "Detached HEAD is not supported. Switch to $Branch first."
+        Stop-Publish "Detached HEAD is not supported."
     }
     $currentBranch = (($currentBranchResult.Output -join "`n").Trim())
     if ($currentBranch -ne $Branch) {
@@ -182,156 +288,235 @@ try {
     if ($remoteCheck.ExitCode -ne 0) {
         Stop-Publish "Remote does not exist: $Remote"
     }
-    $remoteUrl = (($remoteCheck.Output -join "`n").Trim())
-    $displayRemoteUrl = Get-SafeRemoteUrl $remoteUrl
 
-    Write-Step "Repository: $repositoryRoot"
-    Write-Step "Target: $Remote/$Branch ($displayRemoteUrl)"
-    Write-Step "Fetching the latest remote branch..."
-    Invoke-Git -Arguments @(
-        "fetch", $Remote,
-        "refs/heads/${Branch}:refs/remotes/${Remote}/${Branch}"
-    ) | Out-Null
-
-    $remoteRef = "refs/remotes/$Remote/$Branch"
-    $fetchedRemoteHead = Get-GitText -Arguments @("rev-parse", $remoteRef)
-    $difference = Get-GitText -Arguments @(
-        "rev-list", "--left-right", "--count", "HEAD...$remoteRef"
-    )
-    $counts = @($difference -split "\s+")
-    if ($counts.Count -ne 2) {
-        Stop-Publish "Could not parse local/remote commit difference: $difference"
-    }
-    $localAhead = [int]$counts[0]
-    $remoteAhead = [int]$counts[1]
-    Write-Step "Commit difference: local ahead=$localAhead, remote ahead=$remoteAhead"
-    if ($remoteAhead -gt 0) {
+    $upstreamResult = Invoke-Git -Arguments @(
+        "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"
+    ) -AllowFailure -Quiet
+    if ($upstreamResult.ExitCode -ne 0) {
         Stop-Publish (
-            "Remote branch is ahead or histories have diverged. " +
-            "Synchronize first; this script will not merge or rebase automatically."
+            "Branch $Branch has no upstream. Run create_pdschedule.ps1 in a clean repository " +
+            "to create and first-push origin/$Branch."
+        )
+    }
+    $upstream = (($upstreamResult.Output -join "`n").Trim())
+    if ($upstream -ne "$Remote/$Branch") {
+        Stop-Publish "Upstream is '$upstream'; expected '$Remote/$Branch'."
+    }
+
+    $initialRemoteHead = Get-RemoteHead -RemoteName $Remote -BranchName $Branch
+    if ([string]::IsNullOrWhiteSpace($initialRemoteHead)) {
+        Stop-Publish (
+            "Remote branch does not exist: $Remote/$Branch. " +
+            "Run create_pdschedule.ps1 first."
         )
     }
 
-    $statusResult = Invoke-Git -Arguments @(
-        "status", "--short", "--untracked-files=all"
-    ) -Quiet
-    $statusLines = @($statusResult.Output | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    $hasWorktreeChanges = $statusLines.Count -gt 0
-
-    if ($hasWorktreeChanges) {
-        Write-Host ""
-        Write-Host "All non-ignored changes below will be staged with git add -A:" -ForegroundColor Yellow
-        $statusLines | ForEach-Object { Write-Host "  $_" }
+    if (-not $DryRun) {
+        Write-Step "Fetching the latest $Remote/$Branch..."
+        Invoke-Git -Arguments @(
+            "fetch", $Remote,
+            "refs/heads/${Branch}:refs/remotes/${Remote}/${Branch}"
+        ) | Out-Null
     }
-    else {
-        Write-Step "The working tree has no non-ignored changes."
+
+    $remoteObject = Invoke-Git -Arguments @(
+        "cat-file", "-e", "$initialRemoteHead`^{commit}"
+    ) -AllowFailure -Quiet
+    if ($remoteObject.ExitCode -ne 0) {
+        Stop-Publish (
+            "Remote commit $initialRemoteHead is not available locally. " +
+            "Run without -DryRun once authentication and fetch are available."
+        )
+    }
+
+    $remoteIsAncestor = Invoke-Git -Arguments @(
+        "merge-base", "--is-ancestor", $initialRemoteHead, "HEAD"
+    ) -AllowFailure -Quiet
+    if ($remoteIsAncestor.ExitCode -gt 1) {
+        Stop-Publish "Could not compare local and remote histories."
+    }
+    if ($remoteIsAncestor.ExitCode -eq 1) {
+        Stop-Publish (
+            "Remote branch contains commits not integrated into local HEAD, or histories diverged. " +
+            "This script will not merge, rebase, or force-push."
+        )
+    }
+
+    foreach ($path in $script:WorkflowPaths) {
+        if (-not (Test-Path -LiteralPath $path)) {
+            Stop-Publish "Required workflow file is missing: $path"
+        }
+    }
+
+    $workflowStatus = @(Get-WorkflowStatus)
+    $trackedChanges = @(Get-TrackedWorktreeChanges)
+    $refactorChanges = @(
+        $trackedChanges | Where-Object { $script:WorkflowPaths -notcontains $_ }
+    )
+    $untracked = @(Get-GitLines -Arguments @(
+        "-c", "core.quotepath=false",
+        "ls-files", "--others", "--exclude-standard"
+    ))
+
+    if ($untracked.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Untracked files will remain excluded:" -ForegroundColor Yellow
+        $untracked | ForEach-Object { Write-Host "  $_" }
+    }
+
+    $headSubject = Get-CommitSubject -Revision "HEAD"
+    $parentSubject = Get-CommitSubject -Revision "HEAD^"
+    $workflowPending = $workflowStatus.Count -gt 0
+    $refactorPending = $refactorChanges.Count -gt 0
+    $workflowAlreadyCommitted = (
+        (-not $workflowPending) -and
+        ($headSubject -eq $WorkflowMessage)
+    )
+    $bothAlreadyCommitted = (
+        (-not $workflowPending) -and
+        (-not $refactorPending) -and
+        ($headSubject -eq $RefactorMessage) -and
+        ($parentSubject -eq $WorkflowMessage)
+    )
+
+    if ($workflowPending -and $headSubject -eq $WorkflowMessage) {
+        Stop-Publish (
+            "The workflow commit already exists, but workflow files changed again. " +
+            "Review these changes manually before retrying."
+        )
+    }
+    if ($workflowPending -and -not $refactorPending) {
+        Stop-Publish "Workflow changes exist, but no refactor changes are available for the second commit."
+    }
+    if (-not $workflowPending -and $refactorPending -and -not $workflowAlreadyCommitted) {
+        Stop-Publish (
+            "Refactor changes exist, but HEAD is not the expected workflow commit. " +
+            "The script cannot safely infer the first commit boundary."
+        )
+    }
+    if (-not $workflowPending -and -not $refactorPending -and -not $bothAlreadyCommitted) {
+        Stop-Publish "No expected two-commit publication state was found."
+    }
+
+    Write-Step "Repository: $repositoryRoot"
+    Write-Step "Target: $Remote/$Branch"
+    Write-Step "Remote base: $initialRemoteHead"
+    if ($workflowPending) {
+        Write-Host ""
+        Write-Host "First commit ($WorkflowMessage):" -ForegroundColor Yellow
+        $workflowStatus | ForEach-Object { Write-Host "  $_" }
+    }
+    elseif ($workflowAlreadyCommitted) {
+        Write-Step "First commit already exists at HEAD; it will not be duplicated."
+    }
+    if ($refactorPending) {
+        Write-Host ""
+        Write-Host "Second commit ($RefactorMessage):" -ForegroundColor Yellow
+        $refactorChanges | ForEach-Object { Write-Host "  $_" }
+    }
+    elseif ($bothAlreadyCommitted) {
+        Write-Step "Both expected commits already exist locally; only push verification remains."
     }
 
     if ($DryRun) {
         Write-Host ""
-        Write-Step "Dry run only; no files will be staged, committed, or pushed."
-        if ($hasWorktreeChanges) {
-            Write-Host "Would run: git add -A"
-            Write-Host "Would run: git diff --cached --check"
-            if ([string]::IsNullOrWhiteSpace($Message)) {
-                Write-Host "Would request a non-empty commit message."
-            }
-            else {
-                Write-Host "Would commit with message: $($Message.Trim())"
-            }
+        Write-Step "Dry run only; no files were staged, committed, or pushed."
+        if ($workflowPending) {
+            Write-Host "Would stage only the three workflow files and create the first commit."
         }
-        if ($hasWorktreeChanges -or $localAhead -gt 0) {
-            Write-Host "Would verify and push: git push $Remote HEAD:refs/heads/$Branch"
+        if ($refactorPending) {
+            Write-Host "Would stage tracked changes only and create the second commit."
         }
-        else {
-            Write-Step "Nothing needs to be published."
-        }
+        Write-Host "Would push normally to: $Remote/$Branch"
         exit 0
-    }
-
-    if (-not $hasWorktreeChanges -and $localAhead -eq 0) {
-        Write-Step "Nothing needs to be committed or pushed."
-        exit 0
-    }
-
-    if ($hasWorktreeChanges) {
-        if ([string]::IsNullOrWhiteSpace($Message)) {
-            $Message = Read-Host "Commit message"
-        }
-        if ([string]::IsNullOrWhiteSpace($Message)) {
-            Stop-Publish "Commit message cannot be empty."
-        }
-        $Message = $Message.Trim()
     }
 
     if (-not $Yes) {
-        $answer = Read-Host "Continue with commit/push to $Remote/$Branch? [y/N]"
+        $answer = Read-Host "Create the two scoped commits and push to $Remote/$Branch? [y/N]"
         if ($answer -notmatch '^(?i:y|yes)$') {
             Write-Step "Cancelled; no files were staged by this script."
             exit 0
         }
     }
 
-    if ($hasWorktreeChanges) {
-        Write-Step "Staging all non-ignored changes..."
-        Invoke-Git -Arguments @("add", "-A") | Out-Null
+    $workflowCommit = $null
+    $refactorCommit = $null
 
-        $checkResult = Invoke-Git -Arguments @("diff", "--cached", "--check") -AllowFailure
-        if ($checkResult.ExitCode -ne 0) {
-            Stop-Publish "Staged changes failed git diff --cached --check. The index was kept for inspection."
-        }
-
-        $cachedResult = Invoke-Git -Arguments @("diff", "--cached", "--quiet") -AllowFailure -Quiet
-        if ($cachedResult.ExitCode -gt 1) {
-            Stop-Publish "Could not inspect the staged changes."
-        }
-        if ($cachedResult.ExitCode -eq 1) {
-            Write-Host ""
-            Write-Host "Staged changes:" -ForegroundColor Yellow
-            Invoke-Git -Arguments @("diff", "--cached", "--name-status") | Out-Null
-            Write-Step "Creating commit..."
-            Invoke-Git -Arguments @("commit", "-m", $Message) | Out-Null
-        }
-        else {
-            Write-Step "No content changes remained after staging; skipping commit."
-        }
+    if ($workflowPending) {
+        Write-Step "Staging only workflow files..."
+        Invoke-Git -Arguments (@("add", "--") + $script:WorkflowPaths) | Out-Null
+        Assert-WorkflowStage
+        Invoke-Git -Arguments @("diff", "--cached", "--check") | Out-Null
+        Write-Step "Creating workflow commit..."
+        Invoke-Git -Arguments @("commit", "-m", $WorkflowMessage.Trim()) | Out-Null
+        $workflowCommit = Get-GitText -Arguments @("rev-parse", "HEAD")
+    }
+    else {
+        $workflowCommit = Get-GitText -Arguments @("rev-parse", "HEAD")
     }
 
-    $head = Get-GitText -Arguments @("rev-parse", "HEAD")
-    $difference = Get-GitText -Arguments @(
-        "rev-list", "--left-right", "--count", "HEAD...$remoteRef"
-    )
-    $counts = @($difference -split "\s+")
-    $localAhead = [int]$counts[0]
-    if ($localAhead -eq 0) {
-        Write-Step "No local commits need to be pushed."
-        exit 0
+    if ($refactorPending) {
+        Assert-EmptyIndex
+        Write-Step "Staging remaining tracked changes only..."
+        Invoke-Git -Arguments @("add", "-u", "--", ".") | Out-Null
+        Assert-RefactorStage
+        Invoke-Git -Arguments @("diff", "--cached", "--check") | Out-Null
+        Write-Step "Creating refactor commit..."
+        Invoke-Git -Arguments @("commit", "-m", $RefactorMessage.Trim()) | Out-Null
+        $refactorCommit = Get-GitText -Arguments @("rev-parse", "HEAD")
+    }
+    else {
+        $refactorCommit = Get-GitText -Arguments @("rev-parse", "HEAD")
+        $workflowCommit = Get-GitText -Arguments @("rev-parse", "HEAD^")
     }
 
-    Write-Step "Checking that the remote branch has not changed..."
+    $finalWorkflowSubject = Get-CommitSubject -Revision $workflowCommit
+    $finalRefactorSubject = Get-CommitSubject -Revision $refactorCommit
+    if ($finalWorkflowSubject -ne $WorkflowMessage.Trim()) {
+        Stop-Publish "Workflow commit subject verification failed."
+    }
+    if ($finalRefactorSubject -ne $RefactorMessage.Trim()) {
+        Stop-Publish "Refactor commit subject verification failed."
+    }
+
     $currentRemoteHead = Get-RemoteHead -RemoteName $Remote -BranchName $Branch
-    if ($currentRemoteHead -ne $fetchedRemoteHead) {
+    if ($currentRemoteHead -ne $initialRemoteHead) {
         Stop-Publish (
-            "Remote branch changed after fetch. Local commit $head was kept, but push was stopped. " +
-            "Synchronize and review before retrying."
+            "Remote branch changed after the initial check. Local commits were kept, " +
+            "but push was stopped."
         )
     }
 
-    Write-Step "Pushing $head to $Remote/$Branch..."
+    Write-Step "Pushing both commits to $Remote/$Branch..."
     Invoke-Git -Arguments @(
         "push", $Remote, "HEAD:refs/heads/$Branch"
     ) | Out-Null
 
-    Invoke-Git -Arguments @("fetch", $Remote, "refs/heads/${Branch}:refs/remotes/${Remote}/${Branch}") | Out-Null
-    $finalDifference = Get-GitText -Arguments @(
-        "rev-list", "--left-right", "--count", "HEAD...$remoteRef"
+    Invoke-Git -Arguments @(
+        "fetch", $Remote,
+        "refs/heads/${Branch}:refs/remotes/${Remote}/${Branch}"
+    ) | Out-Null
+    $head = Get-GitText -Arguments @("rev-parse", "HEAD")
+    $remoteHead = Get-GitText -Arguments @("rev-parse", "refs/remotes/$Remote/$Branch")
+    $upstream = Get-GitText -Arguments @(
+        "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"
     )
+    if ($head -ne $remoteHead) {
+        Stop-Publish "Verification failed: local HEAD does not match $Remote/$Branch."
+    }
+    if ($upstream -ne "$Remote/$Branch") {
+        Stop-Publish "Verification failed: upstream is '$upstream', expected '$Remote/$Branch'."
+    }
+
     Write-Host ""
     Write-Step "Published successfully."
-    Write-Host "Commit: $head"
-    Write-Host "Target: $Remote/$Branch"
-    Write-Host "Remote: $displayRemoteUrl"
-    Write-Host "Final local/remote difference: $finalDifference"
+    Write-Host "Workflow commit: $workflowCommit"
+    Write-Host "Refactor commit: $refactorCommit"
+    Write-Host "Target: $upstream"
+    if ($untracked.Count -gt 0) {
+        Write-Host "Untracked files remain excluded:"
+        $untracked | ForEach-Object { Write-Host "  $_" }
+    }
     exit 0
 }
 catch {

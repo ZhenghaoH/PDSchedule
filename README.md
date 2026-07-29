@@ -79,11 +79,11 @@ redis-cli info memory | grep used_memory_human
 
 主要启动参数包括 `--host`、`--port`、`--controller`、`--gateway`、`--prefill`、`--decode`、`--side-channel-host`、`--side-channel-port` 和 `--tp-size`。可参考 `run_166.sh`、`run_167.sh`、`run_169.sh`、`run_170.sh`。
 
-Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `slo_aware_prefill`、`jsq` 或 `round_robin`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generate_throughput`、`slo_tpot_admission` 或 `distserve`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。systemd、nohup 或无 TTY 容器部署时请增加 `--no-cli`。
+Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `slo_aware_prefill`、`jsq` 或 `round_robin`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generation_throughput` 或 `slo_aware_decode`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。systemd、nohup 或无 TTY 容器部署时请增加 `--no-cli`。
 
-#### P 网关 JSQ 与 D 网关 DistServe
+#### P 网关 JSQ 与 D 网关吞吐量调度
 
-P 网关的 `jsq` 不等待或按 token 形成逻辑 batch：每个请求到达后，以网关维护的各实例“未完成输入 token 总数”独立执行 token-weighted JSQ，并立即转发到负载最低的 P 实例。每个请求使用 `Prompt.token_length` 作为权重，不包含主要属于 Decode 阶段的输出预算 `max_tokens`；预约会立即影响下一个请求的选择，并在请求成功、失败或取消后释放。P heartbeat 上报的是请求数，不能与 token 负载混加，因此不会覆盖 P 网关维护的 token 预约；异常泄漏保护 TTL 为 240 秒。D 网关继续通过 `distserve` 以请求数有效负载定义立即选择最低负载实例。P/D 仅在多个实例具有相同最小负载时，分别按照实例配置顺序进行线程安全轮询；该并列处理用于避免固定地址偏置和实例饥饿，不会跳过负载更低的实例，也不等同于 P→D 拓扑亲和性或异构 GPU 算力归一化。策略保留既有 NIXL Pull 参数链路；P 网关的 `jsq` 关闭自适应策略切换和 Prefill 抢占。
+P 网关的 `jsq` 不等待或按 token 形成逻辑 batch：每个请求到达后，以网关维护的各实例“未完成输入 token 总数”独立执行 token-weighted JSQ，并立即转发到负载最低的 P 实例。每个请求使用 `Prompt.token_length` 作为权重，不包含主要属于 Decode 阶段的输出预算 `max_tokens`；预约会立即影响下一个请求的选择，并在请求成功、失败或取消后释放。P heartbeat 上报的是请求数，不能与 token 负载混加，因此不会覆盖 P 网关维护的 token 预约；异常泄漏保护 TTL 为 240 秒。D 网关的 `lowest_generation_throughput` 会立即选择当前生成吞吐量最低的在线 D 实例；`slo_aware_decode` 则按 TPOT 预测优先选择不会违反 SLO 的候选实例。策略保留既有 NIXL Pull 参数链路；P 网关的 `jsq` 关闭自适应策略切换和 Prefill 抢占。
 
 ```bash
 python entrypoints/gatewayP.py \
@@ -91,7 +91,7 @@ python entrypoints/gatewayP.py \
   --no-ttft-warmup
 
 python entrypoints/gatewayD.py \
-  --decode-scheduler-strategy distserve \
+  --decode-scheduler-strategy lowest_generation_throughput \
   --no-tpot-warmup
 ```
 
@@ -134,10 +134,10 @@ python entrypoints/controller.py \
 
 #### 后续直接增加网关策略的检查表
 
-P 网关使用统一策略协议和 manager 注册表，不再按 sync/async 拆分策略文件。增加策略时按以下位置逐项核对：
+P/D 网关均使用统一策略协议和 manager 注册表，不再按 sync/async 拆分策略文件。增加策略时按以下位置逐项核对：
 
 - P 策略：在 `scheduler/gateway/prefill/` 增加与公开策略同名的文件，实现 `strategy.py` 定义的统一异步接口、能力声明及必要生命周期钩子，再将策略类加入 `manager.py` 注册表。manager 不包含具体算法分支。
-- D 策略：在 `scheduler/gateway/decode/` 增加实现或选择函数，并在 `scheduler/gateway/decode/async_base.py` 的 `schedule_async()` 中增加即时选择分支。D 策略必须直接返回实例，不支持等待队列。
+- D 策略：在 `scheduler/gateway/decode/` 增加与公开策略同名的文件，实现 `strategy.py` 定义的统一异步接口，再将策略类加入 `manager.py` 注册表。D 策略必须直接返回实例，不支持等待队列。
 - 将策略名加入 `store/gateway/manager.py` 对应的 P/D 白名单。
 - 将策略名加入 `entrypoints/gatewayP.py` 或 `entrypoints/gatewayD.py` 的启动参数合法值。
 - 将策略名加入 `core/consoles/gateway.py` 的对应角色列表，使在线切换和 Tab 自动补全一致。

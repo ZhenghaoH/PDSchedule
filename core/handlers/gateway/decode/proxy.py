@@ -8,7 +8,7 @@ from fastapi.responses import StreamingResponse
 from core.schemas.request import BaseRequest
 from proxy.batcher import RequestBatcher
 from proxy.forward import forward_request
-from scheduler.gateway.decode.async_base import AsyncBaseScheduler
+from scheduler.gateway.decode.manager import SchedulerManager
 from store.gateway.manager import GatewayStoreManager
 from utils.nixl_request import build_nixl_decode_payload, nixl_headers_for_request
 from utils.gateway_observability import (
@@ -89,7 +89,6 @@ async def _track_decode_stream(
             **summary,
         )
         storage.remove_decode_active_request(instance, request_id)
-        storage.release_distserve_reservation("decode", request_id, instance)
 
 
 def _log_decode_instance_status(storage: GatewayStoreManager, selected_instance: str) -> None:
@@ -156,8 +155,11 @@ async def _select_decode_instance(storage: GatewayStoreManager, request: BaseReq
                 "waiting_reqs": int(
                     getattr(instances.get(instance_ip), "waiting_reqs", 0) or 0
                 ),
-                "effective_request_load": storage.get_distserve_effective_load(
-                    "decode", instance_ip
+                "heartbeat_request_load": int(
+                    getattr(instances.get(instance_ip), "running_reqs", 0) or 0
+                )
+                + int(
+                    getattr(instances.get(instance_ip), "waiting_reqs", 0) or 0
                 ),
                 "generate_throughput": float(
                     getattr(instances.get(instance_ip), "generate_throughput", 0.0)
@@ -188,9 +190,9 @@ async def _select_decode_instance(storage: GatewayStoreManager, request: BaseReq
         _log_decode_instance_status(storage, selected_decode)
         return selected_decode
 
-    scheduler = AsyncBaseScheduler(storage)
+    scheduler = SchedulerManager(strategy=strategy, storage=storage)
     strategy = storage.get_decode_scheduler_strategy()
-    selected_decode = await scheduler.schedule_async(request, strategy=strategy)
+    selected_decode = await scheduler.schedule(request)
     if not _active_decode_instance(storage, selected_decode):
         raise HTTPException(status_code=503, detail="No active decode instance")
 
@@ -203,13 +205,6 @@ async def _select_decode_instance(storage: GatewayStoreManager, request: BaseReq
     metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
     metadata["gateway_decode_selection"] = decision
     request.Task.scheduler_metadata = metadata
-    if strategy == "distserve":
-        metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
-        metadata["distserve_decode"] = {
-            "role": "decode",
-            "selected_instance": selected_decode,
-        }
-        request.Task.scheduler_metadata = metadata
     decode_observer.record_schedule(
         request_id=str(request.Request_ID),
         **decision,
@@ -300,10 +295,6 @@ async def handle_completion_request(raw_request: Request, endpoint_type: str):
                 status="failed_before_decode_stream",
                 decode_instance=selected_decode,
             )
-        if selected_decode:
-            storage.release_distserve_reservation(
-                "decode", getattr(request, "Request_ID", ""), selected_decode
-            )
         raise
     except Exception:
         exc_info = sys.exc_info()
@@ -315,10 +306,6 @@ async def handle_completion_request(raw_request: Request, endpoint_type: str):
                 status="failed_before_decode_stream",
                 error=str(exc_info[1]),
                 decode_instance=selected_decode,
-            )
-        if selected_decode:
-            storage.release_distserve_reservation(
-                "decode", getattr(request, "Request_ID", ""), selected_decode
             )
         print("Error occurred in handle_completion_request")
         print(exc_info)

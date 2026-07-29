@@ -25,9 +25,8 @@ else:
 PREFILL_STRATEGIES = ("slo_aware_prefill", "jsq", "round_robin")
 DECODE_STRATEGIES = (
     "round_robin",
-    "lowest_generate_throughput",
-    "slo_tpot_admission",
-    "distserve",
+    "lowest_generation_throughput",
+    "slo_aware_decode",
 )
 COMMON_COMPLETION_WORDS = (
     "history",

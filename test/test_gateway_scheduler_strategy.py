@@ -27,7 +27,7 @@ from core.consoles.gateway import (
 )
 from core.schemas.request import BaseRequest, Prompt, Service, Task
 from proxy.sync import RequestBatcher, storage as shared_storage
-from scheduler.gateway.decode.async_base import AsyncBaseScheduler as DecodeScheduler
+from scheduler.gateway.decode.manager import SchedulerManager as DecodeSchedulerManager
 from scheduler.gateway.prefill.manager import SchedulerManager
 from store.gateway.instance import Instance
 from store.gateway.manager import GatewayStoreManager
@@ -42,8 +42,11 @@ def make_store(prefills=None, decodes=None):
     manager._prefill_round_robin_index = 0
     manager._decode_round_robin_index = 0
     manager._distserve_tie_break_cursor = {"prefill": 0, "decode": 0}
+    manager._decode_active_batches = {}
+    manager.TPOT_STEP_PREDICT_FUNC = None
+    manager.TPOT_STEP_PREDICTOR_READY = False
     manager.SCHEDULER_STRATEGY = "slo_aware_prefill"
-    manager.DECODE_SCHEDULER_STRATEGY = "slo_tpot_admission"
+    manager.DECODE_SCHEDULER_STRATEGY = "slo_aware_decode"
     return manager
 
 
@@ -92,14 +95,23 @@ class GatewayStoreStrategyTest(unittest.TestCase):
             self.store.set_prefill_scheduler_strategy("jsq"),
             "slo_aware_prefill",
         )
-        self.assertEqual(self.store.set_decode_scheduler_strategy("round_robin"), "slo_tpot_admission")
+        self.assertEqual(
+            self.store.set_decode_scheduler_strategy("round_robin"),
+            "slo_aware_decode",
+        )
         self.assertEqual(self.store.set_prefill_scheduler_strategy("round_robin"), "jsq")
-        self.assertEqual(self.store.set_decode_scheduler_strategy("distserve"), "round_robin")
         for retired_strategy in ("distserve", "least_load", "pso", "random"):
             with self.subTest(strategy=retired_strategy), self.assertRaises(ValueError):
                 self.store.set_prefill_scheduler_strategy(retired_strategy)
-        with self.assertRaises(ValueError):
-            self.store.set_decode_scheduler_strategy("least_load")
+        for retired_strategy in (
+            "distserve",
+            "lowest_generate_throughput",
+            "slo_tpot_admission",
+            "least_load",
+            "random",
+        ):
+            with self.subTest(strategy=retired_strategy), self.assertRaises(ValueError):
+                self.store.set_decode_scheduler_strategy(retired_strategy)
 
 
 class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
@@ -256,24 +268,64 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(capabilities.allow_adaptive_switch)
 
 
-class DecodeDistServeSchedulerTest(unittest.IsolatedAsyncioTestCase):
-    async def test_selects_and_reserves_least_effective_load(self):
+class DecodeSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
         store = make_store(decodes=["d2", "d1"])
         store._instance_table = {
-            "d1": Instance("d1", running_reqs=1, online=True),
-            "d2": Instance("d2", waiting_reqs=1, online=True),
+            "d1": Instance("d1", generate_throughput=5.0, online=True),
+            "d2": Instance("d2", generate_throughput=10.0, online=True),
         }
-        scheduler = DecodeScheduler(store)
+        self.store = store
+        self.scheduler = DecodeSchedulerManager(storage=store)
 
-        first = await scheduler.schedule_async(make_request(1), strategy="distserve")
-        second = await scheduler.schedule_async(make_request(2), strategy="distserve")
-
-        self.assertEqual(first, "d2")
-        self.assertEqual(second, "d1")
+    async def test_registry_contains_only_public_decode_strategies(self):
         self.assertEqual(
-            scheduler.last_decision["reason"], "minimum_effective_request_load"
+            self.scheduler.strategies,
+            (
+                "round_robin",
+                "lowest_generation_throughput",
+                "slo_aware_decode",
+            ),
         )
-        self.assertTrue(scheduler.last_decision["candidates"])
+
+    async def test_round_robin_uses_manager_entrypoint(self):
+        first = await self.scheduler.schedule(
+            make_request(1),
+            strategy="round_robin",
+        )
+        second = await self.scheduler.schedule(
+            make_request(2),
+            strategy="round_robin",
+        )
+        self.assertEqual((first, second), ("d2", "d1"))
+
+    async def test_lowest_generation_throughput_selects_minimum(self):
+        selected = await self.scheduler.schedule(
+            make_request(1),
+            strategy="lowest_generation_throughput",
+        )
+        self.assertEqual(selected, "d1")
+        self.assertEqual(
+            self.scheduler.last_decision["reason"],
+            "minimum_generation_throughput",
+        )
+        self.assertTrue(self.scheduler.last_decision["candidates"])
+
+    async def test_slo_aware_decode_owns_predictor_fallback(self):
+        selected = await self.scheduler.schedule(
+            make_request(1),
+            strategy="slo_aware_decode",
+        )
+        self.assertEqual(selected, "d1")
+        self.assertEqual(
+            self.scheduler.last_decision["reason"],
+            "tpot_prediction_unavailable_"
+            "fallback_minimum_generation_throughput",
+        )
+
+    async def test_retired_decode_strategy_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported Decode"):
+            await self.scheduler.schedule(make_request(1), strategy="distserve")
 
 
 class RequestBatcherSwitchTest(unittest.IsolatedAsyncioTestCase):
@@ -331,9 +383,11 @@ class GatewayConsoleStrategyTest(unittest.TestCase):
         self.assertIn("round_robin", prefill_words)
         self.assertNotIn("least_load", prefill_words)
         self.assertNotIn("distserve", prefill_words)
-        self.assertNotIn("slo_tpot_admission", prefill_words)
-        self.assertIn("slo_tpot_admission", decode_words)
-        self.assertIn("distserve", decode_words)
+        self.assertNotIn("slo_aware_decode", prefill_words)
+        self.assertIn("slo_aware_decode", decode_words)
+        self.assertIn("lowest_generation_throughput", decode_words)
+        self.assertNotIn("distserve", decode_words)
+        self.assertNotIn("slo_tpot_admission", decode_words)
         self.assertNotIn("slo_aware_prefill", decode_words)
         self.assertEqual(len(prefill_words), len(set(prefill_words)))
         self.assertEqual(len(decode_words), len(set(decode_words)))
@@ -360,7 +414,7 @@ class GatewayConsoleStrategyTest(unittest.TestCase):
     def test_decode_switch_uses_runtime_store(self):
         store = make_store()
         result = switch_gateway_scheduler("decode", "round_robin", store)
-        self.assertEqual(result["previous"], "slo_tpot_admission")
+        self.assertEqual(result["previous"], "slo_aware_decode")
         self.assertEqual(store.get_decode_scheduler_strategy(), "round_robin")
 
     def test_prefill_switch_is_submitted_to_batcher(self):
@@ -392,7 +446,7 @@ class GatewayConsoleStrategyTest(unittest.TestCase):
             run_gateway_server(Mock(), "127.0.0.1", 8081, "decode", make_store(), True)
         fake_server.run.assert_called_once_with()
 
-    def test_entrypoint_arguments_use_jsq_for_prefill_and_distserve_for_decode(self):
+    def test_entrypoint_arguments_expose_three_strategies_per_gateway(self):
         prefill_source = (ROOT_DIR / "entrypoints" / "gatewayP.py").read_text(
             encoding="utf-8"
         )
@@ -402,7 +456,9 @@ class GatewayConsoleStrategyTest(unittest.TestCase):
         self.assertNotIn('"--distserve-prefill-batch-tokens"', prefill_source)
         self.assertIn('"jsq"', prefill_source)
         self.assertNotIn('"distserve"', prefill_source)
-        self.assertIn('"distserve"', decode_source)
+        self.assertIn('"slo_aware_decode"', decode_source)
+        self.assertIn('"lowest_generation_throughput"', decode_source)
+        self.assertNotIn('"distserve"', decode_source)
 
 
 if __name__ == "__main__":

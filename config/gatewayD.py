@@ -30,10 +30,10 @@ DEFAULT_CONTROLLER = f"{CONFIG_CONTROLLER_IP}:{CONFIG_CONTROLLER_PORT}" if CONFI
 USE_SYN = False
 SYN_BATCH_SIZE = 1
 SYN_TIMEOUT = 1
-DECODE_SCHEDULER_STRATEGY = "slo_tpot_admission"
+DECODE_SCHEDULER_STRATEGY = "slo_aware_decode"
 # round_robin
-# lowest_generate_throughput
-# slo_tpot_admission
+# lowest_generation_throughput
+# slo_aware_decode
 
 # TPOT predictor warmup configuration
 TPOT_WARMUP_ENABLED = True

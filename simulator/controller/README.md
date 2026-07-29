@@ -83,7 +83,7 @@ network state before selecting a P/D pair.
 
 - Prefill uses a `slo_aware_prefill`-style batch lateness penalty with predicted
   instance availability and chunked prefill batches.
-- Decode uses the `slo_tpot_admission` selection rule and step-level continuous
+- Decode uses the `slo_aware_decode` selection rule and step-level continuous
   batching.
 - Network load is tracked as bandwidth occupancy:
 
@@ -131,7 +131,7 @@ Policy meanings:
 - `least_load`: controller independently selects the lowest normalized-load P
   pool and D pool. Inside each pool, Prefill follows the gateway
   `lowest_prompt_throughput` behavior and Decode follows
-  `lowest_generate_throughput`.
+  `lowest_generation_throughput`.
 - `adaptive_variance`: controller minimizes a two-part fitness:
   dynamic ability mismatch plus variance-based workload imbalance. Prefill and
   Decode time proportions are estimated from TTFT/TPOT profiles, while network

@@ -13,12 +13,13 @@ class GatewayStoreManager:
     PREFILL_SCHEDULER_STRATEGIES = frozenset(
         {"slo_aware_prefill", "jsq", "round_robin"}
     )
-    DECODE_SCHEDULER_STRATEGIES = frozenset({
-        "round_robin",
-        "lowest_generate_throughput",
-        "slo_tpot_admission",
-        "distserve",
-    })
+    DECODE_SCHEDULER_STRATEGIES = frozenset(
+        {
+            "round_robin",
+            "lowest_generation_throughput",
+            "slo_aware_decode",
+        }
+    )
     _instance = None
     _lock = threading.RLock()
     _initialized = False
@@ -57,7 +58,7 @@ class GatewayStoreManager:
                     self.TRIGGER_MODE = "ARRIVAL"
                     self.PROFILE_MODE = False
                     self.SCHEDULER_STRATEGY = "slo_aware_prefill"
-                    self.DECODE_SCHEDULER_STRATEGY = "slo_tpot_admission"
+                    self.DECODE_SCHEDULER_STRATEGY = "slo_aware_decode"
                     self.ENABLE_ADAPTIVE_SWITCH = False
                     
                     self.TTFT_WARMUP_ENABLED = False

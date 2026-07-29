@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from collections import defaultdict
 
 from store.gateway.manager import GatewayStoreManager
-from scheduler.gateway.decode.sync_xpyd import SyncBaseScheduler as DecodeScheduler
+from scheduler.gateway.decode.manager import SchedulerManager as DecodeScheduler
 from proxy.forward import forward_request
 
 from core.schemas.request import BaseRequest
@@ -156,8 +156,16 @@ class RequestBatcher:
         """处理指定批次的所有请求"""
         logging.info(f"Processing batch with {len(batch_requests)} requests")
 
-        scheduler = DecodeScheduler()
-        scheduled_requests = scheduler.schedule(batch_requests)
+        strategy = self.storage.get_decode_scheduler_strategy()
+        scheduler = DecodeScheduler(strategy=strategy, storage=self.storage)
+        scheduled_requests = []
+        for request in batch_requests:
+            decode_instance = await scheduler.schedule(request)
+            if not decode_instance:
+                continue
+            request.Task.decode_instance = decode_instance
+            request.Task.batch_order = 1
+            scheduled_requests.append(request)
 
         classified_requests = defaultdict(lambda: defaultdict(list))
         for req in scheduled_requests:

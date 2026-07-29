@@ -74,7 +74,11 @@ def parse_args():
 
     parser.add_argument(
         "--decode-scheduler-strategy",
-        choices=["round_robin", "lowest_generate_throughput", "slo_tpot_admission", "distserve"],
+        choices=[
+            "round_robin",
+            "lowest_generation_throughput",
+            "slo_aware_decode",
+        ],
         default=DECODE_SCHEDULER_STRATEGY,
         help="Decode async scheduler strategy.",
     )

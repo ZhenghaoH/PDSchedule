@@ -25,7 +25,7 @@ chmod u+x DistServe启动脚本/run_*.sh
 ./DistServe启动脚本/run_169.sh
 ```
 
-170 脚本在 P 网关显式启用 `jsq`、在 D 网关显式启用 `distserve`，并关闭 TTFT/TPOT predictor warmup。P 网关不再按 `L_m` 等待或形成逻辑 batch：每个请求到达后立即按全部在线 P 实例的未完成输入 token 总数执行 JSQ，并直接转发到选中的 vLLM 实例。网关以 request ID 保留未完成请求预约，正常情况下在请求成功、失败或取消后释放；预约 TTL 为 240 秒，用于异常泄漏保护。
+170 脚本在 P 网关显式启用 `jsq`、在 D 网关显式启用 `lowest_generation_throughput`，并关闭 TTFT/TPOT predictor warmup。P 网关不再按 `L_m` 等待或形成逻辑 batch：每个请求到达后立即按全部在线 P 实例的未完成输入 token 总数执行 JSQ，并直接转发到选中的 vLLM 实例。网关以 request ID 保留未完成请求预约，正常情况下在请求成功、失败或取消后释放；预约 TTL 为 240 秒，用于异常泄漏保护。
 
 P 网关 JSQ 不提供逻辑 batch 大小参数。vLLM 实例如何 continuous batch 由实例自身的 `max_num_batched_tokens` 等参数控制，而不是由 P 网关的旧 `L_m` 参数控制。
 
@@ -46,6 +46,6 @@ show scheduler
 switch scheduler -m jsq
 ```
 
-中心 D 网关仍使用 `switch scheduler -m distserve`。
+中心 D 网关使用 `switch scheduler -m lowest_generation_throughput`。
 
 停止时在各标签页按 `Ctrl+C`，或使用项目已有的停止脚本清理容器内进程。中心网关是单点；中心网关不可用时不要继续发送实验流量。

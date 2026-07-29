@@ -1,7 +1,7 @@
 from fastapi import HTTPException, Request
 
 from core.schemas.request import BaseRequest
-from scheduler.gateway.decode.async_base import AsyncBaseScheduler
+from scheduler.gateway.decode.manager import SchedulerManager
 from store.gateway.manager import GatewayStoreManager
 
 
@@ -19,9 +19,9 @@ async def select_instance(raw_request: Request):
 
     instance = getattr(request.Task, "decode_instance", "")
     if not _active_decode_instance(storage, instance):
-        scheduler = AsyncBaseScheduler(storage)
         strategy = storage.get_decode_scheduler_strategy()
-        instance = await scheduler.schedule_async(request, strategy=strategy)
+        scheduler = SchedulerManager(strategy=strategy, storage=storage)
+        instance = await scheduler.schedule(request)
 
     if not _active_decode_instance(storage, instance):
         raise HTTPException(status_code=503, detail="No active decode instance")

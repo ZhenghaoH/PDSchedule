@@ -11,10 +11,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import aiohttp
 
 from core.schemas.request import BaseRequest
-from store.gateway.manager import GatewayStoreManager
-
-
-global_storage = GatewayStoreManager()
+from scheduler.gateway.prefill.strategy import (
+    PrefillScheduleContext,
+    PrefillScheduleResult,
+    PrefillStrategy,
+    candidate_snapshot,
+)
 
 
 @dataclass
@@ -81,7 +83,7 @@ LATENESS_WEIGHT = 0.001
 LATENCY_WEIGHT = 0.000001
 
 
-class SLOAwarePrefillScheduler:
+class SLOAwarePrefillStrategy(PrefillStrategy):
     """Request-level PSO for the rolling prefill path.
 
     This strategy is intentionally separated from the legacy ``pso`` path.
@@ -90,8 +92,10 @@ class SLOAwarePrefillScheduler:
     returned token, whose callback is logged as "Not counting as TTFT".
     """
 
-    def __init__(self, storage=None):
-        self.storage = storage if storage else global_storage
+    name = "slo_aware_prefill"
+
+    def __init__(self, storage):
+        super().__init__(storage)
         self._prediction_cache: Dict[int, float] = {}
         self.pso_particles = 30
         self.pso_iterations = 20
@@ -132,7 +136,7 @@ class SLOAwarePrefillScheduler:
                     return value
             except Exception as exc:
                 logging.warning(
-                    "[SLOAwarePrefillScheduler] In-process TTFT predictor failed: %s",
+                    "[SLOAwarePrefillStrategy] In-process TTFT predictor failed: %s",
                     exc,
                 )
 
@@ -148,7 +152,7 @@ class SLOAwarePrefillScheduler:
                         return value
         except Exception as exc:
             logging.debug(
-                "[SLOAwarePrefillScheduler] HTTP TTFT predictor unavailable: %s",
+                "[SLOAwarePrefillStrategy] HTTP TTFT predictor unavailable: %s",
                 exc,
             )
 
@@ -314,7 +318,7 @@ class SLOAwarePrefillScheduler:
 
             if verbose:
                 logging.info(
-                    "[pso_new] batch size=%d tokens=%d goodput=%d dur=%.4fs finish=%.6f ids=%s",
+                    "[slo_aware_prefill] batch size=%d tokens=%d goodput=%d dur=%.4fs finish=%.6f ids=%s",
                     len(batch),
                     batch_tokens,
                     goodput_tokens,
@@ -562,7 +566,7 @@ class SLOAwarePrefillScheduler:
             start_time,
         )
 
-    async def schedule(
+    async def _schedule_requests(
         self,
         queue: List[BaseRequest],
         last_plan: List[BaseRequest] = None,
@@ -601,7 +605,7 @@ class SLOAwarePrefillScheduler:
             if ip in active_ips:
                 last_plan_by_instance[ip].append(req)
 
-        schedule_id = f"pso_new-{int(t_now * 1000)}"
+        schedule_id = f"slo_aware_prefill-{int(t_now * 1000)}"
         final_requests: List[BaseRequest] = []
         plan_position = 0
 
@@ -629,7 +633,7 @@ class SLOAwarePrefillScheduler:
                 )
                 final_requests.extend(scheduled)
                 logging.info(
-                    "[pso_new] scheduled instance=%s queue=%d inflight_tokens=%d "
+                    "[slo_aware_prefill] scheduled instance=%s queue=%d inflight_tokens=%d "
                     "available_waiting_tokens=%d start=%.6f score=%.4f",
                     target_ip,
                     len(pending_by_instance[target_ip]),
@@ -647,9 +651,28 @@ class SLOAwarePrefillScheduler:
             )
         )
         logging.info(
-            "[pso_new] multi-instance scheduled queue=%d instances=%s loads=%s",
+            "[slo_aware_prefill] multi-instance scheduled queue=%d instances=%s loads=%s",
             len(queue),
             sorted(pending_by_instance.keys()),
             {ip: inflight_load_by_ip.get(ip, 0) for ip in sorted(active_ips)},
         )
         return final_requests
+
+    async def schedule(
+        self,
+        context: PrefillScheduleContext,
+    ) -> PrefillScheduleResult:
+        scheduled = await self._schedule_requests(
+            context.requests,
+            last_plan=context.last_plan,
+            inflight_prefill=context.inflight_prefill,
+        )
+        candidates = candidate_snapshot(self.storage)
+        return PrefillScheduleResult(
+            requests=scheduled,
+            dispatch_policy="FULL_OR_IDLE_WAIT",
+            selection_reason="slo_aware_prefill_planned_assignment",
+            candidate_snapshots={
+                str(request.Request_ID): candidates for request in scheduled
+            },
+        )

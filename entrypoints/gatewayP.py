@@ -84,7 +84,7 @@ def parse_args():
 
     parser.add_argument(
         "--prefill-scheduler-strategy",
-        choices=["pso_new", "jsq", "round_robin"],
+        choices=["slo_aware_prefill", "jsq", "round_robin"],
         default=SCHEDULER_STRATEGY,
         help="Prefill scheduler strategy.",
     )

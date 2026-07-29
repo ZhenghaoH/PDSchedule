@@ -102,7 +102,7 @@ case "$MODE" in
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         export MY_MAX_PROMPT_THROUGHPUT=5646.747
         export MY_FLOPS=35.58
-        python3 gatewayP.py --host 172.18.0.167 --port 8081 --controller 172.18.0.170:5000 --prefill 172.18.0.167:7001 172.18.0.167:7002 --prefill-scheduler-strategy pso_new
+        python3 gatewayP.py --host 172.18.0.167 --port 8081 --controller 172.18.0.170:5000 --prefill 172.18.0.167:7001 172.18.0.167:7002 --prefill-scheduler-strategy slo_aware_prefill
         ;;
     "ip1")
         wait_for_loading 57 "Prefill Instance 1"

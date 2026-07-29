@@ -8,7 +8,6 @@ from collections.abc import AsyncIterator
 from collections import defaultdict
 
 from store.gateway.manager import GatewayStoreManager
-from scheduler.gateway.prefill.sync_xpyd import SyncBaseScheduler as PrefillScheduler
 from scheduler.gateway.decode.sync_xpyd import SyncBaseScheduler as DecodeScheduler
 from proxy.forward import forward_request
 
@@ -157,27 +156,15 @@ class RequestBatcher:
         """处理指定批次的所有请求"""
         logging.info(f"Processing batch with {len(batch_requests)} requests")
 
-        # 在这里添加调度决策模块
-        # TODO: 添加选择调度决策的模块
-        if self.storage.rank == 0:
-            scheduler = PrefillScheduler()
-        else:
-            scheduler = DecodeScheduler()
+        scheduler = DecodeScheduler()
         scheduled_requests = scheduler.schedule(batch_requests)
 
         classified_requests = defaultdict(lambda: defaultdict(list))
-        if self.storage.rank == 0:
-            for req in scheduled_requests:
-                classified_requests[req.Task.prefill_instance][req.Task.batch_order].append(req)
-            for prefill_instance in classified_requests:
-                batch_groups = classified_requests[prefill_instance]
-                classified_requests[prefill_instance] = dict(sorted(batch_groups.items()))
-        else:
-            for req in scheduled_requests:
-                classified_requests[req.Task.decode_instance][req.Task.batch_order].append(req)
-            for decode_instance in classified_requests:
-                batch_groups = classified_requests[decode_instance]
-                classified_requests[decode_instance] = dict(sorted(batch_groups.items()))
+        for req in scheduled_requests:
+            classified_requests[req.Task.decode_instance][req.Task.batch_order].append(req)
+        for decode_instance in classified_requests:
+            batch_groups = classified_requests[decode_instance]
+            classified_requests[decode_instance] = dict(sorted(batch_groups.items()))
 
         # 分批处理
         for instance, batch_groups in classified_requests.items():

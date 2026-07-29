@@ -5,7 +5,7 @@ from fastapi import HTTPException, Request
 
 from core.schemas.request import BaseRequest, Prompt, Service, Task
 from proxy.forward import forward_request_trace as forward_request
-from scheduler.gateway.prefill.async_base import AsyncBaseScheduler
+from scheduler.gateway.prefill.manager import SchedulerManager
 from store.gateway.manager import GatewayStoreManager
 
 
@@ -93,10 +93,17 @@ async def analyze_network_transfer(raw_request: Request):
     def record_first_chunk(elapsed_s: float, _is_violated: bool, _request_id: Any) -> None:
         timing_events.append(float(elapsed_s))
 
-    scheduler = AsyncBaseScheduler(storage)
+    scheduler = SchedulerManager(
+        strategy=storage.get_prefill_scheduler_strategy(),
+        storage=storage,
+    )
     gateway_prefill_schedule_time_s = time.time()
-    prefill_instance = scheduler.schedule(request, "prefill")
+    scheduled, _ = await scheduler.schedule_batch([request])
+    prefill_instance = (
+        scheduled[0].Task.prefill_instance if scheduled else ""
+    )
     if not prefill_instance:
+        scheduler.on_request_finished(request)
         raise HTTPException(status_code=503, detail="No active prefill instance available.")
 
     request.Task.prefill_instance = prefill_instance
@@ -105,20 +112,29 @@ async def analyze_network_transfer(raw_request: Request):
 
     prefill_payload = BaseRequest.to_vllm_payload(request)
     gateway_prefill_request_time_s = time.time()
-    prefill_generator = forward_request(
-        f"http://{prefill_instance}/v1/{request.Service.Endpoint_type}",
-        prefill_payload,
-        arrival_time=arrival_time,
-        request_id=request.Request_ID,
-        stats_callback=record_first_chunk,
-    )
-    prefill_stats = await _consume_stream(prefill_generator)
+    try:
+        prefill_generator = forward_request(
+            f"http://{prefill_instance}/v1/{request.Service.Endpoint_type}",
+            prefill_payload,
+            arrival_time=arrival_time,
+            request_id=request.Request_ID,
+            stats_callback=record_first_chunk,
+        )
+        prefill_stats = await _consume_stream(prefill_generator)
+    finally:
+        scheduler.on_request_finished(request)
     gateway_prefill_done_time_s = time.time()
     if not timing_events:
         raise HTTPException(status_code=502, detail="Prefill response produced no observable chunk.")
 
     gateway_decode_schedule_time_s = time.time()
-    decode_target = scheduler.schedule(request, "decode")
+    decode_target = (
+        f"{request.Task.D_proxy_addr}:{request.Task.D_proxy_port}"
+        if request.Task.D_proxy_addr and request.Task.D_proxy_port
+        else ""
+    )
+    if not decode_target:
+        raise HTTPException(status_code=503, detail="No decode gateway configured.")
     request.Task.decode_instance = decode_target
     decode_payload = BaseRequest.to_decode_payload(request)
     gateway_decode_request_time_s = time.time()

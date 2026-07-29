@@ -7,7 +7,6 @@ from core.schemas.request import BaseRequest
 from proxy.forward import forward_request_json
 from proxy.forward import forward_request_trace as forward_request
 from proxy.sync import RequestBatcher
-from scheduler.gateway.prefill.async_base import AsyncBaseScheduler
 from store.gateway.manager import GatewayStoreManager
 from utils.nixl_request import (
     build_nixl_prefill_payload,
@@ -68,20 +67,43 @@ def _active_prefill_instance(storage: GatewayStoreManager, instance_addr: str) -
     return bool(instance_addr and instance_addr in storage.active_prefill_objs)
 
 
-def _select_prefill_instance(storage: GatewayStoreManager, request: BaseRequest) -> str:
+async def _select_prefill_instance(
+    storage: GatewayStoreManager,
+    request: BaseRequest,
+) -> str:
     selected_prefill = getattr(request.Task, "prefill_instance", "")
     if _active_prefill_instance(storage, selected_prefill):
         _log_prefill_instance_status(storage, selected_prefill)
         return selected_prefill
 
-    scheduler = AsyncBaseScheduler(storage)
-    selected_prefill = scheduler.schedule(request, "prefill")
+    scheduled, _ = await request_batcher.scheduler_mgr.schedule_batch(
+        [request],
+        strategy=storage.get_prefill_scheduler_strategy(),
+    )
+    selected_prefill = (
+        scheduled[0].Task.prefill_instance if scheduled else ""
+    )
     if not _active_prefill_instance(storage, selected_prefill):
+        request_batcher.scheduler_mgr.on_request_finished(request)
         raise HTTPException(status_code=503, detail="No active prefill instance")
 
     request.Task.prefill_instance = selected_prefill
     _log_prefill_instance_status(storage, selected_prefill)
     return selected_prefill
+
+
+def _decode_proxy_for_request(request: BaseRequest) -> str:
+    host = str(getattr(request.Task, "D_proxy_addr", "") or "")
+    port = int(getattr(request.Task, "D_proxy_port", 0) or 0)
+    return f"{host}:{port}" if host and port > 0 else ""
+
+
+async def _release_prefill_when_done(generator, request: BaseRequest):
+    try:
+        async for chunk in generator:
+            yield chunk
+    finally:
+        request_batcher.scheduler_mgr.on_request_finished(request)
 
 
 def _bind_prefill_nixl_metadata(
@@ -126,19 +148,23 @@ async def _handle_pd_request(request: BaseRequest, endpoint_type: str):
         )
         request.Task.nixl_kv_transfer_params = kv_transfer_params
     else:
-        selected_prefill = _select_prefill_instance(storage, request)
-        _bind_prefill_nixl_metadata(storage, request, selected_prefill)
+        selected_prefill = await _select_prefill_instance(storage, request)
+        try:
+            _bind_prefill_nixl_metadata(storage, request, selected_prefill)
 
-        prefill_payload = build_nixl_prefill_payload(request)
-        prefill_response = await forward_request_json(
-            f"http://{selected_prefill}/v1/{endpoint_type}",
-            prefill_payload,
-            extra_headers=nixl_headers_for_request(request),
-        )
-        request.Task.nixl_kv_transfer_params = extract_kv_transfer_params(prefill_response)
+            prefill_payload = build_nixl_prefill_payload(request)
+            prefill_response = await forward_request_json(
+                f"http://{selected_prefill}/v1/{endpoint_type}",
+                prefill_payload,
+                extra_headers=nixl_headers_for_request(request),
+            )
+            request.Task.nixl_kv_transfer_params = extract_kv_transfer_params(
+                prefill_response
+            )
+        finally:
+            request_batcher.scheduler_mgr.on_request_finished(request)
 
-    scheduler = AsyncBaseScheduler(storage)
-    decode_proxy = scheduler.schedule(request, "decode")
+    decode_proxy = _decode_proxy_for_request(request)
     if not decode_proxy:
         raise HTTPException(status_code=503, detail="No selected decode gateway")
 
@@ -167,11 +193,19 @@ async def _handle_non_pd_request(request: BaseRequest, endpoint_type: str):
             raise HTTPException(status_code=500, detail="Batch processing failed")
         return StreamingResponse(batch_result["generator"])
 
-    selected_prefill = _select_prefill_instance(storage, request)
+    selected_prefill = await _select_prefill_instance(storage, request)
     request_payload = BaseRequest.to_vllm_payload(request)
-    generator = forward_request(
-        f"http://{selected_prefill}/v1/{endpoint_type}",
-        request_payload,
+    try:
+        forwarded = forward_request(
+            f"http://{selected_prefill}/v1/{endpoint_type}",
+            request_payload,
+        )
+    except Exception:
+        request_batcher.scheduler_mgr.on_request_finished(request)
+        raise
+    generator = _release_prefill_when_done(
+        forwarded,
+        request,
     )
     return StreamingResponse(generator)
 

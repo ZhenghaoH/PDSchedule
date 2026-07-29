@@ -10,7 +10,9 @@ from .link import InstanceLink
 
 class GatewayStoreManager:
     """存储管理"""
-    PREFILL_SCHEDULER_STRATEGIES = frozenset({"pso_new", "jsq", "round_robin"})
+    PREFILL_SCHEDULER_STRATEGIES = frozenset(
+        {"slo_aware_prefill", "jsq", "round_robin"}
+    )
     DECODE_SCHEDULER_STRATEGIES = frozenset({
         "round_robin",
         "lowest_generate_throughput",
@@ -54,7 +56,7 @@ class GatewayStoreManager:
 
                     self.TRIGGER_MODE = "ARRIVAL"
                     self.PROFILE_MODE = False
-                    self.SCHEDULER_STRATEGY = "pso_new"
+                    self.SCHEDULER_STRATEGY = "slo_aware_prefill"
                     self.DECODE_SCHEDULER_STRATEGY = "slo_tpot_admission"
                     self.ENABLE_ADAPTIVE_SWITCH = False
                     

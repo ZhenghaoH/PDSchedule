@@ -40,7 +40,7 @@ SYN_TIMEOUT = 15  # 同步设置 等待时间 秒， 超过该时间，进行调
 # 同步调度触发逻辑配置
 TRIGGER_MODE = "ARRIVAL"  # "ARRIVAL" or "BATCH" or "TIMEOUT"
 PROFILE_MODE = False
-SCHEDULER_STRATEGY = "pso_new"
+SCHEDULER_STRATEGY = "slo_aware_prefill"
 ENABLE_ADAPTIVE_SWITCH = False
 
 # TTFT predictor warmup configuration

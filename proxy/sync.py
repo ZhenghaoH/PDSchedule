@@ -267,12 +267,10 @@ class SchedulingEngine:
             # 应用调度结果
             async with self.b.lock:
                 if schedule_version != self.b.strategy_version:
-                    for scheduled_request in scheduled_plan:
-                        storage.release_distserve_reservation(
-                            "prefill",
-                            scheduled_request.Request_ID,
-                            getattr(scheduled_request.Task, "prefill_instance", ""),
-                        )
+                    self.b.scheduler_mgr.on_schedule_discarded(
+                        scheduled_plan,
+                        strategy=schedule_strategy,
+                    )
                     _log_timeline_event(
                         "STALE_SCHEDULE_DISCARDED",
                         scheduled_strategy=schedule_strategy,
@@ -338,10 +336,8 @@ class SchedulingEngine:
                 valid_request_ids = {_rid_key(request.Request_ID) for request in valid_reqs}
                 for scheduled_request in scheduled_plan:
                     if _rid_key(scheduled_request.Request_ID) not in valid_request_ids:
-                        storage.release_distserve_reservation(
-                            "prefill",
-                            scheduled_request.Request_ID,
-                            getattr(scheduled_request.Task, "prefill_instance", ""),
+                        self.b.scheduler_mgr.on_schedule_discarded(
+                            [scheduled_request]
                         )
 
                 # 排序：batch_order > 0 的优先，同批次按到达时间
@@ -974,7 +970,9 @@ class MonitoringEngine:
             v_rate = sum(self.b.stats_window) / len(self.b.stats_window)
             current_strategy = self.b.scheduler_mgr.strategy
 
-            if current_strategy == "jsq":
+            if not self.b.scheduler_mgr.get_capabilities(
+                current_strategy
+            ).allow_adaptive_switch:
                 return
 
             # 策略切换逻辑
@@ -1000,7 +998,7 @@ class MonitoringEngine:
 class RequestBatcher:
     """请求批处理器主类，协调调度、分发和监控引擎"""
 
-    def __init__(self, default_strategy: str = "pso_new"):
+    def __init__(self, default_strategy: str = "slo_aware_prefill"):
         self.lock = asyncio.Lock()
         self.pending_queue: List[BaseRequest] = []
         self.batch_manager: Dict[str, dict] = {}
@@ -1024,7 +1022,10 @@ class RequestBatcher:
         self.active_instance_reservations: Dict[str, Dict[int, float]] = defaultdict(dict)
 
         # 策略配置
-        self.scheduler_mgr = SchedulerManager(strategy=default_strategy)
+        self.scheduler_mgr = SchedulerManager(
+            strategy=default_strategy,
+            storage=storage,
+        )
         self.optimized_strategy = default_strategy
         self.dispatch_policy = "IMMEDIATE"
         self.syn_batch_size = 1
@@ -1084,8 +1085,6 @@ class RequestBatcher:
         self.adaptive_switch = bool(getattr(storage, "ENABLE_ADAPTIVE_SWITCH", self.adaptive_switch))
         self.optimized_strategy = getattr(storage, "SCHEDULER_STRATEGY", self.optimized_strategy)
         self.scheduler_mgr.strategy = "round_robin" if self.profile_mode else self.optimized_strategy
-        if self.scheduler_mgr.strategy == "jsq":
-            self.adaptive_switch = False
         self.dispatch_engine.configure_from_storage()
 
         self.worker_tasks.append(
@@ -1106,6 +1105,7 @@ class RequestBatcher:
 
         async with self.lock:
             previous = self.scheduler_mgr.strategy
+            self.scheduler_mgr.on_switch_out(previous, self.pending_queue)
             storage.set_prefill_scheduler_strategy(strategy)
             self.scheduler_mgr.strategy = strategy
             self.optimized_strategy = strategy
@@ -1113,18 +1113,11 @@ class RequestBatcher:
             self.last_plan = []
 
             for request in self.pending_queue:
-                storage.release_distserve_reservation(
-                    "prefill",
-                    request.Request_ID,
-                    getattr(request.Task, "prefill_instance", ""),
-                )
                 request.Task.batch_order = -1
                 request.Task.prefill_instance = ""
-                metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
-                metadata.pop("jsq", None)
-                request.Task.scheduler_metadata = metadata
 
-            if strategy == "jsq":
+            capabilities = self.scheduler_mgr.get_capabilities(strategy)
+            if capabilities.trigger_on_arrival:
                 self.pending_queue.sort(
                     key=lambda request: float(
                         getattr(request.Service, "arrival_time", 0.0) or 0.0
@@ -1139,7 +1132,10 @@ class RequestBatcher:
                 "previous": previous,
                 "current": strategy,
                 "pending_count": pending_count,
-                "adaptive_switch": self.adaptive_switch and strategy != "jsq",
+                "adaptive_switch": (
+                    self.adaptive_switch
+                    and capabilities.allow_adaptive_switch
+                ),
             }
 
     def switch_strategy_threadsafe(self, strategy: str, timeout: float = 10.0) -> Dict[str, Any]:
@@ -1151,7 +1147,7 @@ class RequestBatcher:
 
     async def preempt_heavy_requests(self):
         """抢占逻辑"""
-        if self.scheduler_mgr.strategy == "jsq":
+        if not self.scheduler_mgr.get_capabilities().allow_preemption:
             return
         async with self.lock:
             now = time.time()
@@ -1179,7 +1175,10 @@ class RequestBatcher:
     def _unified_trigger(self, is_new_arrival: bool):
         q_len = len(self.pending_queue)
         if q_len == 0: return
-        if self.scheduler_mgr.strategy == "jsq" and is_new_arrival:
+        if (
+            self.scheduler_mgr.get_capabilities().trigger_on_arrival
+            and is_new_arrival
+        ):
             self.schedule_event.set()
             return
         if (self.trigger_mode == "ARRIVAL" and is_new_arrival) or \
@@ -1522,7 +1521,7 @@ class RequestBatcher:
                     status=final_status,
                     error=final_error,
                 )
-            storage.release_distserve_reservation("prefill", rid_key, instance)
+            self.scheduler_mgr.on_request_finished(request)
             # 清理全局运行映射
             async with self.lock:
                 self.running_tasks_map.pop(rid_key, None)

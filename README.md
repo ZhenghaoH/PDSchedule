@@ -79,7 +79,7 @@ redis-cli info memory | grep used_memory_human
 
 主要启动参数包括 `--host`、`--port`、`--controller`、`--gateway`、`--prefill`、`--decode`、`--side-channel-host`、`--side-channel-port` 和 `--tp-size`。可参考 `run_166.sh`、`run_167.sh`、`run_169.sh`、`run_170.sh`。
 
-Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `pso_new`、`jsq` 或 `round_robin`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generate_throughput`、`slo_tpot_admission` 或 `distserve`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。systemd、nohup 或无 TTY 容器部署时请增加 `--no-cli`。
+Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `slo_aware_prefill`、`jsq` 或 `round_robin`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generate_throughput`、`slo_tpot_admission` 或 `distserve`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。systemd、nohup 或无 TTY 容器部署时请增加 `--no-cli`。
 
 #### P 网关 JSQ 与 D 网关 DistServe
 
@@ -134,14 +134,14 @@ python entrypoints/controller.py \
 
 #### 后续直接增加网关策略的检查表
 
-本项目继续使用现有策略管理器，不使用额外 registry 或 plugins 目录。增加策略时按以下位置逐项核对：
+P 网关使用统一策略协议和 manager 注册表，不再按 sync/async 拆分策略文件。增加策略时按以下位置逐项核对：
 
-- P 策略：在 `scheduler/gateway/prefill/` 增加实现，并在 `scheduler/gateway/prefill/manager.py` 中导入、初始化和增加 `schedule_batch()` 分支。
+- P 策略：在 `scheduler/gateway/prefill/` 增加与公开策略同名的文件，实现 `strategy.py` 定义的统一异步接口、能力声明及必要生命周期钩子，再将策略类加入 `manager.py` 注册表。manager 不包含具体算法分支。
 - D 策略：在 `scheduler/gateway/decode/` 增加实现或选择函数，并在 `scheduler/gateway/decode/async_base.py` 的 `schedule_async()` 中增加即时选择分支。D 策略必须直接返回实例，不支持等待队列。
 - 将策略名加入 `store/gateway/manager.py` 对应的 P/D 白名单。
 - 将策略名加入 `entrypoints/gatewayP.py` 或 `entrypoints/gatewayD.py` 的启动参数合法值。
 - 将策略名加入 `core/consoles/gateway.py` 的对应角色列表，使在线切换和 Tab 自动补全一致。
-- 增加策略单元测试，并核对未知策略、无在线实例和在线切换边界。
+- 增加策略单元测试，并核对未知策略、无在线实例、能力驱动的队列行为、资源释放和在线切换边界。
 
 `Task.scheduler_metadata` 是 P→D 内部使用的空扩展容器。后续策略如需跨阶段传递少量 JSON 数据，应使用策略名作为一级命名空间；该字段不会进入发送给 vLLM 实例的标准或 NIXL payload。
 

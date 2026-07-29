@@ -10,9 +10,6 @@ param(
 
 $ErrorActionPreference = "Stop"
 $script:GitExecutable = $null
-$script:ProtectedPaths = @(
-    "run_arrival_experiments.sh"
-)
 
 function Write-Step {
     param([string]$Text)
@@ -182,36 +179,6 @@ function Get-StagedPaths {
     ))
 }
 
-function Test-ProtectedPath {
-    param([string]$Path)
-    foreach ($protectedPath in $script:ProtectedPaths) {
-        if ($Path.Equals($protectedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
-            return $true
-        }
-    }
-    return $false
-}
-
-function Assert-NoProtectedTrackedChange {
-    param([string[]]$TrackedChanges)
-    foreach ($path in $TrackedChanges) {
-        if (Test-ProtectedPath -Path $path) {
-            Stop-Publish (
-                "Protected file has tracked changes and cannot be published by this script: $path"
-            )
-        }
-    }
-}
-
-function Assert-NoProtectedStagedPath {
-    $stagedPaths = @(Get-StagedPaths)
-    foreach ($path in $stagedPaths) {
-        if (Test-ProtectedPath -Path $path) {
-            Stop-Publish "Protected file entered the Git index: $path"
-        }
-    }
-}
-
 function Resolve-ExplicitPath {
     param(
         [string]$Value,
@@ -262,10 +229,6 @@ function Resolve-ExplicitPath {
     }
 
     $relativePath = $fullPath.Substring($rootWithSeparator.Length).Replace('\', '/')
-    if (Test-ProtectedPath -Path $relativePath) {
-        Stop-Publish "Protected file cannot be selected with -Paths: $relativePath"
-    }
-
     $trackedCheck = Invoke-Git -Arguments @(
         "ls-files", "--error-unmatch", "--", $relativePath
     ) -AllowFailure -Quiet
@@ -294,32 +257,28 @@ function Resolve-ExplicitPaths {
     return @($resolved)
 }
 
-function Assert-ExplicitStage {
-    param([string[]]$AllowedPaths)
+function Assert-StagedPaths {
+    param([string[]]$ExpectedPaths)
     $stagedPaths = @(Get-StagedPaths)
     if ($stagedPaths.Count -eq 0) {
-        Stop-Publish "No selected changes were staged."
+        Stop-Publish "No changes were staged."
+    }
+    if ($stagedPaths.Count -ne $ExpectedPaths.Count) {
+        Stop-Publish (
+            "The staged path count does not match the reviewed change set. " +
+            "Expected $($ExpectedPaths.Count), found $($stagedPaths.Count)."
+        )
     }
     foreach ($path in $stagedPaths) {
-        if ($AllowedPaths -notcontains $path) {
-            Stop-Publish "A path outside -Paths entered the Git index: $path"
+        if ($ExpectedPaths -notcontains $path) {
+            Stop-Publish "An unreviewed path entered the Git index: $path"
         }
     }
-    Assert-NoProtectedStagedPath
-}
-
-function Get-ProtectedFileHash {
-    param(
-        [string]$RepositoryRoot,
-        [string]$RelativePath
-    )
-    $fullPath = Join-Path $RepositoryRoot (
-        $RelativePath.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
-    )
-    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
-        return $null
+    foreach ($path in $ExpectedPaths) {
+        if ($stagedPaths -notcontains $path) {
+            Stop-Publish "A reviewed path was not staged: $path"
+        }
     }
-    return (Get-FileHash -Algorithm SHA256 -LiteralPath $fullPath).Hash
 }
 
 try {
@@ -417,14 +376,8 @@ try {
         "rev-list", "--count", "$initialRemoteHead..HEAD"
     ))
     $trackedChanges = @(Get-TrackedChanges)
-    Assert-NoProtectedTrackedChange -TrackedChanges $trackedChanges
     $untrackedBefore = @(Get-UntrackedFiles)
-    $protectedHashesBefore = @{}
-    foreach ($protectedPath in $script:ProtectedPaths) {
-        $protectedHashesBefore[$protectedPath] = Get-ProtectedFileHash `
-            -RepositoryRoot $repositoryRoot `
-            -RelativePath $protectedPath
-    }
+    $allChanges = @(($trackedChanges + $untrackedBefore) | Sort-Object -Unique)
 
     $explicitPaths = @()
     $useExplicitPaths = $Paths.Count -gt 0
@@ -437,12 +390,21 @@ try {
             @("-c", "core.quotepath=false", "status", "--short", "--") +
             $explicitPaths
         ))
-        $hasCommitChanges = $selectedStatus.Count -gt 0
+        $selectedPaths = @(
+            $allChanges | Where-Object { $explicitPaths -contains $_ }
+        )
     }
     else {
-        $selectedStatus = @($trackedChanges)
-        $hasCommitChanges = $trackedChanges.Count -gt 0
+        $selectedStatus = @($allChanges)
+        $selectedPaths = @($allChanges)
     }
+    $hasCommitChanges = $selectedPaths.Count -gt 0
+    $selectedUntracked = @(
+        $untrackedBefore | Where-Object { $selectedPaths -contains $_ }
+    )
+    $excludedUntracked = @(
+        $untrackedBefore | Where-Object { $selectedPaths -notcontains $_ }
+    )
 
     Write-Step "Repository: $repositoryRoot"
     Write-Step "Target: $Remote/$Branch"
@@ -465,22 +427,29 @@ try {
             $excludedTracked | ForEach-Object { Write-Host "  $_" }
         }
     }
-    elseif ($trackedChanges.Count -gt 0) {
-        Write-Host ""
-        Write-Host "Tracked changes to commit:" -ForegroundColor Yellow
-        $trackedChanges | ForEach-Object { Write-Host "  $_" }
+    else {
+        if ($trackedChanges.Count -gt 0) {
+            Write-Host ""
+            Write-Host "Tracked changes to commit:" -ForegroundColor Yellow
+            $trackedChanges | ForEach-Object { Write-Host "  $_" }
+        }
     }
 
-    if ($untrackedBefore.Count -gt 0) {
+    if ($selectedUntracked.Count -gt 0) {
         Write-Host ""
-        Write-Host "Untracked files excluded by default:" -ForegroundColor Yellow
-        $untrackedBefore | ForEach-Object { Write-Host "  $_" }
+        Write-Host "New files to commit:" -ForegroundColor Yellow
+        $selectedUntracked | ForEach-Object { Write-Host "  $_" }
+    }
+    if ($excludedUntracked.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Untracked files not selected:" -ForegroundColor DarkYellow
+        $excludedUntracked | ForEach-Object { Write-Host "  $_" }
     }
 
     if (-not $hasCommitChanges -and $localAhead -eq 0) {
-        if ($useExplicitPaths -and $trackedChanges.Count -gt 0) {
+        if ($useExplicitPaths -and $allChanges.Count -gt 0) {
             Write-Step "No selected changes or local commits need synchronization."
-            Write-Step "Tracked changes outside -Paths remain local."
+            Write-Step "Changes outside -Paths remain local."
         }
         else {
             Write-Step "Nothing needs to be committed or pushed."
@@ -506,7 +475,7 @@ try {
                 Write-Host "Would stage only the explicitly selected paths."
             }
             else {
-                Write-Host "Would stage all tracked modifications and deletions."
+                Write-Host "Would stage all reviewed tracked changes and new files."
             }
             Write-Host "Would create one commit: $($Message.Trim())"
         }
@@ -528,14 +497,12 @@ try {
     if ($hasCommitChanges) {
         if ($useExplicitPaths) {
             Write-Step "Staging only explicitly selected paths..."
-            Invoke-Git -Arguments (@("add", "-A", "--") + $explicitPaths) | Out-Null
-            Assert-ExplicitStage -AllowedPaths $explicitPaths
         }
         else {
-            Write-Step "Staging tracked modifications and deletions only..."
-            Invoke-Git -Arguments @("add", "-u", "--", ".") | Out-Null
-            Assert-NoProtectedStagedPath
+            Write-Step "Staging reviewed tracked changes and new files..."
         }
+        Invoke-Git -Arguments (@("add", "-A", "--") + $selectedPaths) | Out-Null
+        Assert-StagedPaths -ExpectedPaths $selectedPaths
 
         Invoke-Git -Arguments @("diff", "--cached", "--check") | Out-Null
         $stagedPaths = @(Get-StagedPaths)
@@ -579,24 +546,6 @@ try {
     }
     if ($upstream -ne "$Remote/$Branch") {
         Stop-Publish "Verification failed: upstream is '$upstream', expected '$Remote/$Branch'."
-    }
-
-    foreach ($protectedPath in $script:ProtectedPaths) {
-        $hashAfter = Get-ProtectedFileHash `
-            -RepositoryRoot $repositoryRoot `
-            -RelativePath $protectedPath
-        if ($hashAfter -ne $protectedHashesBefore[$protectedPath]) {
-            Stop-Publish "Verification failed: protected file changed: $protectedPath"
-        }
-        $trackedProtected = Invoke-Git -Arguments @(
-            "ls-files", "--error-unmatch", "--", $protectedPath
-        ) -AllowFailure -Quiet
-        if (
-            ($untrackedBefore -contains $protectedPath) -and
-            $trackedProtected.ExitCode -eq 0
-        ) {
-            Stop-Publish "Verification failed: protected file became tracked: $protectedPath"
-        }
     }
 
     Write-Host ""

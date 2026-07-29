@@ -42,7 +42,7 @@ def make_store(prefills=None, decodes=None):
     manager._prefill_round_robin_index = 0
     manager._decode_round_robin_index = 0
     manager._distserve_tie_break_cursor = {"prefill": 0, "decode": 0}
-    manager.SCHEDULER_STRATEGY = "pso_new"
+    manager.SCHEDULER_STRATEGY = "slo_aware_prefill"
     manager.DECODE_SCHEDULER_STRATEGY = "slo_tpot_admission"
     return manager
 
@@ -88,7 +88,10 @@ class GatewayStoreStrategyTest(unittest.TestCase):
         self.assertEqual(results.count("p2"), 50)
 
     def test_strategy_setters_validate_modes(self):
-        self.assertEqual(self.store.set_prefill_scheduler_strategy("jsq"), "pso_new")
+        self.assertEqual(
+            self.store.set_prefill_scheduler_strategy("jsq"),
+            "slo_aware_prefill",
+        )
         self.assertEqual(self.store.set_decode_scheduler_strategy("round_robin"), "slo_tpot_admission")
         self.assertEqual(self.store.set_prefill_scheduler_strategy("round_robin"), "jsq")
         self.assertEqual(self.store.set_decode_scheduler_strategy("distserve"), "round_robin")
@@ -106,8 +109,13 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
             "p1": Instance("p1", prompt_throughput=3.0, online=True),
             "p2": Instance("p2", prompt_throughput=3.0, online=True),
         }
-        self.scheduler = SchedulerManager()
-        self.scheduler.basic_scheduler.storage = self.store
+        self.scheduler = SchedulerManager(storage=self.store)
+
+    async def test_registry_contains_only_public_prefill_strategies(self):
+        self.assertEqual(
+            self.scheduler.strategies,
+            ("slo_aware_prefill", "jsq", "round_robin"),
+        )
 
     async def test_retired_strategy_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported Prefill"):
@@ -122,11 +130,15 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
             ["p2", "p1", "p2"],
         )
 
-    async def test_pso_new_keeps_existing_queue_policy(self):
+    async def test_slo_aware_prefill_keeps_existing_queue_policy(self):
         request = make_request(1)
-        self.scheduler.pso_new_scheduler.schedule = AsyncMock(return_value=[request])
-        scheduled, policy = await self.scheduler.schedule_batch([request], strategy="pso_new")
-        self.scheduler.pso_new_scheduler.schedule.assert_awaited_once()
+        strategy = self.scheduler.get_strategy("slo_aware_prefill")
+        strategy._schedule_requests = AsyncMock(return_value=[request])
+        scheduled, policy = await self.scheduler.schedule_batch(
+            [request],
+            strategy="slo_aware_prefill",
+        )
+        strategy._schedule_requests.assert_awaited_once()
         self.assertEqual(scheduled, [request])
         self.assertEqual(policy, "FULL_OR_IDLE_WAIT")
 
@@ -201,6 +213,48 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.store.get_distserve_effective_load("prefill", "p1"), 20)
         self.assertEqual(self.store.get_distserve_effective_load("prefill", "p2"), 2048)
 
+    async def test_jsq_lifecycle_hooks_release_reservations(self):
+        request = make_request(1, 100)
+        scheduled, _ = await self.scheduler.schedule_batch(
+            [request],
+            strategy="jsq",
+        )
+        instance = scheduled[0].Task.prefill_instance
+        self.assertEqual(
+            self.store.get_distserve_effective_load("prefill", instance),
+            100,
+        )
+
+        self.scheduler.on_schedule_discarded(scheduled)
+        self.assertEqual(
+            self.store.get_distserve_effective_load("prefill", instance),
+            0,
+        )
+
+        scheduled, _ = await self.scheduler.schedule_batch(
+            [request],
+            strategy="jsq",
+        )
+        self.scheduler.on_request_finished(scheduled[0])
+        self.assertEqual(
+            self.store.get_distserve_effective_load(
+                "prefill", scheduled[0].Task.prefill_instance
+            ),
+            0,
+        )
+
+    async def test_jsq_capabilities_drive_runtime_behavior(self):
+        jsq = self.scheduler.get_capabilities("jsq")
+        self.assertTrue(jsq.trigger_on_arrival)
+        self.assertFalse(jsq.allow_preemption)
+        self.assertFalse(jsq.allow_adaptive_switch)
+
+        for strategy in ("slo_aware_prefill", "round_robin"):
+            capabilities = self.scheduler.get_capabilities(strategy)
+            self.assertFalse(capabilities.trigger_on_arrival)
+            self.assertTrue(capabilities.allow_preemption)
+            self.assertTrue(capabilities.allow_adaptive_switch)
+
 
 class DecodeDistServeSchedulerTest(unittest.IsolatedAsyncioTestCase):
     async def test_selects_and_reserves_least_effective_load(self):
@@ -234,7 +288,7 @@ class RequestBatcherSwitchTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(batcher.schedule_event.is_set())
 
     async def test_switch_resets_only_pending_requests(self):
-        batcher = RequestBatcher(default_strategy="pso_new")
+        batcher = RequestBatcher(default_strategy="slo_aware_prefill")
         pending = make_request(1)
         pending.Task.batch_order = 2
         pending.Task.prefill_instance = "p1"
@@ -247,7 +301,7 @@ class RequestBatcherSwitchTest(unittest.IsolatedAsyncioTestCase):
         previous = shared_storage.get_prefill_scheduler_strategy()
         try:
             result = await batcher.switch_strategy("round_robin")
-            self.assertEqual(result["previous"], "pso_new")
+            self.assertEqual(result["previous"], "slo_aware_prefill")
             self.assertEqual(result["pending_count"], 1)
             self.assertEqual(pending.Task.batch_order, -1)
             self.assertEqual(pending.Task.prefill_instance, "")
@@ -272,7 +326,7 @@ class GatewayConsoleStrategyTest(unittest.TestCase):
         prefill_words = gateway_completion_words("prefill")
         decode_words = gateway_completion_words("decode")
         self.assertIn("show", prefill_words)
-        self.assertIn("pso_new", prefill_words)
+        self.assertIn("slo_aware_prefill", prefill_words)
         self.assertIn("jsq", prefill_words)
         self.assertIn("round_robin", prefill_words)
         self.assertNotIn("least_load", prefill_words)
@@ -280,7 +334,7 @@ class GatewayConsoleStrategyTest(unittest.TestCase):
         self.assertNotIn("slo_tpot_admission", prefill_words)
         self.assertIn("slo_tpot_admission", decode_words)
         self.assertIn("distserve", decode_words)
-        self.assertNotIn("pso_new", decode_words)
+        self.assertNotIn("slo_aware_prefill", decode_words)
         self.assertEqual(len(prefill_words), len(set(prefill_words)))
         self.assertEqual(len(decode_words), len(set(decode_words)))
 
@@ -313,7 +367,7 @@ class GatewayConsoleStrategyTest(unittest.TestCase):
         store = make_store()
         batcher = Mock()
         batcher.switch_strategy_threadsafe.return_value = {
-            "previous": "pso_new",
+            "previous": "slo_aware_prefill",
             "current": "round_robin",
             "pending_count": 2,
             "adaptive_switch": False,

@@ -1,144 +1,159 @@
-# scheduler/manager.py
-
-from typing import List, Dict, Any, Tuple
+from typing import List, Optional, Tuple
 
 from core.schemas.request import BaseRequest
-from scheduler.gateway.prefill.async_base import AsyncBaseScheduler
-from scheduler.gateway.prefill.slo_aware_prefill import SLOAwarePrefillScheduler
+from scheduler.gateway.prefill.jsq import JSQPrefillStrategy
+from scheduler.gateway.prefill.slo_aware_prefill import SLOAwarePrefillStrategy
+from scheduler.gateway.prefill.round_robin import RoundRobinPrefillStrategy
+from scheduler.gateway.prefill.strategy import (
+    PrefillScheduleContext,
+    PrefillScheduleResult,
+    PrefillStrategy,
+    PrefillStrategyCapabilities,
+)
+from store.gateway.manager import GatewayStoreManager
 
 
 class SchedulerManager:
-    def __init__(self, strategy: str = "pso_new"):
-        self.strategy = strategy
-        self.pso_new_scheduler = SLOAwarePrefillScheduler()
-        self.basic_scheduler = AsyncBaseScheduler()
+    STRATEGY_TYPES = (
+        SLOAwarePrefillStrategy,
+        JSQPrefillStrategy,
+        RoundRobinPrefillStrategy,
+    )
 
-    def _candidate_snapshot(self) -> List[Dict[str, Any]]:
-        storage = self.basic_scheduler.storage
-        instances = storage.instance_table
-        snapshot = []
-        for instance_ip in storage.active_prefill_objs:
-            instance = instances.get(instance_ip)
-            snapshot.append(
-                {
-                    "instance": instance_ip,
-                    "prompt_throughput": float(
-                        getattr(instance, "prompt_throughput", 0.0) or 0.0
-                    ),
-                    "running_reqs": int(
-                        getattr(instance, "running_reqs", 0) or 0
-                    ),
-                    "waiting_reqs": int(
-                        getattr(instance, "waiting_reqs", 0) or 0
-                    ),
-                    "unfinished_prompt_tokens": storage.get_distserve_effective_load(
-                        "prefill", instance_ip
-                    ),
-                }
+    def __init__(
+        self,
+        strategy: str = "slo_aware_prefill",
+        storage: Optional[GatewayStoreManager] = None,
+    ):
+        self.storage = storage if storage is not None else GatewayStoreManager()
+        self._strategies = {
+            strategy_type.name: strategy_type(self.storage)
+            for strategy_type in self.STRATEGY_TYPES
+        }
+        self._strategy = ""
+        self.strategy = strategy
+
+    @property
+    def strategy(self) -> str:
+        return self._strategy
+
+    @strategy.setter
+    def strategy(self, strategy: str) -> None:
+        if strategy not in self._strategies:
+            raise ValueError(
+                f"Unsupported Prefill scheduler strategy: {strategy}"
             )
-        return snapshot
+        self._strategy = strategy
+
+    @property
+    def strategies(self) -> Tuple[str, ...]:
+        return tuple(self._strategies)
+
+    def get_strategy(self, strategy: Optional[str] = None) -> PrefillStrategy:
+        selected = strategy or self.strategy
+        try:
+            return self._strategies[selected]
+        except KeyError as exc:
+            raise ValueError(
+                f"Unsupported Prefill scheduler strategy: {selected}"
+            ) from exc
+
+    def get_capabilities(
+        self,
+        strategy: Optional[str] = None,
+    ) -> PrefillStrategyCapabilities:
+        return self.get_strategy(strategy).capabilities
 
     @staticmethod
-    def _selection_reason(strategy: str) -> str:
-        return {
-            "round_robin": "next_round_robin_instance_load_ignored",
-            "jsq": "minimum_unfinished_prompt_tokens",
-            "pso_new": "pso_new_planned_assignment",
-        }.get(strategy, "strategy_assignment")
-
     def _annotate_selection(
-        self,
-        requests: List[BaseRequest],
+        result: PrefillScheduleResult,
         strategy: str,
-        candidates: List[Dict[str, Any]],
     ) -> None:
-        reason = self._selection_reason(strategy)
-        for request in requests:
-            metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
+        for request in result.requests:
+            metadata = dict(
+                getattr(request.Task, "scheduler_metadata", {}) or {}
+            )
             metadata["gateway_prefill_selection"] = {
                 "strategy": strategy,
-                "selected_instance": getattr(request.Task, "prefill_instance", ""),
+                "selected_instance": getattr(
+                    request.Task, "prefill_instance", ""
+                ),
                 "selection_source": "prefill_gateway_scheduler",
-                "reason": reason,
-                "candidates": candidates,
-                "planned_batch_order": getattr(request.Task, "batch_order", None),
-                "planned_start_s": getattr(request.Task, "slo_planned_start", None),
-                "planned_finish_s": getattr(request.Task, "slo_planned_finish", None),
+                "reason": result.selection_reason,
+                "candidates": result.candidate_snapshots.get(
+                    str(request.Request_ID), []
+                ),
+                "planned_batch_order": getattr(
+                    request.Task, "batch_order", None
+                ),
+                "planned_start_s": getattr(
+                    request.Task, "slo_planned_start", None
+                ),
+                "planned_finish_s": getattr(
+                    request.Task, "slo_planned_finish", None
+                ),
             }
             request.Task.scheduler_metadata = metadata
 
     async def schedule_batch(
-            self,
-            queue: List[BaseRequest],
-            last_plan: List[BaseRequest] = None,
-            inflight_prefill: List[Any] = None,
-            strategy: str = None,
+        self,
+        queue: List[BaseRequest],
+        last_plan: Optional[List[BaseRequest]] = None,
+        inflight_prefill: Optional[List[object]] = None,
+        strategy: Optional[str] = None,
     ) -> Tuple[List[BaseRequest], str]:
-        """
-        返回: (List[BaseRequest], dispatch_policy)
-        dispatch_policy 选项: 'IMMEDIATE', 'IDLE_WAIT', 'PERIODIC'
-        """
         if not queue:
             return [], "IMMEDIATE"
 
         selected_strategy = strategy or self.strategy
-
-        # ================= [策略：轮询 (合并了直接转发)] =================
-        if selected_strategy == "round_robin":
-            candidates = self._candidate_snapshot()
-            for req in queue:
-                req.Task.batch_order = 1
-                req.Task.prefill_instance = self.basic_scheduler.storage.next_prefill_round_robin()
-            self._annotate_selection(queue, selected_strategy, candidates)
-            # 轮询模式下，要求立即分发
-            return queue, "IMMEDIATE"
-
-        if selected_strategy == "jsq":
-            scheduled = []
-            for position, request in enumerate(queue):
-                candidates = self._candidate_snapshot()
-                # Reserve each request independently. The reservation is visible
-                # to the next iteration immediately, so this is request-level JSQ
-                # rather than assigning one gateway batch to a single instance.
-                selected_instance = self.basic_scheduler.reserve_jsq_batch([request])
-                if not selected_instance:
-                    continue
-                request.Task.batch_order = 1
-                request.Task.prefill_instance = selected_instance
-                request.Task.slo_plan_position = position
-                try:
-                    prompt_tokens = int(
-                        getattr(request.Prompt, "token_length", 0) or 0
-                    )
-                except (TypeError, ValueError):
-                    prompt_tokens = 0
-                prompt_tokens = max(1, prompt_tokens)
-                metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
-                metadata["jsq"] = {
-                    "role": "prefill",
-                    "dispatch_mode": "direct_jsq",
-                    "load_metric": "unfinished_prompt_tokens",
-                    "request_id": str(request.Request_ID),
-                    "prompt_tokens": prompt_tokens,
-                    "selected_instance": selected_instance,
-                    "selected_unfinished_tokens": (
-                        self.basic_scheduler.storage.get_distserve_effective_load(
-                            "prefill", selected_instance
-                        )
-                    ),
-                }
-                request.Task.scheduler_metadata = metadata
-                self._annotate_selection([request], selected_strategy, candidates)
-                scheduled.append(request)
-            return scheduled, "IMMEDIATE"
-
-        if selected_strategy == "pso_new":
-            scheduled = await self.pso_new_scheduler.schedule(
-                queue,
+        implementation = self.get_strategy(selected_strategy)
+        result = await implementation.schedule(
+            PrefillScheduleContext(
+                requests=queue,
                 last_plan=last_plan,
                 inflight_prefill=inflight_prefill,
             )
-            self._annotate_selection(scheduled, selected_strategy, self._candidate_snapshot())
-            return scheduled, "FULL_OR_IDLE_WAIT"
+        )
+        self._annotate_selection(result, selected_strategy)
+        return result.requests, result.dispatch_policy
 
-        raise ValueError(f"Unsupported Prefill scheduler strategy: {selected_strategy}")
+    @staticmethod
+    def _request_strategy_name(request: BaseRequest) -> Optional[str]:
+        metadata = dict(
+            getattr(request.Task, "scheduler_metadata", {}) or {}
+        )
+        selection = metadata.get("gateway_prefill_selection") or {}
+        strategy = selection.get("strategy")
+        if isinstance(strategy, str) and strategy:
+            return strategy
+        if "jsq" in metadata:
+            return "jsq"
+        return None
+
+    def on_schedule_discarded(
+        self,
+        requests: List[BaseRequest],
+        strategy: Optional[str] = None,
+    ) -> None:
+        if strategy is not None:
+            self.get_strategy(strategy).on_schedule_discarded(requests)
+            return
+        grouped = {}
+        for request in requests:
+            name = self._request_strategy_name(request)
+            if name in self._strategies:
+                grouped.setdefault(name, []).append(request)
+        for name, grouped_requests in grouped.items():
+            self._strategies[name].on_schedule_discarded(grouped_requests)
+
+    def on_request_finished(self, request: BaseRequest) -> None:
+        strategy = self._request_strategy_name(request)
+        if strategy in self._strategies:
+            self._strategies[strategy].on_request_finished(request)
+
+    def on_switch_out(
+        self,
+        strategy: str,
+        requests: List[BaseRequest],
+    ) -> None:
+        self.get_strategy(strategy).on_switch_out(requests)

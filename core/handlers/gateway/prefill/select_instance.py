@@ -29,14 +29,19 @@ async def select_instance(raw_request: Request):
     if not _active_prefill_instance(storage, instance):
         raise HTTPException(status_code=503, detail="No active prefill instance")
 
-    nixl_meta = storage.get_nixl_metadata(instance)
-    if not nixl_meta:
-        raise HTTPException(status_code=503, detail=f"Missing NIXL metadata for prefill instance {instance}")
-    if nixl_meta.get("connector") != "NixlConnector" or nixl_meta.get("role") != "prefill":
-        raise HTTPException(status_code=503, detail=f"Invalid NIXL metadata for prefill instance {instance}: {nixl_meta}")
+    try:
+        nixl_meta = storage.get_nixl_metadata(instance)
+        if not nixl_meta:
+            raise HTTPException(status_code=503, detail=f"Missing NIXL metadata for prefill instance {instance}")
+        if nixl_meta.get("connector") != "NixlConnector" or nixl_meta.get("role") != "prefill":
+            raise HTTPException(status_code=503, detail=f"Invalid NIXL metadata for {instance}: {nixl_meta}")
 
-    return {
-        "instance": instance,
-        "kv_addr": "",
-        "nixl": nixl_meta,
-    }
+        return {
+            "instance": instance,
+            "kv_addr": "",
+            "nixl": nixl_meta,
+        }
+    finally:
+        # This endpoint returns an advisory target and does not own the
+        # subsequent request lifetime, so it must not retain JSQ reservations.
+        request_batcher.scheduler_mgr.on_request_finished(request)

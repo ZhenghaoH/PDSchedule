@@ -1,32 +1,15 @@
 import uvicorn
-import time
 import logging
 import os
 import threading
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
-from store.knowledge import DummyEmbeddingModel, init_knowledge_table, KnowledgeTable, KnowledgeUnit
-from config.controller import DEFAULT_MODEL, KNOWLEDGE_YAML_PATH, DEFAULT_EMBED_MODEL
+from config.controller import DEFAULT_MODEL
 from utils import TokenizerRegistry
 
-# FIXME: 不使用知识注入的话，暂时不安装sentence_transformers
-try:
-    from embed.embedding_engine import EmbeddingEngine
-except ImportError as e:
-    print(f"ImportError: {e}")
-    EmbeddingEngine = None
-
-from .knowledge.kdn_client import fetch_kdn_snapshot
-
-from .knowledge.kdn_sync import (
-    build_table_from_kdn_items,
-    kdn_auto_refresh_loop,
-    kdn_refresh_once
-)
-
 # ======================= 算网状态更新器 =======================
-from store.controller import PoolManager, PoolType
+from store.controller import PoolManager
 from store.controller import NetworkManager
 from scheduler.controller.global_scheduler import GlobalScheduler
 import asyncio  # 如果其他函数也用到了可以往前提
@@ -105,112 +88,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.info(f"[Scheduler] 分词器预热失败:{e}")
 
-    # ------------------------------------------
-    # 尝试预热Embedding模型
-    # ------------------------------------------
-    embedding_model_name = os.getenv("SCHEDULER_EMBEDDING_MODEL", DEFAULT_EMBED_MODEL)
-    try:
-        if os.path.isabs(embedding_model_name) and not os.path.isdir(embedding_model_name):
-            raise RuntimeError(
-                f"SCHEDULER_EMBEDDING_MODEL is a local path but not found: {embedding_model_name}"
-            )
-        if EmbeddingEngine:
-            embedder = EmbeddingEngine(model_name=embedding_model_name)
-            app.state.embedding_engine = embedder  # type: ignore
-        else:
-            app.state.embedding_engine = None  # type: ignore
-            embedder = None
-        try:
-            _ = embedder.encode_vector(["__warm_up__"])[0]
-            logging.info(
-                f"[Scheduler] Warmup embedding model: {embedding_model_name!r}, "
-                f"dim={embedder.dim}, device={embedder.device}"
-            )
-
-        except Exception as e:
-            logging.warning(f"[Scheduler] Warmup embedding model failed: {e}")
-
-    except Exception as e:
-        logging.exception(f"[Scheduler] 预热 Embedding 模型失败: {e}")
-        app.state.embedding_engine = None  # type: ignore
-        embedder = None
-
-    # ------------------------------------------
-    # 尝试初始化知识库
-    # ------------------------------------------
-    kdn_base_url = os.getenv("SCHEDULER_KDN_BASE_URL", "").strip()
-
-    # 复用已预热的 embedder（维度校验用）
-    kb_embedder = getattr(app.state, "embedding_engine", None)  # type: ignore
-
-    if kdn_base_url:
-        try:
-            items = await fetch_kdn_snapshot(
-                base_url=kdn_base_url,
-                need_fields=["kid", "length", "embed_dim", "embedding", "kv_ready", "kv_rel_dir", "kv_dumped_keys",
-                             "kv_updated_at"],
-                limit=1_000_000,
-                offset=0,
-                timeout_s=10.0,
-            )
-
-            if not items:
-                logging.warning(f"[Scheduler] KDN snapshot empty: {kdn_base_url!r}")
-                app.state.knowledge_table = None  # type: ignore
-            else:
-                # 维度：优先用 embedder.dim（最稳），否则用 snapshot embed_dim
-                dim = int(getattr(kb_embedder, "dim", 0) or int(items[0].get("embed_dim") or 0))
-                if dim <= 0:
-                    raise RuntimeError(f"Invalid embedding dim from KDN snapshot: {dim}")
-
-                # 构表函数
-                table = build_table_from_kdn_items(items, dim=dim, kdn_base_url=kdn_base_url)
-
-                app.state.knowledge_table = table  # type: ignore
-                app.state.kdn_base_url = kdn_base_url  # type: ignore
-                app.state._kdn_refresh_lock = asyncio.Lock()  # type: ignore
-                app.state.last_refresh_ts = int(time.time())  # type: ignore
-
-                logging.info(
-                    f"[Scheduler] Knowledge base loaded from KDN {kdn_base_url!r}, "
-                    f"entries={len(getattr(table, '_units', {}))}, dim={dim}"
-                )
-
-                # 启动后台 refresh程序，定期刷新knowledge_list
-                app.state._kdn_stop_event = asyncio.Event()  # type: ignore
-                app.state._kdn_refresh_task = asyncio.create_task(  # type: ignore
-                    kdn_auto_refresh_loop(app, app.state._kdn_stop_event)  # type: ignore
-                )
-
-        except Exception as e:
-            logging.exception(f"[Scheduler] Failed to init knowledge base from KDN {kdn_base_url!r}: {e}")
-            app.state.knowledge_table = None  # type: ignore
-
-    else:
-        # ---- fallback: YAML (keep your original behavior) ----
-        yaml_path = os.getenv("SCHEDULER_KNOWLEDGE_YAML", KNOWLEDGE_YAML_PATH).strip()
-        if yaml_path:
-            try:
-                knowledge_table = init_knowledge_table(
-                    yaml_path=yaml_path,
-                    embedder=kb_embedder,
-                )
-                app.state.knowledge_table = knowledge_table  # type: ignore
-                units = getattr(knowledge_table, "_units", {})
-                logging.info(
-                    f"[Scheduler] Knowledge base loaded from {yaml_path!r}, "
-                    f"entries={len(units)}"
-                )
-            except Exception as e:
-                logging.exception(f"[Scheduler] Failed to init knowledge base from {yaml_path!r}: {e}")
-                app.state.knowledge_table = None  # type: ignore
-        else:
-            logging.warning(
-                "[Scheduler] Env SCHEDULER_KNOWLEDGE_YAML not set, "
-                "knowledge base will NOT be initialized."
-            )
-            app.state.knowledge_table = None  # type: ignore
-
     # 初始化全局调度器
     try:
         logging.info("[Scheduler] Init: Starting GlobalScheduler...")
@@ -264,15 +141,6 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 pass
 
-        stop_ev = getattr(app.state, "_kdn_stop_event", None)  # type: ignore
-        task = getattr(app.state, "_kdn_refresh_task", None)  # type: ignore
-        if stop_ev is not None:
-            stop_ev.set()
-        if task is not None:
-            try:
-                await task
-            except Exception as e:
-                pass
     # shutdown 阶段，如果后面有资源要清理，可以写在这里
 
     # shutdown 阶段，如果后面有资源要清理，可以写在这里

@@ -46,11 +46,11 @@ wait_for_loading() {
 
 case "$MODE" in
     "meta")
-        echo -e "\033[33m=== [0/9] 启动 Metadata Server ===\033[0m"
+        echo -e "\033[33m=== [0/11] 启动 Metadata Server ===\033[0m"
         mooncake_master --rpc_address 172.18.0.170 --rpc_port 50051 --metrics_port 9002 --enable_http_metadata_server=true --http_metadata_server_host=172.18.0.170 --http_metadata_server_port=8080
         ;;
     "p1")
-        echo -e "\033[32m=== [1/13] 启动 Prefill 实例 (GPU 0) ===\033[0m"
+        echo -e "\033[32m=== [1/11] 启动 Prefill 实例 (GPU 0) ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD
         export VLLM_LOGGING_LEVEL=DEBUG
         export CUDA_VISIBLE_DEVICES=0,1
@@ -75,7 +75,7 @@ case "$MODE" in
 
         ;;
     "p2")
-        echo -e "\033[32m=== [2/13] 启动 Prefill 实例 (GPU 1) ===\033[0m"
+        echo -e "\033[32m=== [2/11] 启动 Prefill 实例 (GPU 1) ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD
         export VLLM_LOGGING_LEVEL=DEBUG
         export CUDA_VISIBLE_DEVICES=2,3
@@ -100,7 +100,7 @@ case "$MODE" in
 
         ;;
     "d1")
-        echo -e "\033[34m=== [3/13] 启动 Decode 实例 (GPU 2) ===\033[0m"
+        echo -e "\033[34m=== [3/11] 启动 Decode 实例 (GPU 2) ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD
         export VLLM_LOGGING_LEVEL=DEBUG
         export CUDA_VISIBLE_DEVICES=4,5
@@ -124,7 +124,7 @@ case "$MODE" in
 	
         ;;
      "d2")
-         echo -e "\033[34m=== [4/13] 启动 Decode 实例 (GPU 3) ===\033[0m"
+         echo -e "\033[34m=== [4/11] 启动 Decode 实例 (GPU 3) ===\033[0m"
          cd /workspace/llm-stack/workspace_HZH/FlexPD
          export VLLM_LOGGING_LEVEL=DEBUG
          export CUDA_VISIBLE_DEVICES=3
@@ -148,7 +148,7 @@ case "$MODE" in
     "s")
         wait_for_loading 10 "Scheduler"
 
-        echo -e "\033[31m=== [5/13] 启动 Scheduler ===\033[0m"
+        echo -e "\033[31m=== [5/11] 启动 Scheduler ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
         export CUDA_VISIBLE_DEVICES=6
         python3 controller.py
@@ -156,54 +156,44 @@ case "$MODE" in
     "pd")
         wait_for_loading 40 "Decode Proxy"
 
-        echo -e "\033[35m=== [6/13] 启动 Decode Proxy ===\033[0m"
+        echo -e "\033[35m=== [6/11] 启动 Decode Proxy ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
         python3 gatewayD.py --decode 172.18.0.170:7003 172.18.0.170:7004
         ;;
     "pp")
         wait_for_loading 42 "Prefill Proxy"
 
-        echo -e "\033[36m=== [7/13] 启动 Prefill Proxy ===\033[0m"
+        echo -e "\033[36m=== [7/11] 启动 Prefill Proxy ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
         python3 gatewayP.py --prefill 172.18.0.170:7001 172.18.0.170:7002
         ;;
     "id1")
         wait_for_loading 45 "Decode Instance"
 
-        echo -e "\033[36m=== [8/13] 启动 Decode Instance ===\033[0m"
+        echo -e "\033[36m=== [8/11] 启动 Decode Instance ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
         python3 instanceD.py --port 7003 --vllm_port 8003
         ;;
     "id2")
         wait_for_loading 45 "Decode Instance"
 
-        echo -e "\033[36m=== [9/13] 启动 Decode Instance ===\033[0m"
+        echo -e "\033[36m=== [9/11] 启动 Decode Instance ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
         python3 instanceD.py --port 7004 --vllm_port 8004
         ;;
     "ip1")
         wait_for_loading 47 "Prefill Instance"
 
-        echo -e "\033[36m=== [10/13] 启动 Prefill Instance ===\033[0m"
+        echo -e "\033[36m=== [10/11] 启动 Prefill Instance ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
         python3 instanceP.py --port 7001 --vllm_port 8001
         ;;
     "ip2")
         wait_for_loading 47 "Prefill Instance"
 
-        echo -e "\033[36m=== [11/13] 启动 Prefill Instance ===\033[0m"
+        echo -e "\033[36m=== [11/11] 启动 Prefill Instance ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
         python3 instanceP.py --port 7002 --vllm_port 8002
-        ;;
-    "kdn")
-        echo -e "\033[36m=== [12/13] 启动 KDN Server ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
-        python3 demo_kdn.py
-        ;;
-    "cli")
-        echo -e "\033[36m=== [13/13] 启动 KDN Server ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD/
-        python3 ./kdn_server/kdn_register_cli.py
         ;;
 esac
 echo "--------------------------------------------------------"
@@ -266,11 +256,6 @@ sleep 0.5
 
 launch_tab "7B.Instance-D" "id2"
 sleep 0.5
-
-launch_tab "8.KDN-Server" "kdn"
-sleep 0.5
-
-launch_tab "9.KDN-CLI" "cli"
 
 echo ">>> 所有服务窗口已打开。"
 echo ">>> P/D/Meta 正在启动，Scheduler 和 Proxy 将在 90 秒后自动启动。"

@@ -91,8 +91,6 @@ class GatewayStoreManager:
                     self._prefill_round_robin_index = 0
                     self._decode_round_robin_index = 0
 
-                    self.KDN_BASE_URL = ""
-
                     self.LOOP_TASK_TIME = 0.03  # 轮询上报任务时间
                     self.MAX_DECODE_REQ_NUM = int(os.getenv("MY_MAX_DECODE_REQ_NUM", 128))
 

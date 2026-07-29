@@ -45,18 +45,18 @@ wait_for_loading() {
 
 case "$MODE" in
     "meta")
-        echo -e "\033[33m=== [1/9] 启动 Metadata Server ===\033[0m"
+        echo -e "\033[33m=== [1/8] 启动 Metadata Server ===\033[0m"
         mooncake_master --rpc_address 172.18.0.169 --rpc_port 50051 --metrics_port 9002 --enable_http_metadata_server=true --http_metadata_server_host=172.18.0.169 --http_metadata_server_port=8080
         ;;
     "p")
-        echo -e "\033[32m=== [2/9] 启动 Prefill 实例 (GPU 0) ===\033[0m"
+        echo -e "\033[32m=== [2/8] 启动 Prefill 实例 (GPU 0) ===\033[0m"
         cd /workspace/llm-stack/workspace_LLL/
         export CUDA_VISIBLE_DEVICES=0
         export MOONCAKE_CONFIG_PATH=$CONFIG_PATH_P
         CUDA_VISIBLE_DEVICES=0 VLLM_USE_V1=1 PYTHONHASHSEED=0 LMCACHE_CONFIG_FILE=$CONFIG_PATH_P LMCACHE_USE_EXPERIMENTAL=True python3 -m vllm.entrypoints.openai.api_server --host 172.18.0.169 --port 8001 --model $MODEL_PATH --max-model-len 4096 --max-num-seqs 8 --gpu-memory-utilization 0.8 --kv-transfer-config '{"kv_connector":"LMCacheConnectorV1", "kv_role":"kv_producer"}'
         ;;
     "d")
-        echo -e "\033[34m=== [3/9] 启动 Decode 实例 (GPU 1) ===\033[0m"
+        echo -e "\033[34m=== [3/8] 启动 Decode 实例 (GPU 1) ===\033[0m"
         cd /workspace/llm-stack/workspace_LLL/
         export NCCL_SOCKET_IFNAME=eno5
         export GLOO_SOCKET_IFNAME=eno5
@@ -68,7 +68,7 @@ case "$MODE" in
         # === 核心修改：Scheduler 加入 等待 ===
         # wait_for_loading 90 "Scheduler"
 
-        echo -e "\033[31m=== [4/9] 启动 Scheduler ===\033[0m"
+        echo -e "\033[31m=== [4/8] 启动 Scheduler ===\033[0m"
         cd /workspace/llm-stack/workspace_LLL/FlexPD/entrypoints
         export CUDA_VISIBLE_DEVICES=2
         python3 controller.py
@@ -77,7 +77,7 @@ case "$MODE" in
         # === 核心修改：Decode Proxy 加入 等待 (多等2秒确保调度器先一步) ===
         wait_for_loading 40 "Decode Proxy"
 
-        echo -e "\033[35m=== [5/9] 启动 Decode Proxy ===\033[0m"
+        echo -e "\033[35m=== [5/8] 启动 Decode Proxy ===\033[0m"
         cd /workspace/llm-stack/workspace_LLL/FlexPD/entrypoints
         python3 gatewayD.py
         ;;
@@ -85,7 +85,7 @@ case "$MODE" in
         # === 核心修改：Prefill Proxy 加入 等待 ===
         wait_for_loading 42 "Prefill Proxy"
 
-        echo -e "\033[36m=== [6/9] 启动 Prefill Proxy ===\033[0m"
+        echo -e "\033[36m=== [6/8] 启动 Prefill Proxy ===\033[0m"
         cd /workspace/llm-stack/workspace_LLL/FlexPD/entrypoints
         python3 gatewayP.py
         ;;
@@ -93,7 +93,7 @@ case "$MODE" in
         # === 核心修改：Decode Instance 加入 等待 ===
         wait_for_loading 45 "Decode Instance"
 
-        echo -e "\033[36m=== [7/9] 启动 Decode Instance ===\033[0m"
+        echo -e "\033[36m=== [7/8] 启动 Decode Instance ===\033[0m"
         cd /workspace/llm-stack/workspace_LLL/FlexPD/entrypoints
         python3 instanceD.py
         ;;
@@ -101,16 +101,9 @@ case "$MODE" in
         # === 核心修改：Prefill Instance 加入 等待 ===
         wait_for_loading 47 "Prefill Instance"
 
-        echo -e "\033[36m=== [8/9] 启动 Prefill Instance ===\033[0m"
+        echo -e "\033[36m=== [8/8] 启动 Prefill Instance ===\033[0m"
         cd /workspace/llm-stack/workspace_LLL/FlexPD/entrypoints
         python3 instanceP.py
-        ;;
-    "kdn")
-        # === 核心修改：KDN Server ===
-
-        echo -e "\033[36m=== [9/9] 启动 KDN Server ===\033[0m"
-        cd /workspace/llm-stack/workspace_LLL/FlexPD/entrypoints
-        python3 demo_kdn.py
         ;;
 esac
 echo "--------------------------------------------------------"
@@ -161,8 +154,6 @@ sleep 0.5
 
 launch_tab "8.Instance-D" "id"
 sleep 0.5
-
-launch_tab "9.KDN-Server" "kdn"
 
 echo ">>> 所有服务窗口已打开。"
 echo ">>> P/D/Meta 正在启动，Scheduler 和 Proxy 将在 90 秒后自动启动。"

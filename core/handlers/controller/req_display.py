@@ -44,7 +44,6 @@ def get_request_data(req_obj: Any) -> Dict[str, Any]:
         service = getattr(req_obj, 'Service', None)
         if service:
             request_data["enable_pd_disaggregation"] = str(getattr(service, 'Enable_PD_Disaggregation', 'N/A'))
-            request_data["enable_know_injection"] = str(getattr(service, 'Enable_know_injection', 'N/A'))
             request_data["enable_compress"] = str(getattr(service, 'Enable_compress', 'N/A'))
             request_data["compress_factor"] = str(getattr(service, 'Compress_factor', 'N/A'))
             request_data["slo_ttft"] = str(getattr(service, 'SLO_TTFT', 'N/A'))
@@ -62,8 +61,6 @@ def get_request_data(req_obj: Any) -> Dict[str, Any]:
             request_data["decode_instance"] = str(getattr(task, 'decode_instance', 'N/A'))
             request_data["batch_order"] = str(getattr(task, 'batch_order', 'N/A'))
             request_data["user_url_path"] = str(getattr(task, 'User_url_path', 'N/A'))
-            request_data["kdn_server_addr"] = str(getattr(task, 'KDN_server_addr', 'N/A'))
-            request_data["default_know_addr"] = str(getattr(task, 'default_know_addr', 'N/A'))
         else:
             request_data["prefill_pool"] = "N/A"
             request_data["decode_pool"] = "N/A"

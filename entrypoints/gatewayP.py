@@ -189,8 +189,6 @@ def main():
     storage.ENABLE_ADAPTIVE_SWITCH = ENABLE_ADAPTIVE_SWITCH
     storage.DIST_SERVE_PREFILL_BATCH_TOKENS = args.distserve_prefill_batch_tokens
 
-    storage.KDN_BASE_URL = KDN_BASE_URL
-    
     storage.TTFT_WARMUP_ENABLED = args.ttft_warmup
     storage.TTFT_WARMUP_REPEATS = args.ttft_warmup_repeats
     storage.TTFT_TARGET = args.ttft_target

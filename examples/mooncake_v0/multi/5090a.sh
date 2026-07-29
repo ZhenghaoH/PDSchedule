@@ -45,7 +45,7 @@ wait_for_loading() {
 
 case "$MODE" in
     "pa")
-        echo -e "\033[32m=== [1/13] 启动 Prefill 实例 (GPU 0) ===\033[0m"
+        echo -e "\033[32m=== [1/12] 启动 Prefill 实例 (GPU 0) ===\033[0m"
         cd /workspace/vllm
         export HTTP_IP=172.18.0.169:8101
         export CUDA_VISIBLE_DEVICES=0
@@ -53,7 +53,7 @@ case "$MODE" in
         python3 -m vllm.entrypoints.openai.api_server --host $LOCAL_IP --port 8001 --model $MODEL_PATH --max-model-len 10000 --gpu-memory-utilization 0.8 --kv-transfer-config '{"kv_connector":"MooncakeConnector","kv_role":"kv_producer","kv_rank":0,"kv_parallel_size":2,"kv_buffer_size":2e9}'
         ;;
     "pb")
-        echo -e "\033[32m=== [2/13] 启动 Prefill 实例 (GPU 1) ===\033[0m"
+        echo -e "\033[32m=== [2/12] 启动 Prefill 实例 (GPU 1) ===\033[0m"
         cd /workspace/vllm
         export HTTP_IP=172.18.0.169:8102
         export CUDA_VISIBLE_DEVICES=1
@@ -61,7 +61,7 @@ case "$MODE" in
         python3 -m vllm.entrypoints.openai.api_server --host $LOCAL_IP --port 8002 --model $MODEL_PATH --max-model-len 10000 --gpu-memory-utilization 0.8 --kv-transfer-config '{"kv_connector":"MooncakeConnector","kv_role":"kv_producer","kv_rank":0,"kv_parallel_size":2,"kv_buffer_size":2e9}'
         ;;
     "dc")
-        echo -e "\033[34m=== [3/13] 启动 Decode 实例 (GPU 2) ===\033[0m"
+        echo -e "\033[34m=== [3/12] 启动 Decode 实例 (GPU 2) ===\033[0m"
         cd /workspace/vllm
         export HTTP_IP=172.18.0.169:8103
         export CUDA_VISIBLE_DEVICES=2
@@ -69,7 +69,7 @@ case "$MODE" in
         python3 -m vllm.entrypoints.openai.api_server --host $LOCAL_IP --port 8003 --model $MODEL_PATH --max-model-len 10000 --gpu-memory-utilization 0.8 --kv-transfer-config '{"kv_connector":"MooncakeConnector","kv_role":"kv_consumer","kv_rank":1,"kv_parallel_size":2,"kv_buffer_size":2e9}'
         ;;
     "dd")
-        echo -e "\033[34m=== [4/13] 启动 Decode 实例 (GPU 3) ===\033[0m"
+        echo -e "\033[34m=== [4/12] 启动 Decode 实例 (GPU 3) ===\033[0m"
         cd /workspace/vllm
         export HTTP_IP=172.18.0.169:8104
         export CUDA_VISIBLE_DEVICES=3
@@ -77,25 +77,20 @@ case "$MODE" in
         python3 -m vllm.entrypoints.openai.api_server --host $LOCAL_IP --port 8004 --model $MODEL_PATH --max-model-len 10000 --gpu-memory-utilization 0.8 --kv-transfer-config '{"kv_connector":"MooncakeConnector","kv_role":"kv_consumer","kv_rank":1,"kv_parallel_size":2,"kv_buffer_size":2e9}'
         ;;
     "s")
-        echo -e "\033[31m=== [5/13] 启动 Scheduler ===\033[0m"
+        echo -e "\033[31m=== [5/12] 启动 Scheduler ===\033[0m"
         cd /workspace/workspace/FlexPD/entrypoints
         python3 controller.py --host $LOCAL_IP --port 5000
         ;;
     "meta")
-        echo -e "\033[33m=== [6/13] 启动 Metadata Server ===\033[0m"
+        echo -e "\033[33m=== [6/12] 启动 Metadata Server ===\033[0m"
         cd /workspace/workspace/FlexPD/entrypoints
         python3 http_server.py
-        ;;
-    "kdn")
-        echo -e "\033[36m=== [7/13] 启动 KDN Server ===\033[0m"
-        cd /workspace/workspace/FlexPD/entrypoints
-        python3 demo_kdn.py
         ;;
     "pp1")
         # === Prefill Proxy 加入 等待 ===
         wait_for_loading 40 "Prefill Proxy"
 
-        echo -e "\033[36m=== [8/13] 启动 Prefill Proxy ===\033[0m"
+        echo -e "\033[36m=== [7/12] 启动 Prefill Proxy ===\033[0m"
         cd /workspace/workspace/FlexPD/entrypoints
         export MY_FLOPS=256.0
         python3 gatewayP.py --host $LOCAL_IP --port 8081 --controller 172.18.0.169:5000 --prefill 172.18.0.169:7001 172.18.0.169:7002 --decode 172.18.0.168:8083 172.18.0.169:8082
@@ -104,7 +99,7 @@ case "$MODE" in
         # === Decode Proxy 加入 等待 ===
         wait_for_loading 40 "Decode Proxy"
         export MY_FLOPS=256.0
-        echo -e "\033[35m=== [9/13] 启动 Decode Proxy ===\033[0m"
+        echo -e "\033[35m=== [8/12] 启动 Decode Proxy ===\033[0m"
         cd /workspace/workspace/FlexPD/entrypoints
         python3 gatewayD.py --host $LOCAL_IP --port 8082 --controller 172.18.0.169:5000 --decode 172.18.0.169:7003 172.18.0.169:7004
         ;;
@@ -112,7 +107,7 @@ case "$MODE" in
         # === Prefill Instance 加入 等待 ===
         wait_for_loading 50 "Prefill Instance"
 
-        echo -e "\033[36m=== [10/13] 启动 Prefill Instance ===\033[0m"
+        echo -e "\033[36m=== [9/12] 启动 Prefill Instance ===\033[0m"
         cd /workspace/workspace/FlexPD/entrypoints
         python3 instanceP.py --host $LOCAL_IP --port 7001 --vllm_port 8001 --gateway 172.18.0.169:8081
         ;;
@@ -120,7 +115,7 @@ case "$MODE" in
         # === Prefill Instance 加入 等待 ===
         wait_for_loading 50 "Prefill Instance"
 
-        echo -e "\033[36m=== [11/13] 启动 Prefill Instance ===\033[0m"
+        echo -e "\033[36m=== [10/12] 启动 Prefill Instance ===\033[0m"
         cd /workspace/workspace/FlexPD/entrypoints
         python3 instanceP.py --host $LOCAL_IP --port 7002 --vllm_port 8002 --gateway 172.18.0.169:8081
         ;;
@@ -128,7 +123,7 @@ case "$MODE" in
         # === Decode Instance 加入 等待 ===
         wait_for_loading 50 "Decode Instance"
 
-        echo -e "\033[36m=== [12/13] 启动 Decode Instance ===\033[0m"
+        echo -e "\033[36m=== [11/12] 启动 Decode Instance ===\033[0m"
         cd /workspace/workspace/FlexPD/entrypoints
         python3 instanceD.py --host $LOCAL_IP --port 7003 --vllm_port 8003 --gateway 172.18.0.169:8082
         ;;
@@ -136,7 +131,7 @@ case "$MODE" in
         # === Decode Instance 加入 等待 ===
         wait_for_loading 50 "Decode Instance"
 
-        echo -e "\033[36m=== [13/13] 启动 Decode Instance ===\033[0m"
+        echo -e "\033[36m=== [12/12] 启动 Decode Instance ===\033[0m"
         cd /workspace/workspace/FlexPD/entrypoints
         python3 instanceD.py --host $LOCAL_IP --port 7004 --vllm_port 8004 --gateway 172.18.0.169:8082
         ;;
@@ -182,9 +177,6 @@ launch_tab "5.Scheduler" "s"
 sleep 0.5
 
 launch_tab "6.Metadata" "meta"
-sleep 0.5
-
-launch_tab "7.KDN-Server" "kdn"
 sleep 0.5
 
 launch_tab "8.GatewayP1" "pp1"

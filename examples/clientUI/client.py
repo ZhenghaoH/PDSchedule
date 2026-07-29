@@ -41,8 +41,8 @@ REQUIRED_FIELDS = {
     "completions": {"model", "prompt"},
 }
 ALLOWED_OPTION_FIELDS = {
-    "chat": {"temperature", "top_p", "max_tokens", "stream", "RAG"},
-    "completions": {"temperature", "top_p", "max_tokens", "RAG"},
+    "chat": {"temperature", "top_p", "max_tokens", "stream"},
+    "completions": {"temperature", "top_p", "max_tokens"},
 }
 
 # ----------------- 日志配置 -----------------

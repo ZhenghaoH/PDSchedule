@@ -67,7 +67,6 @@ def _build_payload(enable_affinity: bool, user_id: Optional[str], session_id: Op
         "temperature": 0.0,
         "top_p": 1.0,
         "stream": False,
-        "RAG": False,
         "Enable_Affinity": enable_affinity,
     }
     if user_id is not None:
@@ -186,7 +185,6 @@ def _stream_ttft_once(
         "temperature": 0.0,
         "top_p": 1.0,
         "stream": True,
-        "RAG": False,
         "Enable_Affinity": enable_affinity,
         "user_id": user_id,
         "session_id": session_id,

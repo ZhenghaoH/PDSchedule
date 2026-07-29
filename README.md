@@ -11,7 +11,7 @@
 ![img](doc/images/struct.png)
 
 - 由用户请求发送模块发起推理任务，发送prompt给全局控制器做全局资源池选择。
-- 全局控制器收到请求后解析请求和标识信息并构造推理任务，通过embed模型分析prompt并与知识库中条目比对，通过调度策略选择合适的Prefill与Decode推理算力池，并转发推理任务请求。
+- 全局控制器收到请求后解析请求和标识信息并构造推理任务，通过调度策略选择合适的 Prefill 与 Decode 推理算力池，并转发推理任务请求。
 - 算力池网关接收任务请求后通过调度策略选择池内的推理实例并转发请求。
 - 实例代理接收请求并转发给vLLM实例，并实时感知实例状态。
 - vLLM实例完成推理任务，并在KV Cache传输时提供压缩功能。
@@ -176,25 +176,7 @@ cd /workspace/llm-stack/workspace_LLL/FlexPD
 ./run.sh
 ```
 
-### 3 注册知识（可选）
-
-启动多窗口脚本后，在 “9.KDN-CLI” 窗口输入指令进行知识注入
-
-注册文本，选择包含知识的文本文件路径
-
-```bash
-# 关于LLM的知识
-:file /workspace/llm-stack/workspace_LLL/FlexPD/kdn_server/prompts/req1.txt
-```
-
-注册缓存，选择包含知识的文本文件路径、计算缓存的vLLM接口、计算缓存的模型型号
-
-```bash
-# 关于LMCache的知识
-:buildkv_file /workspace/llm-stack/workspace_LLL/FlexPD/kdn_server/prompts/req2.txt --api-url http://172.18.0.169:8001/v1/chat/completions --model /workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B
-```
-
-### 4 网页交互
+### 3 网页交互
 
 系统启动后，可以通过访问 "3.Controller" 提供的IP地址和端口来查看系统管理页面
 

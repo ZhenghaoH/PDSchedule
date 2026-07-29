@@ -39,20 +39,10 @@ case "$MODE" in
     "s")
         wait_for_loading 10 "Scheduler"
 
-        echo -e "\033[31m=== [3/9] 启动 Scheduler ===\033[0m"
+        echo -e "\033[31m=== [3/7] 启动 Scheduler ===\033[0m"
         cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
         export CUDA_VISIBLE_DEVICES=4
         python3 controller.py
-        ;;
-    "kdn")
-        echo -e "\033[36m=== [8/9] 启动 KDN Server ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD/entrypoints
-        python3 demo_kdn.py
-        ;;
-    "cli")
-        echo -e "\033[36m=== [9/9] 启动 KDN Server ===\033[0m"
-        cd /workspace/llm-stack/workspace_HZH/FlexPD/
-        python3 ./kdn_server/kdn_register_cli.py
         ;;
 esac
 echo "--------------------------------------------------------"
@@ -79,10 +69,5 @@ launch_tab() {
 launch_tab "3.Controller" "s"
 sleep 0.5
 
-launch_tab "8.KDN-Server" "kdn"
-sleep 0.5
-
-launch_tab "9.KDN-CLI" "cli"
-
-echo ">>> Controller 与 KDN 服务窗口已打开。"
+echo ">>> Controller 服务窗口已打开。"
 unset SUDO_PASS

@@ -35,11 +35,11 @@ wait_for_loading() {
 
 case "$MODE" in
     "meta")
-        echo -e "\033[33m=== [0/13] Start Metadata Server ===\033[0m"
+        echo -e "\033[33m=== [0/11] Start Metadata Server ===\033[0m"
         mooncake_master --rpc_address 172.18.0.169 --rpc_port 50051 --metrics_port 9002 --enable_http_metadata_server=true --http_metadata_server_host=172.18.0.169 --http_metadata_server_port=8080
         ;;
     "p1")
-        echo -e "\033[32m=== [1/13] Start Prefill vLLM 1 (GPU 0) ===\033[0m"
+        echo -e "\033[32m=== [1/11] Start Prefill vLLM 1 (GPU 0) ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD
         export CUDA_VISIBLE_DEVICES=0
         export PYTHONHASHSEED=0
@@ -64,7 +64,7 @@ case "$MODE" in
         --attention-backend TRITON_ATTN
         ;;
     "p2")
-        echo -e "\033[32m=== [2/13] Start Prefill vLLM 2 (GPU 1) ===\033[0m"
+        echo -e "\033[32m=== [2/11] Start Prefill vLLM 2 (GPU 1) ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD
         export CUDA_VISIBLE_DEVICES=1
         export PYTHONHASHSEED=0
@@ -89,7 +89,7 @@ case "$MODE" in
         --attention-backend TRITON_ATTN
         ;;
     "d1")
-        echo -e "\033[34m=== [3/13] Start Decode vLLM 1 (GPU 2) ===\033[0m"
+        echo -e "\033[34m=== [3/11] Start Decode vLLM 1 (GPU 2) ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD
         export CUDA_VISIBLE_DEVICES=2
         export PYTHONHASHSEED=0
@@ -113,7 +113,7 @@ case "$MODE" in
         --attention-backend TRITON_ATTN
         ;;
     "d2")
-        echo -e "\033[34m=== [4/13] Start Decode vLLM 2 (GPU 3) ===\033[0m"
+        echo -e "\033[34m=== [4/11] Start Decode vLLM 2 (GPU 3) ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD
         export CUDA_VISIBLE_DEVICES=3
         export PYTHONHASHSEED=0
@@ -139,41 +139,30 @@ case "$MODE" in
     "id1")
         wait_for_loading 55 "Decode Instance 1"
 
-        echo -e "\033[36m=== [8/13] Start Decode Instance Proxy 1 ===\033[0m"
+        echo -e "\033[36m=== [8/11] Start Decode Instance Proxy 1 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         python3 instanceD.py --host 172.18.0.169 --port 7003 --vllm_port 8003 --gateway 172.18.0.170:8082 --side-channel-host 172.18.0.169 --side-channel-port 5559 --tp-size 1 --gpu-indices 2
         ;;
     "id2")
         wait_for_loading 55 "Decode Instance 2"
 
-        echo -e "\033[36m=== [9/13] Start Decode Instance Proxy 2 ===\033[0m"
+        echo -e "\033[36m=== [9/11] Start Decode Instance Proxy 2 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         python3 instanceD.py --host 172.18.0.169 --port 7004 --vllm_port 8004 --gateway 172.18.0.170:8082 --side-channel-host 172.18.0.169 --side-channel-port 5560 --tp-size 1 --gpu-indices 3
         ;;
     "ip1")
         wait_for_loading 57 "Prefill Instance 1"
 
-        echo -e "\033[36m=== [10/13] Start Prefill Instance Proxy 1 ===\033[0m"
+        echo -e "\033[36m=== [10/11] Start Prefill Instance Proxy 1 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         python3 instanceP.py --host 172.18.0.169 --port 7001 --vllm_port 8001 --gateway 172.18.0.170:8081 --side-channel-host 172.18.0.169 --side-channel-port 5557 --tp-size 1 --gpu-indices 0
         ;;
     "ip2")
         wait_for_loading 57 "Prefill Instance 2"
 
-        echo -e "\033[36m=== [11/13] Start Prefill Instance Proxy 2 ===\033[0m"
+        echo -e "\033[36m=== [11/11] Start Prefill Instance Proxy 2 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         python3 instanceP.py --host 172.18.0.169 --port 7002 --vllm_port 8002 --gateway 172.18.0.170:8081 --side-channel-host 172.18.0.169 --side-channel-port 5558 --tp-size 1 --gpu-indices 1
-        ;;
-    "kdn")
-        echo -e "\033[36m=== [12/13] Start KDN Server ===\033[0m"
-        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        export FLEXPD_REDIS_HOST=172.18.0.170
-        python3 demo_kdn.py --host 172.18.0.169 --port 9101
-        ;;
-    "cli")
-        echo -e "\033[36m=== [13/13] Start KDN CLI ===\033[0m"
-        cd /workspace/llm-stack/P2P_FlexPD/
-        python3 ./kdn_server/kdn_register_cli.py
         ;;
 esac
 echo "--------------------------------------------------------"
@@ -221,11 +210,6 @@ sleep 0.5
 
 launch_tab "11.Instance-P-2" "ip2"
 sleep 0.5
-
-# launch_tab "12.KDN-Server" "kdn"
-# sleep 0.5
-
-# launch_tab "13.KDN-CLI" "cli"
 
 echo ">>> All service tabs have been opened."
 unset SUDO_PASS

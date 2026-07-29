@@ -19,9 +19,6 @@ sudo docker run --gpus all -it --network host -v /home/jtdx/vLLM/workspace:/work
 # 启动容器
 sudo docker exec -it test /bin/bash
 
-# 在容器中临时安装知识注入相关包
-pip3 install sentence_transformers faiss-cpu -i https://pypi.tuna.tsinghua.edu.cn/simple/
-
 # 修改源码
 cp /workspace/workspace/FlexPD/instance/vLLM/mooncake_v0/mooncake_pipe.py /workspace/vllm/vllm/distributed/kv_transfer/kv_pipe/mooncake_pipe.py 
 
@@ -55,6 +52,6 @@ pair pd -p 202 -d 201 --force=true
 # 输入指令，发送请求
 http://127.0.0.1:5000/v1/chat/completions -H "Content-Type: application/json" -d '{"model": "/workspace/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B","messages": [{"role": "user", "content": "What is DeepSeek"}],"max_tokens": 64,"stream":"True"}' 
 
-http://127.0.0.1:5000/v1/chat/completions -H "Content-Type: application/json" -d '{"model": "/workspace/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B","messages": [{"role": "user", "content": "What is DeepSeek"}],"max_tokens": 64,"stream":"False","RAG":"True"}'
+http://127.0.0.1:5000/v1/chat/completions -H "Content-Type: application/json" -d '{"model": "/workspace/workspace/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B","messages": [{"role": "user", "content": "What is DeepSeek"}],"max_tokens": 64,"stream":"False"}'
 ```
 

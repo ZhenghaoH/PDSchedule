@@ -256,8 +256,6 @@ def _handle_client(
         user_addr=client_ip,
         request_id=request_id,
         scheduler_instance=scheduler_instance,
-        embedder=getattr(app.state, "embedding_engine", None),  # type: ignore
-        knowledge_table=getattr(app.state, "knowledge_table", None),  # type: ignore
         affinity_store=getattr(app.state, "affinity_store", None),  # type: ignore
         affinity_lock=getattr(app.state, "affinity_lock", None),  # type: ignore
     )

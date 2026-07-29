@@ -6,6 +6,7 @@
 
 ### 修改
 
+- 移除 KDN、Embedding、FAISS、RAG 文本注入及其数据、接口、启动入口和依赖；精简内部请求协议与 Controller/P Gateway 生命周期，使项目专注于 PD 动态配对、分层调度和 P→D KV Cache 传输
 - 修改 `store/gateway/manager.py`：Decode 池负载统计改为汇总所有在线 Decode 实例的 `running_reqs + waiting_reqs`，并继续通过现有 `running_reqs` 字段上报，使全局 Least Load 调度能够感知等待中的请求
 - 修改 `test/test_affinity_scheduler.py`：为 TTFT benchmark 增加按 round 自动切换的问题池，baseline、warmup 和 affinity hit 每轮都使用新的问题文本，避免重复提问；当轮数超过预置问题数时自动生成新问题
 - 修改 `scheduler/controller/scheduler_RoundRobin.py`：将 RoundRobin 调度从“Prefill 池独立轮询 + Decode 池独立轮询”改为“所有 P-D 配对整体轮询”；调度器内部改用单一配对索引，并新增当前选中配对的调度日志
@@ -64,4 +65,3 @@
 - 支持 Prefill/Decode 池管理
 - 支持网络链路管理
 - 集成 LMCache KV Cache 缓存
-- 支持 KDN 知识网络

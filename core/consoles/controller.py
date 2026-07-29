@@ -2,7 +2,7 @@ import os
 import sys
 from fastapi import FastAPI
 from core.schemas.cmd import BaseCommand
-from core.commands.controller.show import summarize_knowledge_base, do_show_pool_id
+from core.commands.controller.show import do_show_pool_id
 from core.commands.controller.pair import do_pair_pd
 
 
@@ -23,7 +23,7 @@ else:
         readline = None
 
 # 指令补全
-completion_words = ["history", "quit", "exit", "clear", "cls", "show", "knowledge_base", "pool_id", "pair", "pd", "switch", "scheduler"]
+completion_words = ["history", "quit", "exit", "clear", "cls", "show", "pool_id", "pair", "pd", "switch", "scheduler"]
 history = []
 
 
@@ -66,7 +66,6 @@ def do_history():
 
 def info():
     """展示命令信息"""
-    print("  - show knowledge_base  : 显示知识库概况")
     print("  - show pool_id         : 显示推理池ID")
     print("  - show scheduler       : 显示Controller路由模式或全局调度策略")
     print("  - pair pd -p <p> -d <d>: 配对PD池")
@@ -126,10 +125,6 @@ def run_scheduler_cli(app: FastAPI, server: "object") -> None:
         elif cmd == BaseCommand("quit") or cmd == BaseCommand("exit"):
             do_quit(server)
             break
-
-        # 展示知识库命令
-        elif cmd == BaseCommand("show", "knowledge_base"):
-            summarize_knowledge_base(app)
 
         # 展示池id与池的对应关系
         elif cmd == BaseCommand("show", "pool_id"):

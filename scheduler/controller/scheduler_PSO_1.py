@@ -99,20 +99,6 @@ def _build_score_table_line(*columns: Tuple[str, int]) -> str:
     return " | ".join(_pad_display_width(text, width) for text, width in columns)
 
 
-def _print_kdn_schedule_result() -> None:
-    print("\n\n\n")
-    print("+" * 80)
-    print("[Scheduler] KDN调度结果")
-    print("+" * 80)
-    print("KDN服务器调度结果: 172.18.0.170")
-    print("检索知识长度: 1856 tokens")
-    print("可用文本长度: 1856 tokens")
-    print("可用 KVCache长度: 1792 tokens")
-    print("KDN负载检查: True")
-    print("+" * 80)
-    print("\n\n\n")
-
-
 class RequestRanker:
     def __init__(self, window_size=1000):
         # 使用双端队列保存原始顺序，用于移除过期数据
@@ -658,8 +644,6 @@ class PSO_Scheduler:
 
         if num_p == 0 or num_d == 0:
             raise ValueError("Empty pools passed to PSO schedule")
-
-        _print_kdn_schedule_result()
 
         # 更新请求分布 Ranker
         self.req_ranker.update(token_length)

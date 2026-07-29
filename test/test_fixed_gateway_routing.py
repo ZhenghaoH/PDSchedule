@@ -27,8 +27,6 @@ def make_request(metadata=None):
         Service=Service(Endpoint_type="chat/completions"),
         Task=Task(
             User_addr="",
-            KDN_server_addr="",
-            default_know_addr="",
             P_proxy_addr="10.0.0.1",
             P_proxy_port=8081,
             D_proxy_addr="10.0.0.2",
@@ -117,7 +115,6 @@ class FixedGatewaySchedulerTest(unittest.TestCase):
             "messages": [{"role": "user", "content": "hello"}],
             "max_tokens": 16,
             "stream": False,
-            "RAG": False,
             "Enable_Affinity": True,
             "user_id": "user",
             "session_id": "session",

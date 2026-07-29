@@ -36,13 +36,9 @@ def _build_analysis_request(payload: Dict[str, Any], storage: GatewayStoreManage
     service = Service(
         Enable_PD_Disaggregation=True,
         Enable_Affinity=False,
-        Enable_know_injection=False,
         Enable_compress=False,
         Compress_factor=1.0,
         Enable_security=False,
-        Knowledge_block_num=0,
-        Knowledge_List=[],
-        Knowledge_length=0,
         SLO_TTFT=10_000,
         SLO_E2E=60_000,
         SLO_TPOT=1_000,
@@ -57,8 +53,6 @@ def _build_analysis_request(payload: Dict[str, Any], storage: GatewayStoreManage
 
     task = Task(
         User_addr="network-transfer-analyzer",
-        KDN_server_addr="",
-        default_know_addr="",
         P_proxy_addr=storage.host,
         P_proxy_port=storage.port,
         D_proxy_addr=decode_host,

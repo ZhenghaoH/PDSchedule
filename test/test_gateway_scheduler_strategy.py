@@ -56,8 +56,6 @@ def make_request(request_id, token_length=10):
         Service=Service(arrival_time=float(request_id)),
         Task=Task(
             User_addr="",
-            KDN_server_addr="",
-            default_know_addr="",
             P_proxy_addr="",
             P_proxy_port=0,
             D_proxy_addr="",

@@ -44,12 +44,6 @@ SCHEDULER_STRATEGY = "pso_new"
 ENABLE_ADAPTIVE_SWITCH = False
 DIST_SERVE_PREFILL_BATCH_TOKENS = 2048
 
-# KDN_BASE_URL = os.environ.get("KDN_BASE_URL", "http://127.0.0.1:9101").rstrip("/")
-KDN_BASE_URL = os.environ.get(
-    "KDN_BASE_URL",
-    f"http://{CONFIG_KDN_IP}:{CONFIG_KDN_PORT}" if CONFIG_KDN_IP else "",
-).rstrip("/")
-
 # TTFT predictor warmup configuration
 TTFT_WARMUP_ENABLED = True
 TTFT_WARMUP_REPEATS = 3

@@ -14,8 +14,6 @@ from core.handlers.controller.update import update_decode_pool_status, update_pr
 
 from core.handlers.controller.req_display import show_requests
 
-from core.handlers.controller.knowledge import debug_status, debug_peek_knowledge, admin_refresh_knowledge
-
 router = APIRouter()
 
 # 注册路由
@@ -36,8 +34,3 @@ router.post("/network/register")(register_network_link)
 # Web页面路由 - 新增
 router.get("/requests", response_class=HTMLResponse)(show_requests)
 router.get("/", response_class=HTMLResponse)(show_requests)  # 根路径也可访问
-
-# 知识
-router.get("/debug/status")(debug_status)
-router.post("/debug/knowledge/peek")(debug_peek_knowledge)
-router.post("/admin/refresh_knowledge")(admin_refresh_knowledge)

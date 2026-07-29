@@ -35,11 +35,11 @@ wait_for_loading() {
 
 case "$MODE" in
     "meta")
-        echo -e "\033[33m=== [0/7] Start Metadata Server ===\033[0m"
+        echo -e "\033[33m=== [0/6] Start Metadata Server ===\033[0m"
         mooncake_master --rpc_address 172.18.0.169 --rpc_port 50051 --metrics_port 9002 --enable_http_metadata_server=true --http_metadata_server_host=172.18.0.169 --http_metadata_server_port=8080
         ;;
     "p1")
-        echo -e "\033[32m=== [1/7] Start Prefill vLLM 1 (GPU 0) ===\033[0m"
+        echo -e "\033[32m=== [1/6] Start Prefill vLLM 1 (GPU 0) ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD
         export CUDA_VISIBLE_DEVICES=0
         export PYTHONHASHSEED=0
@@ -64,7 +64,7 @@ case "$MODE" in
         --attention-backend TRITON_ATTN
         ;;
     "p2")
-        echo -e "\033[32m=== [2/7] Start Prefill vLLM 2 (GPU 1) ===\033[0m"
+        echo -e "\033[32m=== [2/6] Start Prefill vLLM 2 (GPU 1) ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD
         export CUDA_VISIBLE_DEVICES=1
         export PYTHONHASHSEED=0
@@ -91,45 +91,32 @@ case "$MODE" in
     "s")
         wait_for_loading 10 "Scheduler"
 
-        echo -e "\033[31m=== [3/7] Start Scheduler ===\033[0m"
+        echo -e "\033[31m=== [3/6] Start Scheduler ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        export FLEXPD_KDN_HOST=172.18.0.170
         python3 controller.py --host 172.18.0.170 --port 5000
         ;;
     "pp")
         wait_for_loading 52 "Prefill Proxy"
 
-        echo -e "\033[36m=== [4/7] Start Prefill Proxy ===\033[0m"
+        echo -e "\033[36m=== [4/6] Start Prefill Proxy ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         export MY_MAX_PROMPT_THROUGHPUT=5646.747
         export MY_FLOPS=35.58
-        export KDN_BASE_URL=http://172.18.0.170:9101
         python3 gatewayP.py --host 172.18.0.167 --port 8081 --controller 172.18.0.170:5000 --prefill 172.18.0.167:7001 172.18.0.167:7002 --prefill-scheduler-strategy pso_new
         ;;
     "ip1")
         wait_for_loading 57 "Prefill Instance 1"
 
-        echo -e "\033[36m=== [5/7] Start Prefill Instance Proxy 1 ===\033[0m"
+        echo -e "\033[36m=== [5/6] Start Prefill Instance Proxy 1 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         python3 instanceP.py --host 172.18.0.167 --port 7001 --vllm_port 8001 --gateway 172.18.0.167:8081 --side-channel-host 172.18.0.167 --side-channel-port 5557 --tp-size 1
         ;;
     "ip2")
         wait_for_loading 57 "Prefill Instance 2"
 
-        echo -e "\033[36m=== [6/7] Start Prefill Instance Proxy 2 ===\033[0m"
+        echo -e "\033[36m=== [6/6] Start Prefill Instance Proxy 2 ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         python3 instanceP.py --host 172.18.0.167 --port 7002 --vllm_port 8002 --gateway 172.18.0.167:8081 --side-channel-host 172.18.0.167 --side-channel-port 5558 --tp-size 1
-        ;;
-    "kdn")
-        echo -e "\033[36m=== [7/7] Start KDN Server ===\033[0m"
-        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
-        export FLEXPD_REDIS_HOST=172.18.0.170
-        python3 demo_kdn.py --host 172.18.0.167 --port 9101
-        ;;
-    "cli")
-        echo -e "\033[36m=== [7/7] Start KDN CLI ===\033[0m"
-        cd /workspace/llm-stack/P2P_FlexPD/
-        python3 ./kdn_server/kdn_register_cli.py
         ;;
 esac
 echo "--------------------------------------------------------"
@@ -171,11 +158,6 @@ sleep 0.5
 
 launch_tab "6.Instance-P-2" "ip2"
 sleep 0.5
-
-# launch_tab "7.KDN-Server" "kdn"
-# sleep 0.5
-
-# launch_tab "8.KDN-CLI" "cli"
 
 echo ">>> All Prefill-only service tabs have been opened."
 unset SUDO_PASS

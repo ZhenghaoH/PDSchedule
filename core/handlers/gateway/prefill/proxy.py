@@ -3,10 +3,6 @@ import sys
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from core.handlers.gateway.prefill.kdn_proxy import (
-    kdn_proxy_chat_completions,
-    kdn_proxy_completions,
-)
 from core.schemas.request import BaseRequest
 from proxy.forward import forward_request_json
 from proxy.forward import forward_request_trace as forward_request
@@ -198,11 +194,6 @@ async def create_completion(raw_request: Request):
     endpoint_type = "completions"
     request_json = await raw_request.json()
     request = BaseRequest.recover_request(request_json, endpoint_type)
-
-    enable_rag = bool(getattr(request.Service, "Enable_know_injection", False))
-    knowledge_ids = getattr(request.Service, "Knowledge_List", []) or []
-    if enable_rag and knowledge_ids:
-        return await kdn_proxy_completions(raw_request, request)
     return await handle_completion_request(raw_request, request, endpoint_type)
 
 
@@ -210,9 +201,4 @@ async def create_chat_completion(raw_request: Request):
     endpoint_type = "chat/completions"
     request_json = await raw_request.json()
     request = BaseRequest.recover_request(request_json, endpoint_type)
-
-    enable_rag = bool(getattr(request.Service, "Enable_know_injection", False))
-    knowledge_ids = getattr(request.Service, "Knowledge_List", []) or []
-    if enable_rag and knowledge_ids:
-        return await kdn_proxy_chat_completions(raw_request, request)
     return await handle_completion_request(raw_request, request, endpoint_type)

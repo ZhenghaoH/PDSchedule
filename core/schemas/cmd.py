@@ -7,7 +7,7 @@ class BaseCommand:
 
         Args:
             main_cmd: 主命令，如 "show"
-            sub_cmd: 辅命令，如 "knowledgebase"
+            sub_cmd: 辅命令，如 "scheduler"
             **kwargs: 其他参数，如 verbose=True, limit=10
         """
         self.main_cmd = main_cmd.lower() if main_cmd else ""
@@ -254,12 +254,12 @@ if __name__ == "__main__":
     # 测试各种命令格式
     test_cases = [
         "show",
-        "show knowledgebase",
-        "SHOW KNOWLEDGEBASE",  # 测试大小写
-        "show knowledgebase --verbose",
-        "show knowledgebase --limit=10",
-        "show knowledgebase --format json",
-        "show knowledgebase -v -l 20 --format=json",
+        "show scheduler",
+        "SHOW SCHEDULER",  # 测试大小写
+        "show scheduler --verbose",
+        "show scheduler --limit=10",
+        "show scheduler --format json",
+        "show scheduler -v -l 20 --format=json",
         "connect database --host=localhost --port=3306",
         "add item 'test item' --category tech",
     ]
@@ -278,12 +278,12 @@ if __name__ == "__main__":
     print("\n测试命令等价性:")
 
     # 创建基础命令（不带参数）
-    base_show = BaseCommand("show", "knowledgebase")
+    base_show = BaseCommand("show", "scheduler")
     base_connect = BaseCommand("connect", "database")
     base_add = BaseCommand("add", "item")
 
     # 创建带参数的命令
-    cmd_with_params = BaseCommand.build_cmd("show knowledgebase --verbose --limit=10")
+    cmd_with_params = BaseCommand.build_cmd("show scheduler --verbose --limit=10")
 
     print(f"基础命令: {base_show}")
     print(f"带参数命令: {cmd_with_params}")
@@ -299,16 +299,16 @@ if __name__ == "__main__":
     print("模拟命令行控制台:")
 
     # 定义预期的命令
-    expected_show = BaseCommand("show", "knowledgebase")
+    expected_show = BaseCommand("show", "scheduler")
     expected_connect = BaseCommand("connect", "database")
     expected_add = BaseCommand("add", "item")
 
     # 模拟用户输入
     user_inputs = [
-        "show knowledgebase",
-        "SHOW KNOWLEDGEBASE",
-        "show knowledgebase --verbose",
-        "show knowledgebase --limit=10 --format=json",
+        "show scheduler",
+        "SHOW SCHEDULER",
+        "show scheduler --verbose",
+        "show scheduler --limit=10 --format=json",
         "connect database --host=localhost",
         "add item --name=test",
         "invalid command",
@@ -335,15 +335,15 @@ if __name__ == "__main__":
 
     # 使用matches方法进行更直观的匹配
     test_cmds = [
-        BaseCommand.build_cmd("show knowledgebase --verbose"),
+        BaseCommand.build_cmd("show scheduler --verbose"),
         BaseCommand.build_cmd("connect database"),
         BaseCommand.build_cmd("add item --name=test"),
         BaseCommand.build_cmd("delete file"),
     ]
 
     for test_cmd in test_cmds:
-        if test_cmd.matches("show", "knowledgebase"):
-            print(f"{test_cmd} -> 匹配 show knowledgebase")
+        if test_cmd.matches("show", "scheduler"):
+            print(f"{test_cmd} -> 匹配 show scheduler")
         elif test_cmd.matches("connect", "database"):
             print(f"{test_cmd} -> 匹配 connect database")
         elif test_cmd.matches("add", "item"):

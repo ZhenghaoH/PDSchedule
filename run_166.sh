@@ -40,7 +40,7 @@ case "$MODE" in
         ;;
     "d1")
         echo -e "\033[34m=== [1/6] Start Decode vLLM 1 (GPU 0) ===\033[0m"
-        cd /workspace/llm-stack/P2P_FlexPD
+        cd /workspace/llm-stack/PDSchedule
         export CUDA_VISIBLE_DEVICES=0
         export PYTHONHASHSEED=0
         export VLLM_USE_FLASHINFER_SAMPLER=0
@@ -64,7 +64,7 @@ case "$MODE" in
         ;;
     "d2")
         echo -e "\033[34m=== [2/6] Start Decode vLLM 2 (GPU 1) ===\033[0m"
-        cd /workspace/llm-stack/P2P_FlexPD
+        cd /workspace/llm-stack/PDSchedule
         export CUDA_VISIBLE_DEVICES=1
         export PYTHONHASHSEED=0
         export VLLM_USE_FLASHINFER_SAMPLER=0
@@ -90,7 +90,7 @@ case "$MODE" in
         wait_for_loading 10 "Scheduler"
 
         echo -e "\033[31m=== [3/6] Start Scheduler ===\033[0m"
-        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
+        cd /workspace/llm-stack/PDSchedule/entrypoints
         python3 controller.py --host 172.18.0.170 --port 5000
         ;;
     "pd")
@@ -98,21 +98,21 @@ case "$MODE" in
         export MY_MEM_BANDWIDTH=936
         export MY_MAX_DECODE_REQ_NUM=32
         echo -e "\033[35m=== [4/6] Start Decode Proxy ===\033[0m"
-        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
+        cd /workspace/llm-stack/PDSchedule/entrypoints
         python3 gatewayD.py --host 172.18.0.166 --port 8082 --controller 172.18.0.170:5000 --decode 172.18.0.166:7001 172.18.0.166:7002 --decode-scheduler-strategy slo_aware_decode
         ;;
     "id1")
         wait_for_loading 55 "Decode Instance 1"
 
         echo -e "\033[36m=== [5/6] Start Decode Instance Proxy 1 ===\033[0m"
-        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
+        cd /workspace/llm-stack/PDSchedule/entrypoints
         python3 instanceD.py --host 172.18.0.166 --port 7001 --vllm_port 8001 --gateway 172.18.0.166:8082 --side-channel-host 172.18.0.166 --side-channel-port 5557 --tp-size 1
         ;;
     "id2")
         wait_for_loading 55 "Decode Instance 2"
 
         echo -e "\033[36m=== [6/6] Start Decode Instance Proxy 2 ===\033[0m"
-        cd /workspace/llm-stack/P2P_FlexPD/entrypoints
+        cd /workspace/llm-stack/PDSchedule/entrypoints
         python3 instanceD.py --host 172.18.0.166 --port 7002 --vllm_port 8002 --gateway 172.18.0.166:8082 --side-channel-host 172.18.0.166 --side-channel-port 5558 --tp-size 1
         ;;
 esac

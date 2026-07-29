@@ -13,9 +13,21 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 if "fastapi" not in sys.modules:
+    class FastAPIHTTPException(Exception):
+        def __init__(self, status_code, detail=None):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+
     fastapi_stub = types.ModuleType("fastapi")
-    fastapi_stub.HTTPException = type("HTTPException", (Exception,), {})
+    fastapi_stub.HTTPException = FastAPIHTTPException
+    fastapi_stub.Request = type("Request", (), {})
+    fastapi_responses_stub = types.ModuleType("fastapi.responses")
+    fastapi_responses_stub.StreamingResponse = type("StreamingResponse", (), {})
     sys.modules["fastapi"] = fastapi_stub
+    sys.modules["fastapi.responses"] = fastapi_responses_stub
+
+from fastapi import HTTPException
 
 from core.consoles.gateway import (
     build_gateway_completer,
@@ -25,7 +37,9 @@ from core.consoles.gateway import (
     run_gateway_server,
     switch_gateway_scheduler,
 )
+from core.handlers.gateway.decode.proxy import _select_decode_instance
 from core.schemas.request import BaseRequest, Prompt, Service, Task
+from proxy.forward import forward_request_trace
 from proxy.sync import RequestBatcher, storage as shared_storage
 from scheduler.gateway.decode.manager import SchedulerManager as DecodeSchedulerManager
 from scheduler.gateway.prefill.manager import SchedulerManager
@@ -326,6 +340,86 @@ class DecodeSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
     async def test_retired_decode_strategy_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "Unsupported Decode"):
             await self.scheduler.schedule(make_request(1), strategy="distserve")
+
+    async def test_decode_proxy_selects_with_configured_strategy_without_preselection(self):
+        self.store.set_decode_scheduler_strategy("lowest_generation_throughput")
+        request = make_request(1)
+
+        with (
+            patch(
+                "core.handlers.gateway.decode.proxy.decode_observer.record_schedule"
+            ) as record_schedule,
+            patch("core.handlers.gateway.decode.proxy._log_decode_instance_status"),
+        ):
+            selected = await _select_decode_instance(self.store, request)
+
+        self.assertEqual(selected, "d1")
+        self.assertEqual(request.Task.decode_instance, "d1")
+        decision = request.Task.scheduler_metadata["gateway_decode_selection"]
+        self.assertEqual(decision["strategy"], "lowest_generation_throughput")
+        self.assertEqual(decision["selected_instance"], "d1")
+        record_schedule.assert_called_once()
+
+    async def test_decode_proxy_keeps_active_preselected_instance(self):
+        request = make_request(1)
+        request.Task.decode_instance = "d2"
+
+        with (
+            patch(
+                "core.handlers.gateway.decode.proxy.SchedulerManager"
+            ) as scheduler_manager,
+            patch(
+                "core.handlers.gateway.decode.proxy.decode_observer.record_schedule"
+            ) as record_schedule,
+            patch("core.handlers.gateway.decode.proxy._log_decode_instance_status"),
+        ):
+            selected = await _select_decode_instance(self.store, request)
+
+        self.assertEqual(selected, "d2")
+        scheduler_manager.assert_not_called()
+        decision = request.Task.scheduler_metadata["gateway_decode_selection"]
+        self.assertEqual(decision["selection_source"], "preselected_request")
+        self.assertEqual(decision["selected_instance"], "d2")
+        record_schedule.assert_called_once()
+
+
+class ForwardRequestErrorTest(unittest.IsolatedAsyncioTestCase):
+    async def test_trace_preserves_upstream_http_status(self):
+        class ErrorResponse:
+            status = 503
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+            async def text(self):
+                return '{"detail":"decode unavailable"}'
+
+        class FakeSession:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, traceback):
+                return False
+
+            def post(self, **kwargs):
+                return ErrorResponse()
+
+        with patch("proxy.forward.aiohttp.ClientSession", return_value=FakeSession()):
+            with self.assertRaises(HTTPException) as raised:
+                async for _ in forward_request_trace(
+                    "http://decode.test/v1/chat/completions",
+                    {"stream": True},
+                ):
+                    pass
+
+        self.assertEqual(raised.exception.status_code, 503)
+        self.assertEqual(
+            raised.exception.detail,
+            "Request failed: {'detail': 'decode unavailable'}",
+        )
 
 
 class RequestBatcherSwitchTest(unittest.IsolatedAsyncioTestCase):

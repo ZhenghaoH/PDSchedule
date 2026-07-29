@@ -190,8 +190,8 @@ async def _select_decode_instance(storage: GatewayStoreManager, request: BaseReq
         _log_decode_instance_status(storage, selected_decode)
         return selected_decode
 
-    scheduler = SchedulerManager(strategy=strategy, storage=storage)
     strategy = storage.get_decode_scheduler_strategy()
+    scheduler = SchedulerManager(strategy=strategy, storage=storage)
     selected_decode = await scheduler.schedule(request)
     if not _active_decode_instance(storage, selected_decode):
         raise HTTPException(status_code=503, detail="No active decode instance")

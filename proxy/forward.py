@@ -225,6 +225,8 @@ async def forward_request_trace(
                     raise HTTPException(status_code=response.status, detail=f"Request failed: {error_content}")
 
         # 异常捕获保持不变...
+        except HTTPException:
+            raise
         except aiohttp.ClientError as e:
             logging.error("ClientError occurred: %s", str(e))
             raise HTTPException(status_code=502, detail="Bad Gateway") from e

@@ -1,33 +1,17 @@
 [CmdletBinding()]
 param(
+    [string]$Message,
     [string]$Remote = "origin",
     [string]$Branch = "PDSchedule",
-    [string]$WorkflowMessage = "chore: update PDSchedule publishing workflow",
-    [string]$RefactorMessage = "refactor: remove knowledge modules and retain PD scheduling",
+    [string[]]$Paths = @(),
     [switch]$Yes,
     [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
 $script:GitExecutable = $null
-$workflowPlanPath = [System.Text.Encoding]::UTF8.GetString(
-    [System.Convert]::FromBase64String(
-        "cGxhbi/ku6PnoIHkv67mlLnliY3orqHliJLnoa7orqTmtYHnqIsubWQ="
-    )
-)
-$taskPlanPath = [System.Text.Encoding]::UTF8.GetString(
-    [System.Convert]::FromBase64String(
-        "cGxhbi/pgILphY1QRFNjaGVkdWxl5Y+M6ISa5pys5Y+R5biD6K6h5YiSLm1k"
-    )
-)
-$script:WorkflowPaths = @(
-    $workflowPlanPath,
-    "create_pdschedule.ps1",
-    "publish.ps1"
-)
-$script:ForbiddenPaths = @(
-    "run_arrival_experiments.sh",
-    $taskPlanPath
+$script:ProtectedPaths = @(
+    "run_arrival_experiments.sh"
 )
 
 function Write-Step {
@@ -177,17 +161,17 @@ function Assert-EmptyIndex {
     }
 }
 
-function Get-WorkflowStatus {
-    return @(Get-GitLines -Arguments (
-        @("-c", "core.quotepath=false", "status", "--porcelain=v1", "--") +
-        $script:WorkflowPaths
-    ))
-}
-
-function Get-TrackedWorktreeChanges {
+function Get-TrackedChanges {
     return @(Get-GitLines -Arguments @(
         "-c", "core.quotepath=false",
         "diff", "--name-only", "--diff-filter=ACDMRTUXB"
+    ))
+}
+
+function Get-UntrackedFiles {
+    return @(Get-GitLines -Arguments @(
+        "-c", "core.quotepath=false",
+        "ls-files", "--others", "--exclude-standard"
     ))
 }
 
@@ -198,48 +182,144 @@ function Get-StagedPaths {
     ))
 }
 
-function Assert-NoForbiddenStagedPath {
-    $stagedPaths = @(Get-StagedPaths)
-    foreach ($path in $stagedPaths) {
-        if ($script:ForbiddenPaths -contains $path) {
-            Stop-Publish "Forbidden path entered the index: $path"
+function Test-ProtectedPath {
+    param([string]$Path)
+    foreach ($protectedPath in $script:ProtectedPaths) {
+        if ($Path.Equals($protectedPath, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Assert-NoProtectedTrackedChange {
+    param([string[]]$TrackedChanges)
+    foreach ($path in $TrackedChanges) {
+        if (Test-ProtectedPath -Path $path) {
+            Stop-Publish (
+                "Protected file has tracked changes and cannot be published by this script: $path"
+            )
         }
     }
 }
 
-function Assert-WorkflowStage {
+function Assert-NoProtectedStagedPath {
+    $stagedPaths = @(Get-StagedPaths)
+    foreach ($path in $stagedPaths) {
+        if (Test-ProtectedPath -Path $path) {
+            Stop-Publish "Protected file entered the Git index: $path"
+        }
+    }
+}
+
+function Resolve-ExplicitPath {
+    param(
+        [string]$Value,
+        [string]$RepositoryRoot
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        Stop-Publish "An empty value was provided in -Paths."
+    }
+    $candidate = $Value.Trim().Replace('\', '/')
+    while ($candidate.StartsWith("./", [System.StringComparison]::Ordinal)) {
+        $candidate = $candidate.Substring(2)
+    }
+    if (
+        [System.IO.Path]::IsPathRooted($candidate) -or
+        $candidate.StartsWith(":", [System.StringComparison]::Ordinal) -or
+        $candidate -match '[*?\[]'
+    ) {
+        Stop-Publish (
+            "-Paths accepts exact repository-relative file paths only; " +
+            "absolute paths, Git pathspec magic, and wildcards are rejected: $Value"
+        )
+    }
+    $segments = @($candidate -split '/')
+    if (
+        $candidate.Length -eq 0 -or
+        $candidate -eq "." -or
+        $segments -contains ".." -or
+        $segments -contains ".git"
+    ) {
+        Stop-Publish "Unsafe repository path: $Value"
+    }
+
+    $platformPath = $candidate.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+    $fullPath = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $platformPath))
+    $rootWithSeparator = $RepositoryRoot.TrimEnd(
+        [System.IO.Path]::DirectorySeparatorChar,
+        [System.IO.Path]::AltDirectorySeparatorChar
+    ) + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $fullPath.StartsWith(
+        $rootWithSeparator,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        Stop-Publish "Path escapes the repository: $Value"
+    }
+    if (Test-Path -LiteralPath $fullPath -PathType Container) {
+        Stop-Publish "-Paths accepts files, not directories: $Value"
+    }
+
+    $relativePath = $fullPath.Substring($rootWithSeparator.Length).Replace('\', '/')
+    if (Test-ProtectedPath -Path $relativePath) {
+        Stop-Publish "Protected file cannot be selected with -Paths: $relativePath"
+    }
+
+    $trackedCheck = Invoke-Git -Arguments @(
+        "ls-files", "--error-unmatch", "--", $relativePath
+    ) -AllowFailure -Quiet
+    $fileExists = Test-Path -LiteralPath $fullPath -PathType Leaf
+    if (-not $fileExists -and $trackedCheck.ExitCode -ne 0) {
+        Stop-Publish "Selected file does not exist and is not tracked: $relativePath"
+    }
+    return $relativePath
+}
+
+function Resolve-ExplicitPaths {
+    param(
+        [string[]]$Values,
+        [string]$RepositoryRoot
+    )
+    $resolved = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
+    foreach ($value in $Values) {
+        $path = Resolve-ExplicitPath -Value $value -RepositoryRoot $RepositoryRoot
+        if ($seen.Add($path)) {
+            [void]$resolved.Add($path)
+        }
+    }
+    return @($resolved)
+}
+
+function Assert-ExplicitStage {
+    param([string[]]$AllowedPaths)
     $stagedPaths = @(Get-StagedPaths)
     if ($stagedPaths.Count -eq 0) {
-        Stop-Publish "No workflow changes were staged for the first commit."
+        Stop-Publish "No selected changes were staged."
     }
     foreach ($path in $stagedPaths) {
-        if ($script:WorkflowPaths -notcontains $path) {
-            Stop-Publish "Unexpected path in the workflow commit: $path"
+        if ($AllowedPaths -notcontains $path) {
+            Stop-Publish "A path outside -Paths entered the Git index: $path"
         }
     }
-    Assert-NoForbiddenStagedPath
+    Assert-NoProtectedStagedPath
 }
 
-function Assert-RefactorStage {
-    $stagedPaths = @(Get-StagedPaths)
-    if ($stagedPaths.Count -eq 0) {
-        Stop-Publish "No tracked changes were staged for the refactor commit."
-    }
-    foreach ($path in $stagedPaths) {
-        if ($script:WorkflowPaths -contains $path) {
-            Stop-Publish "Workflow path entered the refactor commit: $path"
-        }
-    }
-    Assert-NoForbiddenStagedPath
-}
-
-function Get-CommitSubject {
-    param([string]$Revision)
-    $result = Invoke-Git -Arguments @("show", "-s", "--format=%s", $Revision) -AllowFailure -Quiet
-    if ($result.ExitCode -ne 0) {
+function Get-ProtectedFileHash {
+    param(
+        [string]$RepositoryRoot,
+        [string]$RelativePath
+    )
+    $fullPath = Join-Path $RepositoryRoot (
+        $RelativePath.Replace('/', [System.IO.Path]::DirectorySeparatorChar)
+    )
+    if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
         return $null
     }
-    return (($result.Output -join "`n").Trim())
+    return (Get-FileHash -Algorithm SHA256 -LiteralPath $fullPath).Hash
 }
 
 try {
@@ -259,15 +339,10 @@ try {
     if ($Branch -ne "PDSchedule") {
         Stop-Publish "This project requires the exact branch name 'PDSchedule'."
     }
-    if ([string]::IsNullOrWhiteSpace($WorkflowMessage)) {
-        Stop-Publish "Workflow commit message cannot be empty."
-    }
-    if ([string]::IsNullOrWhiteSpace($RefactorMessage)) {
-        Stop-Publish "Refactor commit message cannot be empty."
-    }
 
     Set-Location -LiteralPath $PSScriptRoot
     $repositoryRoot = Get-GitText -Arguments @("rev-parse", "--show-toplevel")
+    $repositoryRoot = [System.IO.Path]::GetFullPath($repositoryRoot)
     Set-Location -LiteralPath $repositoryRoot
 
     Assert-NoGitOperation
@@ -294,8 +369,7 @@ try {
     ) -AllowFailure -Quiet
     if ($upstreamResult.ExitCode -ne 0) {
         Stop-Publish (
-            "Branch $Branch has no upstream. Run create_pdschedule.ps1 in a clean repository " +
-            "to create and first-push origin/$Branch."
+            "Branch $Branch has no upstream. Run create_pdschedule.ps1 first."
         )
     }
     $upstream = (($upstreamResult.Output -join "`n").Trim())
@@ -305,10 +379,7 @@ try {
 
     $initialRemoteHead = Get-RemoteHead -RemoteName $Remote -BranchName $Branch
     if ([string]::IsNullOrWhiteSpace($initialRemoteHead)) {
-        Stop-Publish (
-            "Remote branch does not exist: $Remote/$Branch. " +
-            "Run create_pdschedule.ps1 first."
-        )
+        Stop-Publish "Remote branch does not exist: $Remote/$Branch"
     }
 
     if (-not $DryRun) {
@@ -325,7 +396,7 @@ try {
     if ($remoteObject.ExitCode -ne 0) {
         Stop-Publish (
             "Remote commit $initialRemoteHead is not available locally. " +
-            "Run without -DryRun once authentication and fetch are available."
+            "Run without -DryRun to fetch it."
         )
     }
 
@@ -337,157 +408,159 @@ try {
     }
     if ($remoteIsAncestor.ExitCode -eq 1) {
         Stop-Publish (
-            "Remote branch contains commits not integrated into local HEAD, or histories diverged. " +
-            "This script will not merge, rebase, or force-push."
+            "Remote branch is ahead or histories diverged. " +
+            "This script will not merge, rebase, reset, or force-push."
         )
     }
 
-    foreach ($path in $script:WorkflowPaths) {
-        if (-not (Test-Path -LiteralPath $path)) {
-            Stop-Publish "Required workflow file is missing: $path"
-        }
-    }
-
-    $workflowStatus = @(Get-WorkflowStatus)
-    $trackedChanges = @(Get-TrackedWorktreeChanges)
-    $refactorChanges = @(
-        $trackedChanges | Where-Object { $script:WorkflowPaths -notcontains $_ }
-    )
-    $untracked = @(Get-GitLines -Arguments @(
-        "-c", "core.quotepath=false",
-        "ls-files", "--others", "--exclude-standard"
+    $localAhead = [int](Get-GitText -Arguments @(
+        "rev-list", "--count", "$initialRemoteHead..HEAD"
     ))
-
-    if ($untracked.Count -gt 0) {
-        Write-Host ""
-        Write-Host "Untracked files will remain excluded:" -ForegroundColor Yellow
-        $untracked | ForEach-Object { Write-Host "  $_" }
+    $trackedChanges = @(Get-TrackedChanges)
+    Assert-NoProtectedTrackedChange -TrackedChanges $trackedChanges
+    $untrackedBefore = @(Get-UntrackedFiles)
+    $protectedHashesBefore = @{}
+    foreach ($protectedPath in $script:ProtectedPaths) {
+        $protectedHashesBefore[$protectedPath] = Get-ProtectedFileHash `
+            -RepositoryRoot $repositoryRoot `
+            -RelativePath $protectedPath
     }
 
-    $headSubject = Get-CommitSubject -Revision "HEAD"
-    $parentSubject = Get-CommitSubject -Revision "HEAD^"
-    $workflowPending = $workflowStatus.Count -gt 0
-    $refactorPending = $refactorChanges.Count -gt 0
-    $workflowAlreadyCommitted = (
-        (-not $workflowPending) -and
-        ($headSubject -eq $WorkflowMessage)
-    )
-    $bothAlreadyCommitted = (
-        (-not $workflowPending) -and
-        (-not $refactorPending) -and
-        ($headSubject -eq $RefactorMessage) -and
-        ($parentSubject -eq $WorkflowMessage)
-    )
+    $explicitPaths = @()
+    $useExplicitPaths = $Paths.Count -gt 0
+    if ($useExplicitPaths) {
+        $explicitPaths = @(Resolve-ExplicitPaths -Values $Paths -RepositoryRoot $repositoryRoot)
+    }
 
-    if ($workflowPending -and $headSubject -eq $WorkflowMessage) {
-        Stop-Publish (
-            "The workflow commit already exists, but workflow files changed again. " +
-            "Review these changes manually before retrying."
-        )
+    if ($useExplicitPaths) {
+        $selectedStatus = @(Get-GitLines -Arguments (
+            @("-c", "core.quotepath=false", "status", "--short", "--") +
+            $explicitPaths
+        ))
+        $hasCommitChanges = $selectedStatus.Count -gt 0
     }
-    if ($workflowPending -and -not $refactorPending) {
-        Stop-Publish "Workflow changes exist, but no refactor changes are available for the second commit."
-    }
-    if (-not $workflowPending -and $refactorPending -and -not $workflowAlreadyCommitted) {
-        Stop-Publish (
-            "Refactor changes exist, but HEAD is not the expected workflow commit. " +
-            "The script cannot safely infer the first commit boundary."
-        )
-    }
-    if (-not $workflowPending -and -not $refactorPending -and -not $bothAlreadyCommitted) {
-        Stop-Publish "No expected two-commit publication state was found."
+    else {
+        $selectedStatus = @($trackedChanges)
+        $hasCommitChanges = $trackedChanges.Count -gt 0
     }
 
     Write-Step "Repository: $repositoryRoot"
     Write-Step "Target: $Remote/$Branch"
-    Write-Step "Remote base: $initialRemoteHead"
-    if ($workflowPending) {
+    Write-Step "Remote HEAD: $initialRemoteHead"
+    Write-Step "Local commits ahead: $localAhead"
+
+    if ($useExplicitPaths) {
         Write-Host ""
-        Write-Host "First commit ($WorkflowMessage):" -ForegroundColor Yellow
-        $workflowStatus | ForEach-Object { Write-Host "  $_" }
+        Write-Host "Explicitly selected paths:" -ForegroundColor Yellow
+        $explicitPaths | ForEach-Object { Write-Host "  $_" }
+        if ($selectedStatus.Count -gt 0) {
+            Write-Host "Selected changes:" -ForegroundColor Yellow
+            $selectedStatus | ForEach-Object { Write-Host "  $_" }
+        }
+        $excludedTracked = @(
+            $trackedChanges | Where-Object { $explicitPaths -notcontains $_ }
+        )
+        if ($excludedTracked.Count -gt 0) {
+            Write-Host "Tracked changes not selected:" -ForegroundColor DarkYellow
+            $excludedTracked | ForEach-Object { Write-Host "  $_" }
+        }
     }
-    elseif ($workflowAlreadyCommitted) {
-        Write-Step "First commit already exists at HEAD; it will not be duplicated."
-    }
-    if ($refactorPending) {
+    elseif ($trackedChanges.Count -gt 0) {
         Write-Host ""
-        Write-Host "Second commit ($RefactorMessage):" -ForegroundColor Yellow
-        $refactorChanges | ForEach-Object { Write-Host "  $_" }
+        Write-Host "Tracked changes to commit:" -ForegroundColor Yellow
+        $trackedChanges | ForEach-Object { Write-Host "  $_" }
     }
-    elseif ($bothAlreadyCommitted) {
-        Write-Step "Both expected commits already exist locally; only push verification remains."
+
+    if ($untrackedBefore.Count -gt 0) {
+        Write-Host ""
+        Write-Host "Untracked files excluded by default:" -ForegroundColor Yellow
+        $untrackedBefore | ForEach-Object { Write-Host "  $_" }
+    }
+
+    if (-not $hasCommitChanges -and $localAhead -eq 0) {
+        if ($useExplicitPaths -and $trackedChanges.Count -gt 0) {
+            Write-Step "No selected changes or local commits need synchronization."
+            Write-Step "Tracked changes outside -Paths remain local."
+        }
+        else {
+            Write-Step "Nothing needs to be committed or pushed."
+        }
+        exit 0
+    }
+
+    if ($hasCommitChanges -and [string]::IsNullOrWhiteSpace($Message)) {
+        if ($DryRun) {
+            Stop-Publish "A non-empty -Message is required when changes would be committed."
+        }
+        $Message = Read-Host "Commit message"
+    }
+    if ($hasCommitChanges -and [string]::IsNullOrWhiteSpace($Message)) {
+        Stop-Publish "Commit message cannot be empty."
     }
 
     if ($DryRun) {
         Write-Host ""
         Write-Step "Dry run only; no files were staged, committed, or pushed."
-        if ($workflowPending) {
-            Write-Host "Would stage only the three workflow files and create the first commit."
+        if ($hasCommitChanges) {
+            if ($useExplicitPaths) {
+                Write-Host "Would stage only the explicitly selected paths."
+            }
+            else {
+                Write-Host "Would stage all tracked modifications and deletions."
+            }
+            Write-Host "Would create one commit: $($Message.Trim())"
         }
-        if ($refactorPending) {
-            Write-Host "Would stage tracked changes only and create the second commit."
+        if ($localAhead -gt 0 -or $hasCommitChanges) {
+            Write-Host "Would push normally to: $Remote/$Branch"
         }
-        Write-Host "Would push normally to: $Remote/$Branch"
         exit 0
     }
 
     if (-not $Yes) {
-        $answer = Read-Host "Create the two scoped commits and push to $Remote/$Branch? [y/N]"
+        $answer = Read-Host "Continue with commit/sync to $Remote/$Branch? [y/N]"
         if ($answer -notmatch '^(?i:y|yes)$') {
             Write-Step "Cancelled; no files were staged by this script."
             exit 0
         }
     }
 
-    $workflowCommit = $null
-    $refactorCommit = $null
+    $createdCommit = $null
+    if ($hasCommitChanges) {
+        if ($useExplicitPaths) {
+            Write-Step "Staging only explicitly selected paths..."
+            Invoke-Git -Arguments (@("add", "-A", "--") + $explicitPaths) | Out-Null
+            Assert-ExplicitStage -AllowedPaths $explicitPaths
+        }
+        else {
+            Write-Step "Staging tracked modifications and deletions only..."
+            Invoke-Git -Arguments @("add", "-u", "--", ".") | Out-Null
+            Assert-NoProtectedStagedPath
+        }
 
-    if ($workflowPending) {
-        Write-Step "Staging only workflow files..."
-        Invoke-Git -Arguments (@("add", "--") + $script:WorkflowPaths) | Out-Null
-        Assert-WorkflowStage
         Invoke-Git -Arguments @("diff", "--cached", "--check") | Out-Null
-        Write-Step "Creating workflow commit..."
-        Invoke-Git -Arguments @("commit", "-m", $WorkflowMessage.Trim()) | Out-Null
-        $workflowCommit = Get-GitText -Arguments @("rev-parse", "HEAD")
-    }
-    else {
-        $workflowCommit = Get-GitText -Arguments @("rev-parse", "HEAD")
-    }
+        $stagedPaths = @(Get-StagedPaths)
+        if ($stagedPaths.Count -eq 0) {
+            Stop-Publish "No changes remained after staging."
+        }
+        Write-Host ""
+        Write-Host "Staged paths:" -ForegroundColor Yellow
+        $stagedPaths | ForEach-Object { Write-Host "  $_" }
 
-    if ($refactorPending) {
-        Assert-EmptyIndex
-        Write-Step "Staging remaining tracked changes only..."
-        Invoke-Git -Arguments @("add", "-u", "--", ".") | Out-Null
-        Assert-RefactorStage
-        Invoke-Git -Arguments @("diff", "--cached", "--check") | Out-Null
-        Write-Step "Creating refactor commit..."
-        Invoke-Git -Arguments @("commit", "-m", $RefactorMessage.Trim()) | Out-Null
-        $refactorCommit = Get-GitText -Arguments @("rev-parse", "HEAD")
-    }
-    else {
-        $refactorCommit = Get-GitText -Arguments @("rev-parse", "HEAD")
-        $workflowCommit = Get-GitText -Arguments @("rev-parse", "HEAD^")
-    }
-
-    $finalWorkflowSubject = Get-CommitSubject -Revision $workflowCommit
-    $finalRefactorSubject = Get-CommitSubject -Revision $refactorCommit
-    if ($finalWorkflowSubject -ne $WorkflowMessage.Trim()) {
-        Stop-Publish "Workflow commit subject verification failed."
-    }
-    if ($finalRefactorSubject -ne $RefactorMessage.Trim()) {
-        Stop-Publish "Refactor commit subject verification failed."
+        Write-Step "Creating commit..."
+        Invoke-Git -Arguments @("commit", "-m", $Message.Trim()) | Out-Null
+        $createdCommit = Get-GitText -Arguments @("rev-parse", "HEAD")
     }
 
     $currentRemoteHead = Get-RemoteHead -RemoteName $Remote -BranchName $Branch
     if ($currentRemoteHead -ne $initialRemoteHead) {
         Stop-Publish (
-            "Remote branch changed after the initial check. Local commits were kept, " +
-            "but push was stopped."
+            "Remote branch changed after the initial check. " +
+            "Any local commit was kept, but push was stopped."
         )
     }
 
-    Write-Step "Pushing both commits to $Remote/$Branch..."
+    $headToPush = Get-GitText -Arguments @("rev-parse", "HEAD")
+    Write-Step "Pushing $headToPush to $Remote/$Branch..."
     Invoke-Git -Arguments @(
         "push", $Remote, "HEAD:refs/heads/$Branch"
     ) | Out-Null
@@ -508,14 +581,38 @@ try {
         Stop-Publish "Verification failed: upstream is '$upstream', expected '$Remote/$Branch'."
     }
 
+    foreach ($protectedPath in $script:ProtectedPaths) {
+        $hashAfter = Get-ProtectedFileHash `
+            -RepositoryRoot $repositoryRoot `
+            -RelativePath $protectedPath
+        if ($hashAfter -ne $protectedHashesBefore[$protectedPath]) {
+            Stop-Publish "Verification failed: protected file changed: $protectedPath"
+        }
+        $trackedProtected = Invoke-Git -Arguments @(
+            "ls-files", "--error-unmatch", "--", $protectedPath
+        ) -AllowFailure -Quiet
+        if (
+            ($untrackedBefore -contains $protectedPath) -and
+            $trackedProtected.ExitCode -eq 0
+        ) {
+            Stop-Publish "Verification failed: protected file became tracked: $protectedPath"
+        }
+    }
+
     Write-Host ""
-    Write-Step "Published successfully."
-    Write-Host "Workflow commit: $workflowCommit"
-    Write-Host "Refactor commit: $refactorCommit"
+    Write-Step "Project synchronized successfully."
+    if (-not [string]::IsNullOrWhiteSpace($createdCommit)) {
+        Write-Host "Created commit: $createdCommit"
+        Write-Host "Message: $($Message.Trim())"
+    }
+    else {
+        Write-Host "No new commit was required."
+    }
     Write-Host "Target: $upstream"
-    if ($untracked.Count -gt 0) {
-        Write-Host "Untracked files remain excluded:"
-        $untracked | ForEach-Object { Write-Host "  $_" }
+    $untrackedAfter = @(Get-UntrackedFiles)
+    if ($untrackedAfter.Count -gt 0) {
+        Write-Host "Untracked files remaining:"
+        $untrackedAfter | ForEach-Object { Write-Host "  $_" }
     }
     exit 0
 }

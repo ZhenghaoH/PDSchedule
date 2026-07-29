@@ -106,9 +106,6 @@ async def lifespan(app: FastAPI):
         app.state.global_scheduler = GlobalScheduler(
             pool_manager,
             network_manager,
-            routing_mode=getattr(app.state, "controller_routing_mode", "global"),
-            fixed_prefill_gateway=getattr(app.state, "fixed_prefill_gateway", ""),
-            fixed_decode_gateway=getattr(app.state, "fixed_decode_gateway", ""),
         )
         logging.info(
             "[Scheduler] GlobalScheduler instantiated: %s",

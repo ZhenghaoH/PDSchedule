@@ -147,7 +147,7 @@ case "$MODE" in
         echo -e "\033[31m=== [5/11] 启动 Scheduler ===\033[0m"
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         export CUDA_VISIBLE_DEVICES=4
-        python3 controller.py --host 172.18.0.170 --port 5000 --routing-mode fixed_gateway --fixed-prefill-gateway 172.18.0.170:8081 --fixed-decode-gateway 172.18.0.170:8082
+        python3 controller.py --host 172.18.0.170 --port 5000
         ;;
     "pd")
         wait_for_loading 50 "Decode Proxy"

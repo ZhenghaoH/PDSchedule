@@ -12,7 +12,6 @@ from fastapi import FastAPI
 import logging
 import threading
 import time
-import os
 import sys
 from pathlib import Path
 
@@ -23,15 +22,11 @@ if str(ROOT_DIR) not in sys.path:
 from config.controller import (
     DEFAULT_PORT,
     DEFAULT_HOST,
-    DEFAULT_ROUTING_MODE,
-    DEFAULT_FIXED_PREFILL_GATEWAY,
-    DEFAULT_FIXED_DECODE_GATEWAY,
 )
 
 from core.routers.controller import router
 from core.lifespans.controller import lifespan
 from core.consoles.controller import run_scheduler_cli
-from scheduler.controller.global_scheduler import parse_gateway_endpoint
 
 
 def setup_logger():
@@ -62,22 +57,6 @@ def parse_args():
         default=DEFAULT_HOST,
         help="The IP address for the Scheduler server to listen on",
     )
-    parser.add_argument(
-        "--routing-mode",
-        choices=["global", "fixed_gateway"],
-        default=DEFAULT_ROUTING_MODE,
-        help="Controller routing mode: global pool scheduling or fixed P/D gateways.",
-    )
-    parser.add_argument(
-        "--fixed-prefill-gateway",
-        default=DEFAULT_FIXED_PREFILL_GATEWAY,
-        help="Prefill gateway for fixed_gateway mode, formatted as host:port.",
-    )
-    parser.add_argument(
-        "--fixed-decode-gateway",
-        default=DEFAULT_FIXED_DECODE_GATEWAY,
-        help="Decode gateway for fixed_gateway mode, formatted as host:port.",
-    )
     return parser.parse_args()
 
 
@@ -90,31 +69,12 @@ def main():
     args = parse_args()
     if not args.host:
         raise SystemExit("Missing required deployment option: host")
-    if args.routing_mode == "fixed_gateway":
-        if not args.fixed_prefill_gateway:
-            raise SystemExit(
-                "Missing required deployment option for fixed_gateway: "
-                "--fixed-prefill-gateway or FLEXPD_FIXED_PREFILL_GATEWAY"
-            )
-        if not args.fixed_decode_gateway:
-            raise SystemExit(
-                "Missing required deployment option for fixed_gateway: "
-                "--fixed-decode-gateway or FLEXPD_FIXED_DECODE_GATEWAY"
-            )
-        try:
-            parse_gateway_endpoint(args.fixed_prefill_gateway)
-            parse_gateway_endpoint(args.fixed_decode_gateway)
-        except ValueError as exc:
-            raise SystemExit(f"Invalid fixed gateway configuration: {exc}") from exc
 
     # 创建FastAPI应用
     app = FastAPI(
         title="Scheduler",
         lifespan=lifespan,
     )
-    app.state.controller_routing_mode = args.routing_mode
-    app.state.fixed_prefill_gateway = args.fixed_prefill_gateway
-    app.state.fixed_decode_gateway = args.fixed_decode_gateway
 
     # 注册路由
     app.include_router(router)

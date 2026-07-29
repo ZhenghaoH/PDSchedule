@@ -432,14 +432,20 @@ class BaseRequest:
         affinity_key = None
         affinity_hit = False
         affinity_result: Optional[Dict[str, Any]] = None
-        fixed_gateway_routing = (
-            getattr(scheduler_instance, "routing_mode", "global") == "fixed_gateway"
+        single_gateway_detector = getattr(
+            scheduler_instance,
+            "uses_single_gateway_route",
+            None,
+        )
+        single_gateway_routing = (
+            callable(single_gateway_detector)
+            and single_gateway_detector() is True
         )
 
-        if service_obj.Enable_Affinity and fixed_gateway_routing:
+        if service_obj.Enable_Affinity and single_gateway_routing:
             print(
                 f"[Affinity] Req {request_id} skip cached pool routing because "
-                "Controller uses fixed_gateway mode."
+                "Controller has a single active P/D gateway pair."
             )
         elif service_obj.Enable_Affinity:
             print(f"[Affinity] Req {request_id} affinity enabled, user_id={user_id}, session_id={session_id}")
@@ -477,7 +483,7 @@ class BaseRequest:
             if (
                     scheduled
                     and service_obj.Enable_Affinity
-                    and not fixed_gateway_routing
+                    and not single_gateway_routing
                     and affinity_store is not None
                     and affinity_key is not None
                     and not affinity_hit

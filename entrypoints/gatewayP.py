@@ -84,16 +84,9 @@ def parse_args():
 
     parser.add_argument(
         "--prefill-scheduler-strategy",
-        choices=["least_load", "round_robin", "pso_new", "distserve"],
+        choices=["pso_new", "jsq", "round_robin"],
         default=SCHEDULER_STRATEGY,
         help="Prefill scheduler strategy.",
-    )
-
-    parser.add_argument(
-        "--distserve-prefill-batch-tokens",
-        type=int,
-        default=DIST_SERVE_PREFILL_BATCH_TOKENS,
-        help="Deprecated compatibility option; direct-JSQ DistServe ignores this value.",
     )
 
     parser.add_argument(
@@ -187,7 +180,6 @@ def main():
     storage.PROFILE_MODE = PROFILE_MODE
     storage.set_prefill_scheduler_strategy(args.prefill_scheduler_strategy)
     storage.ENABLE_ADAPTIVE_SWITCH = ENABLE_ADAPTIVE_SWITCH
-    storage.DIST_SERVE_PREFILL_BATCH_TOKENS = args.distserve_prefill_batch_tokens
 
     storage.TTFT_WARMUP_ENABLED = args.ttft_warmup
     storage.TTFT_WARMUP_REPEATS = args.ttft_warmup_repeats
@@ -206,11 +198,10 @@ def main():
     app.include_router(router)
 
     logging.info("Prefill scheduler strategy: %s", args.prefill_scheduler_strategy)
-    if args.prefill_scheduler_strategy == "distserve":
+    if args.prefill_scheduler_strategy == "jsq":
         logging.info(
-            "DistServe Prefill uses immediate request-level JSQ; "
-            "--distserve-prefill-batch-tokens=%d is deprecated and ignored.",
-            args.distserve_prefill_batch_tokens,
+            "Prefill JSQ uses immediate request-level scheduling with "
+            "unfinished prompt tokens as load.",
         )
     run_gateway_server(
         app,

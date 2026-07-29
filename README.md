@@ -79,16 +79,15 @@ redis-cli info memory | grep used_memory_human
 
 主要启动参数包括 `--host`、`--port`、`--controller`、`--gateway`、`--prefill`、`--decode`、`--side-channel-host`、`--side-channel-port` 和 `--tp-size`。可参考 `run_166.sh`、`run_167.sh`、`run_169.sh`、`run_170.sh`。
 
-Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `least_load`、`round_robin`、`pso_new` 或 `distserve`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generate_throughput`、`slo_tpot_admission` 或 `distserve`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。systemd、nohup 或无 TTY 容器部署时请增加 `--no-cli`。
+Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `pso_new`、`jsq` 或 `round_robin`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generate_throughput`、`slo_tpot_admission` 或 `distserve`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。systemd、nohup 或无 TTY 容器部署时请增加 `--no-cli`。
 
-#### DistServe 在线调度基线
+#### P 网关 JSQ 与 D 网关 DistServe
 
-`distserve` 复现 DistServe 4.3 的网关在线调度部分。P 网关不等待或按 token 形成逻辑 batch：每个请求到达后，以网关维护的各实例“未完成输入 token 总数”独立执行 token-weighted JSQ，并立即转发到负载最低的 P 实例。每个请求使用 `Prompt.token_length` 作为权重，不包含主要属于 Decode 阶段的输出预算 `max_tokens`；预约会立即影响下一个请求的选择，并在请求成功、失败或取消后释放。P heartbeat 上报的是请求数，不能与 token 负载混加，因此不会覆盖 P 网关维护的 token 预约；异常泄漏保护 TTL 为 240 秒。D 网关继续以原有请求数有效负载定义立即选择最低负载实例。P/D 仅在多个实例具有相同最小负载时，分别按照实例配置顺序进行线程安全轮询；该并列处理用于避免固定地址偏置和实例饥饿，不会跳过负载更低的实例，也不等同于 P→D 拓扑亲和性或异构 GPU 算力归一化。策略保留既有 NIXL Pull 参数链路，并关闭自适应策略切换和 Prefill 抢占。
+P 网关的 `jsq` 不等待或按 token 形成逻辑 batch：每个请求到达后，以网关维护的各实例“未完成输入 token 总数”独立执行 token-weighted JSQ，并立即转发到负载最低的 P 实例。每个请求使用 `Prompt.token_length` 作为权重，不包含主要属于 Decode 阶段的输出预算 `max_tokens`；预约会立即影响下一个请求的选择，并在请求成功、失败或取消后释放。P heartbeat 上报的是请求数，不能与 token 负载混加，因此不会覆盖 P 网关维护的 token 预约；异常泄漏保护 TTL 为 240 秒。D 网关继续通过 `distserve` 以请求数有效负载定义立即选择最低负载实例。P/D 仅在多个实例具有相同最小负载时，分别按照实例配置顺序进行线程安全轮询；该并列处理用于避免固定地址偏置和实例饥饿，不会跳过负载更低的实例，也不等同于 P→D 拓扑亲和性或异构 GPU 算力归一化。策略保留既有 NIXL Pull 参数链路；P 网关的 `jsq` 关闭自适应策略切换和 Prefill 抢占。
 
 ```bash
 python entrypoints/gatewayP.py \
-  --prefill-scheduler-strategy distserve \
-  --distserve-prefill-batch-tokens 2048 \
+  --prefill-scheduler-strategy jsq \
   --no-ttft-warmup
 
 python entrypoints/gatewayD.py \
@@ -96,9 +95,9 @@ python entrypoints/gatewayD.py \
   --no-tpot-warmup
 ```
 
-`--distserve-prefill-batch-tokens` 仅作为旧部署命令的兼容参数保留，当前 request-level direct-JSQ P 调度会忽略它；vLLM 的 continuous batching 由实例自身的 `max_num_batched_tokens` 等参数控制。该基线不包含论文的 placement algorithm、周期性 workload replan、模型迁移或资源重配置。四机中心网关部署参见 `DistServe启动脚本/README.md`。
+vLLM 的 continuous batching 由实例自身的 `max_num_batched_tokens` 等参数控制，P 网关 `jsq` 不提供逻辑 batch 大小参数。该基线不包含论文的 placement algorithm、周期性 workload replan、模型迁移或资源重配置。四机中心网关部署参见 `DistServe启动脚本/README.md`。
 
-DistServe P 侧未完成 token 预约保存在网关进程内存中；网关重启后不能从仅包含请求数的实例心跳恢复原 token 负载。正常请求结束会立即释放预约，异常情况下预约最多保留 240 秒。
+P 侧 JSQ 未完成 token 预约保存在网关进程内存中；网关重启后不能从仅包含请求数的实例心跳恢复原 token 负载。正常请求结束会立即释放预约，异常情况下预约最多保留 240 秒。
 
 #### 网关调度、时间追踪与资源日志
 

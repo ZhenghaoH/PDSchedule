@@ -44,7 +44,6 @@ def make_store(prefills=None, decodes=None):
     manager._distserve_tie_break_cursor = {"prefill": 0, "decode": 0}
     manager.SCHEDULER_STRATEGY = "pso_new"
     manager.DECODE_SCHEDULER_STRATEGY = "slo_tpot_admission"
-    manager.DIST_SERVE_PREFILL_BATCH_TOKENS = 2048
     return manager
 
 
@@ -89,12 +88,13 @@ class GatewayStoreStrategyTest(unittest.TestCase):
         self.assertEqual(results.count("p2"), 50)
 
     def test_strategy_setters_validate_modes(self):
-        self.assertEqual(self.store.set_prefill_scheduler_strategy("least_load"), "pso_new")
+        self.assertEqual(self.store.set_prefill_scheduler_strategy("jsq"), "pso_new")
         self.assertEqual(self.store.set_decode_scheduler_strategy("round_robin"), "slo_tpot_admission")
-        self.assertEqual(self.store.set_prefill_scheduler_strategy("distserve"), "least_load")
+        self.assertEqual(self.store.set_prefill_scheduler_strategy("round_robin"), "jsq")
         self.assertEqual(self.store.set_decode_scheduler_strategy("distserve"), "round_robin")
-        with self.assertRaises(ValueError):
-            self.store.set_prefill_scheduler_strategy("random")
+        for retired_strategy in ("distserve", "least_load", "pso", "random"):
+            with self.subTest(strategy=retired_strategy), self.assertRaises(ValueError):
+                self.store.set_prefill_scheduler_strategy(retired_strategy)
         with self.assertRaises(ValueError):
             self.store.set_decode_scheduler_strategy("least_load")
 
@@ -109,21 +109,9 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         self.scheduler = SchedulerManager()
         self.scheduler.basic_scheduler.storage = self.store
 
-    async def test_least_load_is_immediate_and_has_deterministic_tie_break(self):
-        self.store._instance_table["p2"].prompt_throughput = 2.0
-        requests = [make_request(1), make_request(2)]
-        scheduled, policy = await self.scheduler.schedule_batch(requests, strategy="least_load")
-        self.assertEqual(policy, "IMMEDIATE")
-        self.assertEqual([request.Task.prefill_instance for request in scheduled], ["p2", "p2"])
-        self.assertTrue(all(request.Task.batch_order == 1 for request in scheduled))
-        self.assertEqual(
-            scheduled[0].Task.scheduler_metadata["gateway_prefill_selection"]["reason"],
-            "minimum_prompt_throughput",
-        )
-
-        self.store._instance_table["p2"].prompt_throughput = 3.0
-        tied, _ = await self.scheduler.schedule_batch([make_request(3)], strategy="least_load")
-        self.assertEqual(tied[0].Task.prefill_instance, "p1")
+    async def test_retired_strategy_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "Unsupported Prefill"):
+            await self.scheduler.schedule_batch([make_request(1)], strategy="distserve")
 
     async def test_round_robin_is_immediate(self):
         requests = [make_request(1), make_request(2), make_request(3)]
@@ -142,14 +130,14 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(scheduled, [request])
         self.assertEqual(policy, "FULL_OR_IDLE_WAIT")
 
-    async def test_distserve_dispatches_every_request_with_independent_jsq(self):
+    async def test_jsq_dispatches_every_request_independently(self):
         requests = [
             make_request(1, 1000),
             make_request(2, 1000),
             make_request(3, 100),
         ]
         scheduled, policy = await self.scheduler.schedule_batch(
-            requests, strategy="distserve"
+            requests, strategy="jsq"
         )
 
         self.assertEqual(policy, "IMMEDIATE")
@@ -165,41 +153,41 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(
             all(
-                request.Task.scheduler_metadata["distserve"]["dispatch_mode"] == "direct_jsq"
+                request.Task.scheduler_metadata["jsq"]["dispatch_mode"] == "direct_jsq"
                 for request in scheduled
             )
         )
         self.assertTrue(
             all(
-                request.Task.scheduler_metadata["distserve"]["load_metric"]
+                request.Task.scheduler_metadata["jsq"]["load_metric"]
                 == "unfinished_prompt_tokens"
                 for request in scheduled
             )
         )
         self.assertEqual(
             [
-                request.Task.scheduler_metadata["distserve"]["prompt_tokens"]
+                request.Task.scheduler_metadata["jsq"]["prompt_tokens"]
                 for request in scheduled
             ],
             [1000, 1000, 100],
         )
-        self.assertNotIn("batch_tokens", scheduled[0].Task.scheduler_metadata["distserve"])
+        self.assertNotIn("batch_tokens", scheduled[0].Task.scheduler_metadata["jsq"])
 
-    async def test_distserve_does_not_reorder_or_group_pending_requests(self):
+    async def test_jsq_does_not_reorder_or_group_pending_requests(self):
         later = make_request(2, 1000)
         earlier = make_request(1, 1000)
         scheduled, _ = await self.scheduler.schedule_batch(
-            [later, earlier], strategy="distserve"
+            [later, earlier], strategy="jsq"
         )
         self.assertEqual([request.Request_ID for request in scheduled], [2, 1])
         self.assertEqual(
             [request.Task.prefill_instance for request in scheduled], ["p2", "p1"]
         )
 
-    async def test_distserve_uses_unfinished_prompt_tokens_for_jsq(self):
+    async def test_jsq_uses_unfinished_prompt_tokens(self):
         long_request = make_request(1, 2048)
         scheduled, _ = await self.scheduler.schedule_batch(
-            [long_request, make_request(2, 10)], strategy="distserve"
+            [long_request, make_request(2, 10)], strategy="jsq"
         )
         self.assertEqual([request.Request_ID for request in scheduled], [1, 2])
         self.assertEqual(
@@ -207,7 +195,7 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         )
 
         next_scheduled, _ = await self.scheduler.schedule_batch(
-            [make_request(3, 10)], strategy="distserve"
+            [make_request(3, 10)], strategy="jsq"
         )
         self.assertEqual(next_scheduled[0].Task.prefill_instance, "p1")
         self.assertEqual(self.store.get_distserve_effective_load("prefill", "p1"), 20)
@@ -235,8 +223,8 @@ class DecodeDistServeSchedulerTest(unittest.IsolatedAsyncioTestCase):
 
 
 class RequestBatcherSwitchTest(unittest.IsolatedAsyncioTestCase):
-    async def test_distserve_arrival_triggers_immediately_in_batch_size_mode(self):
-        batcher = RequestBatcher(default_strategy="distserve")
+    async def test_jsq_arrival_triggers_immediately_in_batch_size_mode(self):
+        batcher = RequestBatcher(default_strategy="jsq")
         batcher.trigger_mode = "BATCH_SIZE"
         batcher.syn_batch_size = 30
         batcher.pending_queue.append(make_request(1))
@@ -258,7 +246,7 @@ class RequestBatcherSwitchTest(unittest.IsolatedAsyncioTestCase):
 
         previous = shared_storage.get_prefill_scheduler_strategy()
         try:
-            result = await batcher.switch_strategy("least_load")
+            result = await batcher.switch_strategy("round_robin")
             self.assertEqual(result["previous"], "pso_new")
             self.assertEqual(result["pending_count"], 1)
             self.assertEqual(pending.Task.batch_order, -1)
@@ -270,8 +258,8 @@ class RequestBatcherSwitchTest(unittest.IsolatedAsyncioTestCase):
             shared_storage.set_prefill_scheduler_strategy(previous)
             await batcher.running_tasks_map["2"][0]
 
-    async def test_distserve_disables_prefill_preemption(self):
-        batcher = RequestBatcher(default_strategy="distserve")
+    async def test_jsq_disables_prefill_preemption(self):
+        batcher = RequestBatcher(default_strategy="jsq")
         task = asyncio.create_task(asyncio.sleep(0))
         batcher.running_tasks_map["1"] = (task, make_request(1, 4096), 0.0)
         await batcher.preempt_heavy_requests()
@@ -284,8 +272,11 @@ class GatewayConsoleStrategyTest(unittest.TestCase):
         prefill_words = gateway_completion_words("prefill")
         decode_words = gateway_completion_words("decode")
         self.assertIn("show", prefill_words)
-        self.assertIn("least_load", prefill_words)
-        self.assertIn("distserve", prefill_words)
+        self.assertIn("pso_new", prefill_words)
+        self.assertIn("jsq", prefill_words)
+        self.assertIn("round_robin", prefill_words)
+        self.assertNotIn("least_load", prefill_words)
+        self.assertNotIn("distserve", prefill_words)
         self.assertNotIn("slo_tpot_admission", prefill_words)
         self.assertIn("slo_tpot_admission", decode_words)
         self.assertIn("distserve", decode_words)
@@ -295,8 +286,8 @@ class GatewayConsoleStrategyTest(unittest.TestCase):
 
     def test_completer_matches_current_word_prefix(self):
         completer = build_gateway_completer("prefill")
-        self.assertEqual(completer("lea", 0), "least_load")
-        self.assertIsNone(completer("lea", 1))
+        self.assertEqual(completer("j", 0), "jsq")
+        self.assertIsNone(completer("j", 1))
         self.assertEqual(completer("s", 0), "show")
         self.assertEqual(completer("s", 1), "switch")
 
@@ -347,15 +338,16 @@ class GatewayConsoleStrategyTest(unittest.TestCase):
             run_gateway_server(Mock(), "127.0.0.1", 8081, "decode", make_store(), True)
         fake_server.run.assert_called_once_with()
 
-    def test_entrypoint_arguments_accept_distserve(self):
+    def test_entrypoint_arguments_use_jsq_for_prefill_and_distserve_for_decode(self):
         prefill_source = (ROOT_DIR / "entrypoints" / "gatewayP.py").read_text(
             encoding="utf-8"
         )
         decode_source = (ROOT_DIR / "entrypoints" / "gatewayD.py").read_text(
             encoding="utf-8"
         )
-        self.assertIn('"--distserve-prefill-batch-tokens"', prefill_source)
-        self.assertIn('"distserve"', prefill_source)
+        self.assertNotIn('"--distserve-prefill-batch-tokens"', prefill_source)
+        self.assertIn('"jsq"', prefill_source)
+        self.assertNotIn('"distserve"', prefill_source)
         self.assertIn('"distserve"', decode_source)
 
 

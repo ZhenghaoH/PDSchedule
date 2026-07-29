@@ -79,8 +79,11 @@ On success the command prints:
 
 ```text
 recommended_lm_tokens=<value>
---distserve-prefill-batch-tokens <value>
+recommended_vllm_max_num_batched_tokens=<value>
 ```
+
+The second value is a vLLM instance tuning recommendation. The P gateway JSQ
+strategy does not accept a gateway batch-token parameter.
 
 Exit code `2` means the measurements completed but no reliable `L_m` could be
 identified. Exit code `1` means setup or execution failed. Unsupported optional

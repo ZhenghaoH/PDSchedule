@@ -10,7 +10,7 @@ from .link import InstanceLink
 
 class GatewayStoreManager:
     """存储管理"""
-    PREFILL_SCHEDULER_STRATEGIES = frozenset({"least_load", "round_robin", "pso_new", "distserve"})
+    PREFILL_SCHEDULER_STRATEGIES = frozenset({"pso_new", "jsq", "round_robin"})
     DECODE_SCHEDULER_STRATEGIES = frozenset({
         "round_robin",
         "lowest_generate_throughput",
@@ -87,7 +87,6 @@ class GatewayStoreManager:
                         "decode": 0,
                     }
                     self.DIST_SERVE_RESERVATION_TTL = 240.0
-                    self.DIST_SERVE_PREFILL_BATCH_TOKENS = 2048
                     self._prefill_round_robin_index = 0
                     self._decode_round_robin_index = 0
 

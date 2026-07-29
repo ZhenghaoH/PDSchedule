@@ -974,7 +974,7 @@ class MonitoringEngine:
             v_rate = sum(self.b.stats_window) / len(self.b.stats_window)
             current_strategy = self.b.scheduler_mgr.strategy
 
-            if current_strategy == "distserve":
+            if current_strategy == "jsq":
                 return
 
             # 策略切换逻辑
@@ -1000,7 +1000,7 @@ class MonitoringEngine:
 class RequestBatcher:
     """请求批处理器主类，协调调度、分发和监控引擎"""
 
-    def __init__(self, default_strategy: str = "pso"):
+    def __init__(self, default_strategy: str = "pso_new"):
         self.lock = asyncio.Lock()
         self.pending_queue: List[BaseRequest] = []
         self.batch_manager: Dict[str, dict] = {}
@@ -1084,7 +1084,7 @@ class RequestBatcher:
         self.adaptive_switch = bool(getattr(storage, "ENABLE_ADAPTIVE_SWITCH", self.adaptive_switch))
         self.optimized_strategy = getattr(storage, "SCHEDULER_STRATEGY", self.optimized_strategy)
         self.scheduler_mgr.strategy = "round_robin" if self.profile_mode else self.optimized_strategy
-        if self.scheduler_mgr.strategy == "distserve":
+        if self.scheduler_mgr.strategy == "jsq":
             self.adaptive_switch = False
         self.dispatch_engine.configure_from_storage()
 
@@ -1121,10 +1121,10 @@ class RequestBatcher:
                 request.Task.batch_order = -1
                 request.Task.prefill_instance = ""
                 metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
-                metadata.pop("distserve", None)
+                metadata.pop("jsq", None)
                 request.Task.scheduler_metadata = metadata
 
-            if strategy == "distserve":
+            if strategy == "jsq":
                 self.pending_queue.sort(
                     key=lambda request: float(
                         getattr(request.Service, "arrival_time", 0.0) or 0.0
@@ -1139,7 +1139,7 @@ class RequestBatcher:
                 "previous": previous,
                 "current": strategy,
                 "pending_count": pending_count,
-                "adaptive_switch": self.adaptive_switch and strategy != "distserve",
+                "adaptive_switch": self.adaptive_switch and strategy != "jsq",
             }
 
     def switch_strategy_threadsafe(self, strategy: str, timeout: float = 10.0) -> Dict[str, Any]:
@@ -1151,7 +1151,7 @@ class RequestBatcher:
 
     async def preempt_heavy_requests(self):
         """抢占逻辑"""
-        if self.scheduler_mgr.strategy == "distserve":
+        if self.scheduler_mgr.strategy == "jsq":
             return
         async with self.lock:
             now = time.time()
@@ -1179,7 +1179,7 @@ class RequestBatcher:
     def _unified_trigger(self, is_new_arrival: bool):
         q_len = len(self.pending_queue)
         if q_len == 0: return
-        if self.scheduler_mgr.strategy == "distserve" and is_new_arrival:
+        if self.scheduler_mgr.strategy == "jsq" and is_new_arrival:
             self.schedule_event.set()
             return
         if (self.trigger_mode == "ARRIVAL" and is_new_arrival) or \

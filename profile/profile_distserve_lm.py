@@ -586,7 +586,10 @@ def print_summary(summaries: Sequence[dict[str, Any]], recommendation: dict[str,
     print(f"\nplateau_throughput_tokens_per_second={recommendation['plateau_throughput_tokens_per_second']:.3f}")
     print(f"saturation_threshold_tokens_per_second={recommendation['saturation_threshold_tokens_per_second']:.3f}")
     print(f"recommended_lm_tokens={recommendation['recommended_lm_tokens']}")
-    print(f"--distserve-prefill-batch-tokens {recommendation['recommended_lm_tokens']}")
+    print(
+        "recommended_vllm_max_num_batched_tokens="
+        f"{recommendation['recommended_lm_tokens']}"
+    )
 
 
 async def run(args: argparse.Namespace, monitor_factory: Any = NvmlMonitor) -> int:

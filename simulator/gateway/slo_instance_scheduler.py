@@ -2,7 +2,7 @@
 
 The schedulers here mirror the target behavior of the real gateway schedulers:
 
-- Prefill follows the objective used by ``slo_aware_new``: batch-level lateness
+- Prefill follows the objective used by ``slo_aware_prefill``: batch-level lateness
   penalty with predicted availability and inflight prefill taken into account.
 - Decode follows ``decode/async_base.py::slo_tpot_admission``: prefer safe
   candidate batches, otherwise minimize violations and maximize worst margin.

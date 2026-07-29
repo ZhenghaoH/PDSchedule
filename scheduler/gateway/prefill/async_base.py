@@ -24,7 +24,7 @@ class AsyncBaseScheduler:
             ),
         )
 
-    def reserve_distserve_batch(self, requests) -> str:
+    def reserve_jsq_batch(self, requests) -> str:
         request_ids = [request.Request_ID for request in requests]
         prompt_token_loads = []
         for request in requests:

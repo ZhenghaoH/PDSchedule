@@ -22,7 +22,7 @@ else:
         readline = None
 
 
-PREFILL_STRATEGIES = ("least_load", "round_robin", "pso_new", "distserve")
+PREFILL_STRATEGIES = ("pso_new", "jsq", "round_robin")
 DECODE_STRATEGIES = (
     "round_robin",
     "lowest_generate_throughput",

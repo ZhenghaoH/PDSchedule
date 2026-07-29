@@ -164,7 +164,7 @@ case "$MODE" in
         cd /workspace/llm-stack/P2P_FlexPD/entrypoints
         export MY_MAX_PROMPT_THROUGHPUT=25499.77
         export MY_FLOPS=209.6
-        python3 gatewayP.py --host 172.18.0.170 --port 8081 --controller 172.18.0.170:5000 --prefill 172.18.0.167:7001 172.18.0.167:7002 172.18.0.169:7001 172.18.0.169:7002 172.18.0.170:7001 172.18.0.170:7002 --prefill-scheduler-strategy distserve --distserve-prefill-batch-tokens 2048 --no-ttft-warmup
+        python3 gatewayP.py --host 172.18.0.170 --port 8081 --controller 172.18.0.170:5000 --prefill 172.18.0.167:7001 172.18.0.167:7002 172.18.0.169:7001 172.18.0.169:7002 172.18.0.170:7001 172.18.0.170:7002 --prefill-scheduler-strategy jsq --no-ttft-warmup
         ;;
     "id1")
         wait_for_loading 55 "Decode Instance 1"

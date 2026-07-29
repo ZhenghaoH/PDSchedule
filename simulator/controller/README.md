@@ -81,7 +81,7 @@ completion, KV transfer completion, and Decode generation steps advance on one
 timeline. Each arriving request sees the current online Prefill, Decode, and
 network state before selecting a P/D pair.
 
-- Prefill uses a `slo_aware_new`-style batch lateness penalty with predicted
+- Prefill uses a `slo_aware_prefill`-style batch lateness penalty with predicted
   instance availability and chunked prefill batches.
 - Decode uses the `slo_tpot_admission` selection rule and step-level continuous
   batching.

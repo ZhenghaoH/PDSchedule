@@ -14,6 +14,13 @@ __pycache__/
 simulator/result/.matplotlib/
 simulator/result/latest_*
 temp_script.sh
+/DistServe启动脚本/
+/plan/
+/create_pdschedule.ps1
+/publish.ps1
+/publish.cmd
+/sync.sh
+/test/test_sync_script.py
 
 .DS_Store
 Thumbs.db

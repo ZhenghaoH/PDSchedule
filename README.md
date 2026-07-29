@@ -95,7 +95,7 @@ python entrypoints/gatewayD.py \
   --no-tpot-warmup
 ```
 
-vLLM 的 continuous batching 由实例自身的 `max_num_batched_tokens` 等参数控制，P 网关 `jsq` 不提供逻辑 batch 大小参数。该基线不包含论文的 placement algorithm、周期性 workload replan、模型迁移或资源重配置。四机中心网关部署参见 `DistServe启动脚本/README.md`。
+vLLM 的 continuous batching 由实例自身的 `max_num_batched_tokens` 等参数控制，P 网关 `jsq` 不提供逻辑 batch 大小参数。该基线不包含论文的 placement algorithm、周期性 workload replan、模型迁移或资源重配置。
 
 P 侧 JSQ 未完成 token 预约保存在网关进程内存中；网关重启后不能从仅包含请求数的实例心跳恢复原 token 负载。正常请求结束会立即释放预约，异常情况下预约最多保留 240 秒。
 
@@ -144,18 +144,6 @@ P/D 网关均使用统一策略协议和 manager 注册表，不再按 sync/asyn
 - 增加策略单元测试，并核对未知策略、无在线实例、能力驱动的队列行为、资源释放和在线切换边界。
 
 `Task.scheduler_metadata` 是 P→D 内部使用的空扩展容器。后续策略如需跨阶段传递少量 JSON 数据，应使用策略名作为一级命名空间；该字段不会进入发送给 vLLM 实例的标准或 NIXL payload。
-
-在 Ubuntu 部署机上可使用根目录的 `sync.sh` 同步代码并修复 Shell 脚本执行权限：
-
-```bash
-# 默认同步 origin/p2p-flexpd
-./sync.sh
-
-# 覆盖远端名和分支名
-./sync.sh origin p2p-flexpd
-```
-
-脚本会先把 staged、unstaged 和未跟踪的本地改动保存到临时 stash，再获取远端代码。只有本地独有路径的改动会以普通未提交工作区改动恢复；同一路径只要本地和远端都发生修改，即使 Git 能自动合并，当前工作区也采用远端完整版本，原本地内容保留在脚本输出的 stash 中供人工检查。此时脚本返回状态码 `2`，可使用 `git stash show -p <stash-ref>` 查看备份。脚本不会提交恢复后的本地改动，也不会自动推送代码。
 
 ```bash
 # 进入项目所在目录

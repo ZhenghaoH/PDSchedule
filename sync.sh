@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 REMOTE="${1:-origin}"
-BRANCH="${2:-p2p-flexpd}"
+BRANCH="${2:-PDSchedule}"
 BACKUP_STASH_COMMIT=""
 BACKUP_STASH_REF=""
 RESTORE_HAD_CONFLICTS=0

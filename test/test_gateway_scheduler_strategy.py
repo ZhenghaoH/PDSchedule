@@ -37,7 +37,10 @@ from core.consoles.gateway import (
     run_gateway_server,
     switch_gateway_scheduler,
 )
-from core.handlers.gateway.decode.proxy import _select_decode_instance
+from core.handlers.gateway.decode.proxy import (
+    _bind_and_validate_connector,
+    _select_decode_instance,
+)
 from core.schemas.request import BaseRequest, Prompt, Service, Task
 from proxy.forward import forward_request_trace
 from proxy.sync import RequestBatcher, storage as shared_storage
@@ -381,6 +384,79 @@ class DecodeSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(decision["selection_source"], "preselected_request")
         self.assertEqual(decision["selected_instance"], "d2")
         record_schedule.assert_called_once()
+
+    def test_decode_connector_validation_logs_success(self):
+        descriptor = {
+            "name": "nixl",
+            "version": "1",
+            "metadata": {},
+        }
+        self.store._instance_table["d1"].role = "decode"
+        self.store._instance_table["d1"].connector = descriptor
+        request = make_request(42)
+        request.Task.prefill_instance = "p1"
+        request.Task.pd_connector = "nixl"
+        request.Task.connector_session_id = "nixl-42"
+        request.Task.connector_context = {
+            "prefill_endpoint": {
+                "role": "prefill",
+                "descriptor": descriptor,
+            }
+        }
+
+        with self.assertLogs(
+            "core.handlers.gateway.decode.proxy", level="INFO"
+        ) as captured:
+            _bind_and_validate_connector(self.store, request, "d1")
+
+        self.assertEqual(
+            request.Task.connector_context["decode_endpoint"],
+            self.store.get_connector_metadata("d1"),
+        )
+        self.assertIn(
+            "[Decode-Connector] validation succeeded "
+            "request_id=42 connector=nixl prefill_instance=p1 "
+            "decode_instance=d1 session_id=nixl-42",
+            captured.output[0],
+        )
+
+    def test_decode_connector_validation_failure_does_not_log_success(self):
+        decode_descriptor = {
+            "name": "nixl",
+            "version": "1",
+            "metadata": {},
+        }
+        self.store._instance_table["d1"].role = "decode"
+        self.store._instance_table["d1"].connector = decode_descriptor
+        request = make_request(43)
+        request.Task.prefill_instance = "p1"
+        request.Task.pd_connector = "nixl"
+        request.Task.connector_session_id = "nixl-43"
+        request.Task.connector_context = {
+            "prefill_endpoint": {
+                "role": "prefill",
+                "descriptor": {
+                    "name": "lmcache",
+                    "version": "1",
+                    "metadata": {
+                        "backend": "redis",
+                        "namespace": "model-a",
+                        "config_fingerprint": "abc123",
+                    },
+                },
+            }
+        }
+
+        with patch(
+            "core.handlers.gateway.decode.proxy.logger.info"
+        ) as success_log:
+            with self.assertRaisesRegex(
+                HTTPException,
+                "Selected instances use incompatible connectors",
+            ):
+                _bind_and_validate_connector(self.store, request, "d1")
+
+        success_log.assert_not_called()
 
 
 class ForwardRequestErrorTest(unittest.IsolatedAsyncioTestCase):

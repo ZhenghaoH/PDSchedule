@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import sys
 import time
 
@@ -19,6 +20,7 @@ from utils.gateway_observability import (
 
 request_batcher = RequestBatcher()
 decode_observer = get_gateway_observer("decode")
+logger = logging.getLogger(__name__)
 LOG_SEPARATOR = "+" * 80
 LOG_ITEM_SEPARATOR = "-" * 80
 
@@ -237,6 +239,16 @@ def _bind_and_validate_connector(
     ):
         raise HTTPException(status_code=503, detail="Selected instances use incompatible connectors")
     request.Task.connector_context["decode_endpoint"] = decode_meta
+    logger.info(
+        "[Decode-Connector] validation succeeded "
+        "request_id=%s connector=%s prefill_instance=%s "
+        "decode_instance=%s session_id=%s",
+        getattr(request, "Request_ID", ""),
+        descriptor.get("name", ""),
+        prefill_instance,
+        selected_decode,
+        getattr(request.Task, "connector_session_id", ""),
+    )
 
 
 async def handle_completion_request(raw_request: Request, endpoint_type: str):

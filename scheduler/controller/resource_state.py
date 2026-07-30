@@ -4,8 +4,9 @@ import time
 from contextlib import ExitStack
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Mapping, Tuple
+from typing import Mapping, Optional, Tuple
 
+from connectors.manager import get_connector_manager
 from store.controller.network import Network, NetworkManager
 from store.controller.pool_base import DecodePool, PoolType, PrefillPool
 from store.controller.pool_manager import PoolManager
@@ -19,6 +20,25 @@ class ResourceSnapshot:
     decode_pools: Tuple[DecodePool, ...]
     networks: Tuple[Network, ...]
     network_map: Mapping[Tuple[int, int], Network]
+    compatible_pairs: Optional[
+        Tuple[Tuple[PrefillPool, DecodePool], ...]
+    ] = None
+
+    def __post_init__(self):
+        if self.compatible_pairs is None:
+            connector_manager = get_connector_manager()
+            object.__setattr__(
+                self,
+                "compatible_pairs",
+                tuple(
+                    (prefill, decode)
+                    for prefill in self.prefill_pools
+                    for decode in self.decode_pools
+                    if connector_manager.compatible(
+                        prefill.connector, decode.connector
+                    )
+                ),
+            )
 
     @classmethod
     def empty(cls) -> "ResourceSnapshot":
@@ -29,6 +49,7 @@ class ResourceSnapshot:
             decode_pools=(),
             networks=(),
             network_map=MappingProxyType({}),
+            compatible_pairs=(),
         )
 
 
@@ -92,6 +113,15 @@ class ResourceStateManager:
                     for network in filtered_networks
                 }
             )
+            connector_manager = get_connector_manager()
+            compatible_pairs = tuple(
+                (prefill, decode)
+                for prefill in copied_prefills
+                for decode in copied_decodes
+                if connector_manager.compatible(
+                    prefill.connector, decode.connector
+                )
+            )
             self._snapshot = ResourceSnapshot(
                 version=self._snapshot.version + 1,
                 captured_at=time.time(),
@@ -99,5 +129,6 @@ class ResourceStateManager:
                 decode_pools=tuple(copied_decodes),
                 networks=filtered_networks,
                 network_map=network_map,
+                compatible_pairs=compatible_pairs,
             )
             return self._snapshot

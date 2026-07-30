@@ -107,7 +107,8 @@ class PoolManager:
                       port: int,
                       capacity: float,
                       max_prompt_throughput: float = None,
-                      max_decode_req_num: int = 128) -> int:
+                      max_decode_req_num: int = 128,
+                      connector: Optional[Dict] = None) -> int:
         """
         注册或更新资源池
         返回分配的池ID
@@ -127,6 +128,8 @@ class PoolManager:
                 print(f"[Manager] Info: {type_key} Pool with IP {ip}:{port} already exists with ID {existing_pool_id}. Using existing ID.")
                 pool_obj = target_storage[existing_pool_id]
                 pool_obj.last_updated = current_time
+                if connector is not None:
+                    pool_obj.connector = dict(connector)
                 
                 if Pool_type == PoolType.PREFILL:
                     pool_obj.flops = capacity
@@ -156,13 +159,15 @@ class PoolManager:
                     max_prompt_throughput = 0.0
                 new_Pool = PrefillPool(
                     pool_id=new_pool_id, proxy_ip_address=ip, proxy_port=port,
-                    last_updated=current_time, flops=capacity, max_prompt_throughput=max_prompt_throughput
+                    last_updated=current_time, flops=capacity, max_prompt_throughput=max_prompt_throughput,
+                    connector=dict(connector or {})
                 )
             elif Pool_type == PoolType.DECODE:
                 new_Pool = DecodePool(
                     pool_id=new_pool_id, proxy_ip_address=ip, proxy_port=port,
                     last_updated=current_time, mem_bandwidth=capacity,
-                    max_decode_req_num=max(1, int(max_decode_req_num))
+                    max_decode_req_num=max(1, int(max_decode_req_num)),
+                    connector=dict(connector or {})
                 )
             else:
                 return -1

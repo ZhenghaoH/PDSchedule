@@ -17,10 +17,7 @@ async def register_instance(raw_request: Request):
         instance = GatewayStoreManager().register_instance(
             instance_ip=data.get("report_label", ""),
             role=data.get("role", ""),
-            connector=data.get("connector", ""),
-            side_channel_host=data.get("side_channel_host", ""),
-            side_channel_port=data.get("side_channel_port", 0),
-            tp_size=data.get("tp_size", 0),
+            connector=data.get("connector"),
             vllm_port=data.get("vllm_port", 0),
             gpu_indices=data.get("gpu_indices"),
         )

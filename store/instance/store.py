@@ -29,17 +29,9 @@ class InstanceStore:
                     self.gateway = ""  # 临时变量 控制器监听host
                     self.rank = 0  # 身份 prefill=0 decode=1
 
-                    self.peer = ""  # 对端 Instance Proxy IP地址带端口
-
                     self.USE_MOCK = False  # 使用模拟数据
-                    self.MOONCAKE_PROTOCOL = "tcp"  # RDMA配置 协议  可选 "tcp" or "rdma"
-                    self.MOONCAKE_DEVICE_NAME = ""  # RDMA配置 设备名 可选 "" or "mlx5_0"
-                    self.KV_CONNECTOR = "mooncake"  # VLLM PD分离插件 mooncake or lmcache
                     self.role = ""
-                    self.connector = "NixlConnector"
-                    self.side_channel_host = ""
-                    self.side_channel_port = 0
-                    self.tp_size = 0
+                    self.connector = {"name": "nixl", "version": "1", "metadata": {}}
                     self.gpu_indices = [0]
                     self.network_metric = {}
                     self.network_metric_sampled_at = 0.0
@@ -53,8 +45,4 @@ class InstanceStore:
 
     def report_label(self):
         return f"{self.host}:{self.port}"
-
-    def set_peer(self, peer: str):
-        with self._lock:
-            self.peer = peer
 

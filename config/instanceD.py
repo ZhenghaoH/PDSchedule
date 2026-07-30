@@ -35,9 +35,6 @@ DEFAULT_GATEWAY = os.getenv(
 USE_MOCK = False
 
 # RDMA配置 协议  可选 "tcp" or "rdma"
-MOONCAKE_PROTOCOL = "tcp"
 # RDMA配置 设备名 可选 "" or "mlx5_0"
-MOONCAKE_DEVICE_NAME = ""
 
 # VLLM PD分离插件
-KV_CONNECTOR = "lmcache"  # mooncake or lmcache

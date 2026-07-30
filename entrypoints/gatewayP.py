@@ -7,6 +7,7 @@
 """
 
 import argparse
+import json
 from fastapi import FastAPI
 import logging
 import os
@@ -94,6 +95,9 @@ def parse_args():
         action="store_true",
         help="Disable the interactive gateway CLI for background deployments.",
     )
+    parser.add_argument("--connector-name", choices=["nixl", "lmcache"], default="nixl")
+    parser.add_argument("--connector-version", default="1")
+    parser.add_argument("--connector-metadata", type=json.loads, default={})
 
     ttft_warmup_group = parser.add_mutually_exclusive_group()
     ttft_warmup_group.add_argument(
@@ -169,6 +173,11 @@ def main():
     storage.host = args.host
     storage.port = args.port
     storage.controller = args.controller
+    storage.set_connector({
+        "name": args.connector_name,
+        "version": args.connector_version,
+        "metadata": args.connector_metadata,
+    })
 
     storage.SYN_TIMEOUT = SYN_TIMEOUT
     storage.SYN_BATCH_SIZE = SYN_BATCH_SIZE

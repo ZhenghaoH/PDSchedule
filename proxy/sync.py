@@ -12,11 +12,7 @@ from scheduler.gateway.prefill.manager import SchedulerManager
 from proxy.forward import forward_request_json
 from proxy.forward import forward_request_trace as forward_request
 from core.schemas.request import BaseRequest
-from utils.nixl_request import (
-    build_nixl_prefill_payload,
-    extract_kv_transfer_params,
-    nixl_headers_for_request,
-)
+from connectors.manager import get_connector_manager
 from utils.gateway_observability import get_gateway_observer
 
 from store.gateway.manager import GatewayStoreManager
@@ -35,19 +31,19 @@ def _log_timeline_event(event: str, **payload: Any) -> None:
     return
 
 
-def _bind_nixl_prefill_metadata(request: BaseRequest, selected_prefill: str) -> None:
-    meta = storage.get_nixl_metadata(selected_prefill)
+def _bind_prefill_connector(request: BaseRequest, selected_prefill: str) -> None:
+    meta = storage.get_connector_metadata(selected_prefill)
     if not meta:
         raise RuntimeError(
-            f"Missing NIXL metadata for prefill instance {selected_prefill}"
+            f"Missing connector metadata for prefill instance {selected_prefill}"
         )
-    if meta.get("connector") != "NixlConnector" or meta.get("role") != "prefill":
+    descriptor = meta.get("descriptor") or {}
+    if meta.get("role") != "prefill" or descriptor.get("name") != request.Task.pd_connector:
         raise RuntimeError(
-            f"Invalid prefill NIXL metadata for {selected_prefill}: {meta}"
+            f"Invalid prefill connector metadata for {selected_prefill}: {meta}"
         )
 
-    request.Task.prefill_tp_size = int(meta.get("tp_size") or 0)
-    request.Task.prefill_side_channel_addr = storage.get_side_channel_addr(selected_prefill)
+    request.Task.connector_context["prefill_endpoint"] = meta
 
 
 # --- Helper: Response Tracker ---
@@ -1189,9 +1185,9 @@ class RequestBatcher:
         """普通同步 batching 前端调用入口，返回 StreamingResponse 所需 generator。"""
         return await self._add_request(request, mode="stream")
 
-    async def add_nixl_prefill_request(self, request: BaseRequest) -> Dict[str, Any]:
-        """NIXL PD Prefill 同步 batching 入口，返回 per-request KV 参数。"""
-        return await self._add_request(request, mode="nixl_prefill")
+    async def add_connector_prefill_request(self, request: BaseRequest) -> Dict[str, Any]:
+        """Connector-aware PD Prefill batching entrypoint."""
+        return await self._add_request(request, mode="connector_prefill")
 
     async def _add_request(self, request: BaseRequest, mode: str) -> Dict[str, Any]:
         """前端调用入口"""
@@ -1341,13 +1337,14 @@ class RequestBatcher:
                 mode = batch_entry.get("mode", "stream")
 
             target_url = f"http://{instance}/v1/{request.Service.Endpoint_type}"
-            if mode == "nixl_prefill":
-                _bind_nixl_prefill_metadata(request, instance)
-                payload = build_nixl_prefill_payload(request)
+            if mode == "connector_prefill":
+                _bind_prefill_connector(request, instance)
+                connector_manager = get_connector_manager()
+                payload = connector_manager.build_prefill_payload(request)
 
                 print("\n\n\n")
                 print("+" * 80)
-                print("[Gateway] NIXL Prefill 同步调度状态 ")
+                print("[Gateway] Connector Prefill 同步调度状态")
                 print("+" * 80)
                 print(f"转发实例: {instance}")
                 for k, v in payload.items():
@@ -1358,11 +1355,13 @@ class RequestBatcher:
                 prefill_response = await forward_request_json(
                     url=target_url,
                     data=payload,
-                    extra_headers=nixl_headers_for_request(request),
+                    extra_headers=connector_manager.headers(request),
                 )
-                kv_transfer_params = extract_kv_transfer_params(prefill_response)
+                connector_manager.bind_prefill_result(request, prefill_response)
+                kv_transfer_params = request.Task.connector_context.get(
+                    "kv_transfer_params", {}
+                )
                 request.Task.prefill_instance = instance
-                request.Task.nixl_kv_transfer_params = kv_transfer_params
                 prefill_finished_s = time.time()
                 metadata = dict(getattr(request.Task, "scheduler_metadata", {}) or {})
                 timing = dict(metadata.get("gateway_timing", {}) or {})
@@ -1402,7 +1401,7 @@ class RequestBatcher:
                         self.schedule_event.set()
 
                 logging.info(
-                    "NIXL prefill req %s finished on %s.",
+                    "Connector prefill req %s finished on %s.",
                     str(rid)[-4:],
                     instance,
                 )

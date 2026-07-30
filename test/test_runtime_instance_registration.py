@@ -19,6 +19,18 @@ from store.gateway.instance import Instance
 import config.ADDRESS_CONFIG as address_config
 
 
+def nixl_connector(host="10.0.0.1", port=5557, tp_size=1):
+    return {
+        "name": "nixl",
+        "version": "1",
+        "metadata": {
+            "side_channel_host": host,
+            "side_channel_port": port,
+            "tp_size": tp_size,
+        },
+    }
+
+
 def import_update_handler(module_name):
     fastapi = types.ModuleType("fastapi")
     responses = types.ModuleType("fastapi.responses")
@@ -50,16 +62,15 @@ class RuntimeInstanceRegistrationTest(unittest.TestCase):
         self.manager._prefill_objs = []
         self.manager._decode_objs = []
         self.manager._instance_table = {}
-        self.manager._link_table = {}
+        self.manager.connector = {
+            "name": "nixl", "version": "1", "metadata": {}
+        }
 
     def test_registers_nixl_metadata_without_static_topology(self) -> None:
         instance = self.manager.register_instance(
             instance_ip="10.0.0.2:7001",
             role="prefill",
-            connector="NixlConnector",
-            side_channel_host="10.0.0.2",
-            side_channel_port=5557,
-            tp_size=2,
+            connector=nixl_connector("10.0.0.2", 5557, 2),
             vllm_port=8001,
             gpu_indices=[2, 3],
         )
@@ -68,28 +79,18 @@ class RuntimeInstanceRegistrationTest(unittest.TestCase):
         self.assertEqual(instance.gpu_indices, [2, 3])
         self.assertEqual(self.manager.prefill_objs, ["10.0.0.2:7001"])
         self.assertEqual(
-            self.manager.get_nixl_metadata("10.0.0.2:7001"),
+            self.manager.get_connector_metadata("10.0.0.2:7001"),
             {
-                "connector": "NixlConnector",
                 "role": "prefill",
-                "side_channel_host": "10.0.0.2",
-                "side_channel_port": 5557,
-                "tp_size": 2,
+                "descriptor": nixl_connector("10.0.0.2", 5557, 2),
             },
-        )
-        self.assertEqual(
-            self.manager.get_side_channel_addr("10.0.0.2:7001"),
-            "10.0.0.2:5557",
         )
 
     def test_duplicate_registration_is_idempotent(self) -> None:
         kwargs = {
             "instance_ip": "10.0.0.3:7002",
             "role": "decode",
-            "connector": "NixlConnector",
-            "side_channel_host": "10.0.0.3",
-            "side_channel_port": 5558,
-            "tp_size": 1,
+            "connector": nixl_connector("10.0.0.3", 5558, 1),
         }
         self.manager.register_instance(**kwargs)
         self.manager.register_instance(**kwargs)
@@ -98,18 +99,19 @@ class RuntimeInstanceRegistrationTest(unittest.TestCase):
 
     def test_rejects_role_conflict(self) -> None:
         self.manager.register_instance(
-            "10.0.0.4:7001", "prefill", "NixlConnector", "10.0.0.4", 5557, 1
+            "10.0.0.4:7001", "prefill", nixl_connector("10.0.0.4")
         )
 
         with self.assertRaisesRegex(ValueError, "already registered as prefill"):
             self.manager.register_instance(
-                "10.0.0.4:7001", "decode", "NixlConnector", "10.0.0.4", 5557, 1
+                "10.0.0.4:7001", "decode", nixl_connector("10.0.0.4")
             )
 
     def test_rejects_incomplete_metadata(self) -> None:
         with self.assertRaises(ValueError):
             self.manager.register_instance(
-                "10.0.0.5:7001", "prefill", "NixlConnector", "", 0, 0
+                "10.0.0.5:7001", "prefill",
+                {"name": "nixl", "version": "1", "metadata": {}},
             )
 
     def test_distserve_reservation_covers_heartbeat_lag_and_can_be_released(self) -> None:
@@ -278,7 +280,7 @@ class RuntimeInstanceRegistrationTest(unittest.TestCase):
         )
 
         self.manager.register_instance(
-            "p1", "prefill", "NixlConnector", "10.0.0.1", 5557, 2,
+            "p1", "prefill", nixl_connector("10.0.0.1", 5557, 2),
             gpu_indices=[2, 3],
         )
 
@@ -314,7 +316,7 @@ class RuntimeInstanceRegistrationTest(unittest.TestCase):
         )
 
         self.manager.register_instance(
-            "d1", "decode", "NixlConnector", "10.0.0.2", 5558, 1,
+            "d1", "decode", nixl_connector("10.0.0.2", 5558, 1),
             gpu_indices=[4],
         )
 

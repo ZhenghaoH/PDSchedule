@@ -22,7 +22,7 @@ from scheduler.controller.strategies.demand_aware import (
 )
 from scheduler.controller.strategy import GlobalScheduleDecision
 from store.controller.pool_base import DecodePool, PrefillPool, PoolType
-from utils.nixl_request import build_nixl_decode_payload, build_nixl_prefill_payload
+from connectors.manager import get_connector_manager
 
 
 def make_request(metadata=None):
@@ -41,7 +41,12 @@ def make_request(metadata=None):
             decode_instance="",
             batch_order=0,
             User_url_path="/v1/chat/completions",
-            nixl_kv_transfer_params={"remote_engine_id": "engine"},
+            pd_connector="nixl",
+            connector_session_id="nixl-1",
+            connector_context={
+                "request_id": "nixl-1",
+                "kv_transfer_params": {"remote_engine_id": "engine"},
+            },
             scheduler_metadata=dict(metadata or {}),
         ),
     )
@@ -101,6 +106,12 @@ class SingleGatewaySchedulerTest(unittest.TestCase):
                 "P_proxy_port": 8081,
                 "D_proxy_addr": "10.0.0.2",
                 "D_proxy_port": 8082,
+                "PD_connector": "nixl",
+                "PD_connector_descriptor": {
+                    "name": "nixl",
+                    "version": "1",
+                    "metadata": {},
+                },
             },
         )
         self.assertTrue(scheduler.uses_single_gateway_route())
@@ -272,8 +283,8 @@ class SchedulerMetadataTest(unittest.TestCase):
         request = make_request({"paper": {"class": "short"}})
 
         standard = BaseRequest.to_vllm_payload(request)
-        prefill = build_nixl_prefill_payload(request)
-        decode = build_nixl_decode_payload(request)
+        prefill = get_connector_manager().build_prefill_payload(request)
+        decode = get_connector_manager().build_decode_payload(request)
 
         self.assertNotIn("scheduler_metadata", standard)
         self.assertNotIn("scheduler_metadata", prefill)

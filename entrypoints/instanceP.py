@@ -7,6 +7,7 @@
 """
 
 import argparse
+import json
 import uvicorn
 from fastapi import FastAPI
 import logging
@@ -79,10 +80,9 @@ def parse_args():
         default=DEFAULT_HOST,
         help="The IP address for the proxy server to listen on. Supports IPv4 and IPv6."
     )
-    parser.add_argument("--side-channel-host", default=os.getenv("VLLM_NIXL_SIDE_CHANNEL_HOST", ""))
-    parser.add_argument("--side-channel-port", type=int, default=int(os.getenv("VLLM_NIXL_SIDE_CHANNEL_PORT", "0")))
-    parser.add_argument("--tp-size", type=int, default=int(os.getenv("FLEXPD_TP_SIZE", "0")))
-    parser.add_argument("--connector", default=NIXL_CONNECTOR)
+    parser.add_argument("--connector-name", choices=["nixl", "lmcache"], default="nixl")
+    parser.add_argument("--connector-version", default="1")
+    parser.add_argument("--connector-metadata", type=json.loads, default={})
     parser.add_argument(
         "--gpu-indices",
         type=parse_gpu_indices,
@@ -101,8 +101,7 @@ def main():
     args = parse_args()
     missing = [name for name, value in {
         "host": args.host, "port": args.port, "vllm_port": args.vllm_port,
-        "gateway": args.gateway, "side_channel_host": args.side_channel_host,
-        "side_channel_port": args.side_channel_port, "tp_size": args.tp_size,
+        "gateway": args.gateway,
     }.items() if value in (None, "", 0)]
     if missing:
         raise SystemExit(f"Missing required deployment options: {', '.join(missing)}")
@@ -114,18 +113,16 @@ def main():
     storage.gateway = args.gateway
     storage.vllm_port = args.vllm_port
     storage.role = PREFILL_ROLE
-    storage.connector = args.connector
-    storage.side_channel_host = args.side_channel_host
-    storage.side_channel_port = args.side_channel_port
-    storage.tp_size = args.tp_size
+    storage.connector = {
+        "name": args.connector_name,
+        "version": args.connector_version,
+        "metadata": args.connector_metadata,
+    }
     storage.gpu_indices = list(args.gpu_indices)
 
     storage.rank = RANK
     storage.USE_MOCK = USE_MOCK
-    storage.MOONCAKE_PROTOCOL = MOONCAKE_PROTOCOL
-    storage.MOONCAKE_DEVICE_NAME = MOONCAKE_DEVICE_NAME
     storage.LOOP_TASK_TIME = LOOP_TASK_TIME
-    storage.KV_CONNECTOR = KV_CONNECTOR
 
     # 创建FastAPI应用
     app = FastAPI(

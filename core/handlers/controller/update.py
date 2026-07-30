@@ -177,6 +177,12 @@ async def register_decode_pool(request: FastAPIRequest):
     mem_bandwidth = body.get("mem_bandwidth")
     gpu_type = body.get("GPU_type", "")
     max_decode_req_num = body.get("max_decode_req_num", 128)
+    connector = body.get("connector")
+    try:
+        from connectors.manager import get_connector_manager
+        connector = get_connector_manager().validate(connector).to_dict()
+    except ValueError as exc:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
 
     # 自动获取 IP (如果客户端未传)
     if proxy_ip is None and request.client:
@@ -211,6 +217,7 @@ async def register_decode_pool(request: FastAPIRequest):
         port=proxy_port,
         capacity=mem_bandwidth,
         max_decode_req_num=max_decode_req_num,
+        connector=connector,
     )
 
     if new_pool_id == -1:
@@ -349,6 +356,12 @@ async def register_prefill_pool(request: FastAPIRequest):
     flops = body.get("flops")
     gpu_type = body.get("GPU_type", "")
     max_prompt_throughput = body.get("max_prompt_throughput", 0.0)
+    connector = body.get("connector")
+    try:
+        from connectors.manager import get_connector_manager
+        connector = get_connector_manager().validate(connector).to_dict()
+    except ValueError as exc:
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
 
     # 自动获取 IP (如果客户端未传)
     if proxy_ip is None and request.client:
@@ -382,6 +395,7 @@ async def register_prefill_pool(request: FastAPIRequest):
         port=proxy_port,
         capacity=flops,
         max_prompt_throughput=max_prompt_throughput,
+        connector=connector,
     )
 
     if new_pool_id == -1:

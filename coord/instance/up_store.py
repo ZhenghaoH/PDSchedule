@@ -21,9 +21,6 @@ def instance_register():
         "report_label": storage.report_label(),
         "role": storage.role,
         "connector": storage.connector,
-        "side_channel_host": storage.side_channel_host,
-        "side_channel_port": storage.side_channel_port,
-        "tp_size": storage.tp_size,
         "vllm_port": storage.vllm_port,
         "gpu_indices": storage.gpu_indices,
     }
@@ -180,21 +177,6 @@ def metric_update(monitor: Optional[ThroughputMonitor] = None):
             logging.warning(f"[Instance] 心跳异常: {resp.status_code}")
     except Exception as e:
         logging.error(f"[Instance] 心跳错误: {e}")
-
-
-def close_instance_pair():
-    endpoint = "pd/close"
-    storage = InstanceStore()
-    target_url = f"http://{storage.gateway}/{endpoint}"
-    try:
-        payload = {
-            "label": storage.report_label(),
-        }
-        resp = requests.post(target_url, json=payload)
-        if resp.status_code != 200:
-            logging.warning(f"[Instance] 关闭连接上报异常: {resp.status_code}")
-    except Exception as e:
-        logging.error(f"[Instance] 关闭连接上报错误: {e}")
 
 
 def instance_unregister():

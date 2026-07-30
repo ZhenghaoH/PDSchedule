@@ -174,13 +174,9 @@ class Task:
     decode_instance: str
     batch_order: int
     User_url_path: str
-    pd_connector: str = "NixlConnector"
-    nixl_request_id: str = ""
-    nixl_kv_transfer_params: Dict[str, Any] = field(default_factory=dict)
-    prefill_tp_size: int = 0
-    decode_tp_size: int = 0
-    prefill_side_channel_addr: str = ""
-    decode_side_channel_addr: str = ""
+    pd_connector: str = ""
+    connector_session_id: str = ""
+    connector_context: Dict[str, Any] = field(default_factory=dict)
     decode_selection_stage: str = "after_prefill"
     scheduler_metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -199,6 +195,10 @@ class Task:
             self.P_proxy_port = result["P_proxy_port"]
             self.D_proxy_addr = result["D_proxy_addr"]
             self.D_proxy_port = result["D_proxy_port"]
+            self.pd_connector = result["PD_connector"]
+            self.connector_context = {
+                "descriptor": result["PD_connector_descriptor"]
+            }
 
             return True
         except Exception as e:
@@ -400,13 +400,9 @@ class BaseRequest:
             decode_instance="127.0.0.1:7002",
             batch_order=0,
             User_url_path=url_path,
-            pd_connector="NixlConnector",
-            nixl_request_id="",
-            nixl_kv_transfer_params={},
-            prefill_tp_size=0,
-            decode_tp_size=0,
-            prefill_side_channel_addr="",
-            decode_side_channel_addr="",
+            pd_connector="",
+            connector_session_id="",
+            connector_context={},
             decode_selection_stage="after_prefill",
         )
 
@@ -458,12 +454,25 @@ class BaseRequest:
                     else:
                         affinity_result = affinity_store.get(affinity_key)
 
-                    if affinity_result is not None:
+                    validate_cached_route = getattr(
+                        scheduler_instance, "validate_cached_route", None
+                    )
+                    if (
+                        affinity_result is not None
+                        and callable(validate_cached_route)
+                        and validate_cached_route(affinity_result)
+                    ):
                         affinity_hit = True
                         task_obj.P_proxy_addr = affinity_result.get("P_proxy_addr")
                         task_obj.P_proxy_port = affinity_result.get("P_proxy_port")
                         task_obj.D_proxy_addr = affinity_result.get("D_proxy_addr")
                         task_obj.D_proxy_port = affinity_result.get("D_proxy_port")
+                        task_obj.pd_connector = affinity_result["PD_connector"]
+                        task_obj.connector_context = {
+                            "descriptor": affinity_result[
+                                "PD_connector_descriptor"
+                            ]
+                        }
                         scheduled = True
                         print(
                             f"[Affinity] Req {request_id} hit cached schedule -> "
@@ -493,6 +502,10 @@ class BaseRequest:
                     "P_proxy_port": task_obj.P_proxy_port,
                     "D_proxy_addr": task_obj.D_proxy_addr,
                     "D_proxy_port": task_obj.D_proxy_port,
+                    "PD_connector": task_obj.pd_connector,
+                    "PD_connector_descriptor": task_obj.connector_context[
+                        "descriptor"
+                    ],
                     "updated_at": time.time(),
                 }
                 if affinity_lock is not None:
@@ -572,11 +585,8 @@ class BaseRequest:
             f"  prefill_instance={self.Task.prefill_instance},\n"
             f"  decode_instance={self.Task.decode_instance},\n"
             f"  pd_connector={self.Task.pd_connector},\n"
-            f"  nixl_request_id={self.Task.nixl_request_id},\n"
-            f"  prefill_tp_size={self.Task.prefill_tp_size},\n"
-            f"  decode_tp_size={self.Task.decode_tp_size},\n"
-            f"  prefill_side_channel_addr={self.Task.prefill_side_channel_addr},\n"
-            f"  decode_side_channel_addr={self.Task.decode_side_channel_addr},\n"
+            f"  connector_session_id={self.Task.connector_session_id},\n"
+            f"  connector_context={self.Task.connector_context},\n"
             f"  decode_selection_stage={self.Task.decode_selection_stage},\n"
             f"  batch_order={self.Task.batch_order},\n"
             f"  User_url_path={self.Task.User_url_path},\n"

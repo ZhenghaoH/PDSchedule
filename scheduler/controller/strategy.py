@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import Optional, Protocol, TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import Dict, Any, Optional, Protocol, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from scheduler.controller.resource_state import ResourceSnapshot
@@ -23,6 +23,14 @@ class GlobalScheduleDecision:
     decode_address: str
     decode_port: int
     strategy: str
+    connector: str = "nixl"
+    connector_descriptor: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "name": "nixl",
+            "version": "1",
+            "metadata": {},
+        }
+    )
     selection_source: str = "controller_scheduler"
 
     def to_proxy_dict(self):
@@ -31,6 +39,8 @@ class GlobalScheduleDecision:
             "P_proxy_port": self.prefill_port,
             "D_proxy_addr": self.decode_address,
             "D_proxy_port": self.decode_port,
+            "PD_connector": self.connector,
+            "PD_connector_descriptor": dict(self.connector_descriptor),
         }
 
 

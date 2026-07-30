@@ -572,6 +572,13 @@ class DemandAwareStrategy:
         num_d = len(decode_pools)
         if num_p == 0 or num_d == 0:
             raise ValueError("Empty pools passed to demand_aware schedule")
+        compatible_ids = {
+            (prefill.pool_id, decode.pool_id)
+            for prefill, decode in resources.compatible_pairs
+            if (prefill.pool_id, decode.pool_id) in network_map
+        }
+        if not compatible_ids:
+            raise ValueError("No connector-compatible P/D gateway pair with a network")
 
         safe_token_length = max(1, int(token_length or 0))
         safe_max_tokens = max(1, int(max_tokens or safe_token_length))
@@ -592,6 +599,16 @@ class DemandAwareStrategy:
         positions = np.random.rand(self.num_particles, 2)
         positions[:, 0] *= num_p
         positions[:, 1] *= num_d
+        compatible_indices = [
+            (p_index, d_index)
+            for p_index, prefill in enumerate(prefill_pools)
+            for d_index, decode in enumerate(decode_pools)
+            if (prefill.pool_id, decode.pool_id) in compatible_ids
+        ]
+        for index, (p_index, d_index) in enumerate(compatible_indices):
+            if index >= self.num_particles:
+                break
+            positions[index] = (p_index + 0.5, d_index + 0.5)
         velocities = np.random.rand(self.num_particles, 2) * 0.1
         p_best_pos = positions.copy()
         p_best_scores = np.full(self.num_particles, np.inf)
@@ -615,6 +632,13 @@ class DemandAwareStrategy:
                     min_net_time_ms,
                     max_net_time_ms,
                 )
+                p_index = int(np.floor(positions[i][0])) % num_p
+                d_index = int(np.floor(positions[i][1])) % num_d
+                if (
+                    prefill_pools[p_index].pool_id,
+                    decode_pools[d_index].pool_id,
+                ) not in compatible_ids:
+                    score = 1e9
                 if score < p_best_scores[i]:
                     p_best_scores[i] = score
                     p_best_pos[i] = positions[i].copy()
@@ -680,4 +704,6 @@ class DemandAwareStrategy:
             decode_address=selected_d.proxy_ip_address,
             decode_port=selected_d.proxy_port,
             strategy=self.name,
+            connector=selected_p.connector["name"],
+            connector_descriptor=selected_p.connector,
         )

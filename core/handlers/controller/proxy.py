@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse, JSONResponse
 
 from core.schemas.request import BaseRequest as SchedulerRequest
 from proxy.forward import forward_request
-from utils.nixl_request import build_nixl_request_id, nixl_headers_for_request
+from connectors.manager import get_connector_manager
 
 from utils import timing
 
@@ -190,7 +190,7 @@ class RequestIdAllocator:
 id_alloc = RequestIdAllocator()
 
 
-async def _prepare_nixl_pd_request(req_obj: SchedulerRequest) -> None:
+async def _prepare_pd_request(req_obj: SchedulerRequest) -> None:
     if not getattr(req_obj.Service, "Enable_PD_Disaggregation", False):
         return
 
@@ -199,15 +199,31 @@ async def _prepare_nixl_pd_request(req_obj: SchedulerRequest) -> None:
     if not req_obj.Task.D_proxy_addr or not req_obj.Task.D_proxy_port:
         raise RuntimeError("Missing selected Decode gateway")
 
-    req_obj.Task.pd_connector = "NixlConnector"
-    req_obj.Task.nixl_request_id = build_nixl_request_id(req_obj.Request_ID)
+    connector = req_obj.Task.pd_connector
+    adapter = get_connector_manager().registry.get(connector)
+    session_id = f"{connector}-{req_obj.Request_ID}"
+    descriptor = req_obj.Task.connector_context.get("descriptor")
+    session = get_connector_manager().create_session(
+        prefill={
+            "address": f"{req_obj.Task.P_proxy_addr}:{req_obj.Task.P_proxy_port}",
+            "connector": descriptor,
+        },
+        decode={
+            "address": f"{req_obj.Task.D_proxy_addr}:{req_obj.Task.D_proxy_port}",
+            "connector": descriptor,
+        },
+        descriptor=descriptor,
+        session_id=session_id,
+    )
+    req_obj.Task.connector_session_id = session_id
+    req_obj.Task.connector_context.update(session.context)
     req_obj.Task.decode_instance = ""
     req_obj.Task.decode_selection_stage = "after_prefill"
     print(
-        f"[Controller-NIXL] Req {req_obj.Request_ID} prepared "
+        f"[Controller-Connector] Req {req_obj.Request_ID} prepared "
         f"P-Gateway={req_obj.Task.P_proxy_addr}:{req_obj.Task.P_proxy_port} "
         f"D-Gateway={req_obj.Task.D_proxy_addr}:{req_obj.Task.D_proxy_port} "
-        f"nixl_request_id={req_obj.Task.nixl_request_id}"
+        f"connector={adapter.name} session_id={session_id}"
     )
 
 
@@ -306,7 +322,7 @@ async def create_chat_completions(request: FastAPIRequest):
     # 构建内部 Request（包含 Prompt/Service/Task 等）
     req_obj = _handle_client(url_path, payload, client_ip, scheduler_instance, request.app)
     try:
-        await _prepare_nixl_pd_request(req_obj)
+        await _prepare_pd_request(req_obj)
     except Exception as exc:
         return JSONResponse(
             status_code=503,
@@ -331,23 +347,26 @@ async def create_chat_completions(request: FastAPIRequest):
 
     # 带一个 Scheduler分配的Request ID，便于链路追踪
     extra_headers["scheduler-request-id"] = str(req_obj.Request_ID)
-    extra_headers.update(nixl_headers_for_request(req_obj))
+    extra_headers.update(get_connector_manager().headers(req_obj))
 
     # 定义一个 async 生成器，从下游流式读取，再回给上游
     async def iter_upstream():
         start_time = time.perf_counter()
         chunk_times: List[float] = []
-        # forward_request 本身是一个 async generator
-        async for chunk in forward_request(
-            url=downstream_url,
-            data=data_for_downstream,
-            use_chunked=True,             # chat/completions 一般是流式
-            extra_headers=extra_headers,  # 透传必要头
-        ):
-            _observe_stream_chunk(chunk, chunk_times)
-            # 这里 chunk 已经是 bytes，直接 yield 出去即可
-            yield chunk
-        _log_stream_slo_trace(req_obj, start_time, chunk_times)
+        try:
+            async for chunk in forward_request(
+                url=downstream_url,
+                data=data_for_downstream,
+                use_chunked=True,
+                extra_headers=extra_headers,
+            ):
+                _observe_stream_chunk(chunk, chunk_times)
+                yield chunk
+            _log_stream_slo_trace(req_obj, start_time, chunk_times)
+        finally:
+            get_connector_manager().close_session(
+                req_obj.Task.connector_session_id
+            )
 
     # 用 StreamingResponse 包一层，实现用户侧的流式响应
     return StreamingResponse(iter_upstream(), media_type="application/json")
@@ -388,7 +407,7 @@ async def create_completions(request: FastAPIRequest):
     # 构建内部 Request（包含 Prompt/Service/Task 等）
     req_obj = _handle_client(url_path, payload, client_ip, scheduler_instance, request.app)
     try:
-        await _prepare_nixl_pd_request(req_obj)
+        await _prepare_pd_request(req_obj)
     except Exception as exc:
         return JSONResponse(
             status_code=503,
@@ -413,23 +432,26 @@ async def create_completions(request: FastAPIRequest):
 
     # 带一个 Scheduler分配的Request ID，便于链路追踪
     extra_headers["scheduler-request-id"] = str(req_obj.Request_ID)
-    extra_headers.update(nixl_headers_for_request(req_obj))
+    extra_headers.update(get_connector_manager().headers(req_obj))
 
     # 定义一个 async 生成器，从下游流式读取，再回给上游
     async def iter_upstream():
         start_time = time.perf_counter()
         response_body = b""
-        # forward_request 本身是一个 async generator
-        async for content in forward_request(
-                url=downstream_url,
-                data=data_for_downstream,
-                use_chunked=False,  # chat/completions 一般是流式
-                extra_headers=extra_headers,  # 透传必要头
-        ):
-            response_body += content
-            # 这里 chunk 已经是 bytes，直接 yield 出去即可
-            yield content
-        _log_non_stream_slo_trace(req_obj, start_time, response_body)
+        try:
+            async for content in forward_request(
+                    url=downstream_url,
+                    data=data_for_downstream,
+                    use_chunked=False,
+                    extra_headers=extra_headers,
+            ):
+                response_body += content
+                yield content
+            _log_non_stream_slo_trace(req_obj, start_time, response_body)
+        finally:
+            get_connector_manager().close_session(
+                req_obj.Task.connector_session_id
+            )
 
     # 用 StreamingResponse 包一层，实现用户侧的流式响应
     return StreamingResponse(iter_upstream(), media_type="application/json")

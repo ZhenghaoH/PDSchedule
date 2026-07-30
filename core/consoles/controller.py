@@ -3,7 +3,6 @@ import sys
 from fastapi import FastAPI
 from core.schemas.cmd import BaseCommand
 from core.commands.controller.show import do_show_pool_id
-from core.commands.controller.pair import do_pair_pd
 
 
 if sys.platform == 'win32':
@@ -23,7 +22,7 @@ else:
         readline = None
 
 # 指令补全
-completion_words = ["history", "quit", "exit", "clear", "cls", "show", "pool_id", "pair", "pd", "switch", "scheduler"]
+completion_words = ["history", "quit", "exit", "clear", "cls", "show", "pool_id", "switch", "scheduler"]
 history = []
 
 
@@ -68,7 +67,6 @@ def info():
     """展示命令信息"""
     print("  - show pool_id         : 显示推理池ID")
     print("  - show scheduler       : 显示Controller路由模式或全局调度策略")
-    print("  - pair pd -p <p> -d <d>: 配对PD池")
     print("  - switch scheduler -m <mode>: 切换全局调度策略（可用项见 show scheduler）")
     print("  - history              : 查看历史记录")
     print("  - clear / cls          : 清空屏幕")
@@ -136,10 +134,6 @@ def run_scheduler_cli(app: FastAPI, server: "object") -> None:
                 print("[CLI] Global scheduler is not initialized.")
             else:
                 print(f"[CLI] Controller routing: {scheduler.routing_status()}")
-
-        # 实例配对指令
-        elif cmd == BaseCommand("pair", "pd"):
-            do_pair_pd(cmd.params)
 
         # 切换调度策略
         elif cmd == BaseCommand("switch", "scheduler"):

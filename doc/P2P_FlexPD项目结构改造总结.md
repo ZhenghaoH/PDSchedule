@@ -1,4 +1,8 @@
-# P2P_FlexPD NIXL 动态跨池 PD 配对改造总结
+# P2P_FlexPD NIXL 动态跨池 PD 配对改造总结（历史）
+
+> 本文记录旧 NIXL 专用请求结构，不代表当前 API。当前实现使用
+> `connectors/` 协议层以及通用 `connector_session_id` /
+> `connector_context`；旧 NIXL Task 字段和 `/pd/pair` 链路已经删除。
 
 `P2P_FlexPD` 当前主链路已经从基于 `P2pNcclConnector` 的地址编码式 P2P KV 传输，切换为基于 vLLM `NixlConnector` 的 `kv_transfer_params` 传递式 PD 分离链路。
 

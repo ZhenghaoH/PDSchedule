@@ -19,17 +19,16 @@ class LeastLoadStrategy:
         resources: ResourceSnapshot,
     ) -> GlobalScheduleDecision:
         del context
-        if not resources.prefill_pools or not resources.decode_pools:
-            raise ValueError("Nodes list is empty")
+        if not resources.compatible_pairs:
+            raise ValueError("No connector-compatible P/D gateway pair")
 
         with self._lock:
-            selected_prefill = min(
-                resources.prefill_pools,
-                key=lambda pool: getattr(pool, "current_load", 0.0),
-            )
-            selected_decode = min(
-                resources.decode_pools,
-                key=lambda pool: getattr(pool, "current_load", 0.0),
+            selected_prefill, selected_decode = min(
+                resources.compatible_pairs,
+                key=lambda pair: (
+                    getattr(pair[0], "current_load", 0.0),
+                    getattr(pair[1], "current_load", 0.0),
+                ),
             )
             prefill_loads = [
                 (pool.pool_id, getattr(pool, "current_load", 0.0))
@@ -54,4 +53,6 @@ class LeastLoadStrategy:
             decode_address=selected_decode.proxy_ip_address,
             decode_port=selected_decode.proxy_port,
             strategy=self.name,
+            connector=selected_prefill.connector["name"],
+            connector_descriptor=selected_prefill.connector,
         )

@@ -352,7 +352,7 @@ if __name__ == "__main__":
             print(f"{test_cmd} -> 无匹配")
 
     print("\n================列表参数")
-    cmd = BaseCommand.build_cmd("connect mooncake --list=1,2,3,4,5")  # 逗号不能加空格
+    cmd = BaseCommand.build_cmd("connect backend --list=1,2,3,4,5")  # 逗号不能加空格
     print(cmd.main_cmd)
     print(f"解析结果: {cmd}")
     print(f"  主命令: {cmd.main_cmd}")

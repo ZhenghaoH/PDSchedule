@@ -8,11 +8,7 @@ from proxy.forward import forward_request_json
 from proxy.forward import forward_request_trace as forward_request
 from proxy.sync import RequestBatcher
 from store.gateway.manager import GatewayStoreManager
-from utils.nixl_request import (
-    build_nixl_prefill_payload,
-    extract_kv_transfer_params,
-    nixl_headers_for_request,
-)
+from connectors.manager import get_connector_manager
 
 
 request_batcher = RequestBatcher()
@@ -106,61 +102,66 @@ async def _release_prefill_when_done(generator, request: BaseRequest):
         request_batcher.scheduler_mgr.on_request_finished(request)
 
 
-def _bind_prefill_nixl_metadata(
+def _bind_prefill_connector(
     storage: GatewayStoreManager, request: BaseRequest, selected_prefill: str
 ) -> None:
-    meta = storage.get_nixl_metadata(selected_prefill)
+    meta = storage.get_connector_metadata(selected_prefill)
     if not meta:
         raise HTTPException(
             status_code=503,
-            detail=f"Missing NIXL metadata for prefill instance {selected_prefill}",
+            detail=f"Missing connector metadata for prefill instance {selected_prefill}",
         )
-    if meta.get("connector") != "NixlConnector" or meta.get("role") != "prefill":
+    descriptor = meta.get("descriptor") or {}
+    if (
+        meta.get("role") != "prefill"
+        or descriptor.get("name") != request.Task.pd_connector
+    ):
         raise HTTPException(
             status_code=503,
-            detail=f"Invalid prefill NIXL metadata for {selected_prefill}: {meta}",
+            detail=f"Invalid prefill connector metadata for {selected_prefill}: {meta}",
         )
 
-    request.Task.prefill_tp_size = int(meta.get("tp_size") or 0)
-    request.Task.prefill_side_channel_addr = storage.get_side_channel_addr(selected_prefill)
+    request.Task.connector_context["prefill_endpoint"] = meta
 
 
 async def _handle_pd_request(request: BaseRequest, endpoint_type: str):
     storage = GatewayStoreManager()
     if storage.USE_SYN:
-        batch_result = await request_batcher.add_nixl_prefill_request(request)
+        batch_result = await request_batcher.add_connector_prefill_request(request)
         if batch_result.get("error"):
             raise HTTPException(
                 status_code=batch_result.get("status_code", 500),
                 detail=batch_result["error"],
             )
         if not batch_result.get("success", True):
-            raise HTTPException(status_code=500, detail="NIXL prefill batch failed")
+            raise HTTPException(status_code=500, detail="Connector prefill batch failed")
 
         kv_transfer_params = batch_result.get("kv_transfer_params")
-        if not isinstance(kv_transfer_params, dict) or not kv_transfer_params:
+        if (
+            request.Task.pd_connector == "nixl"
+            and (not isinstance(kv_transfer_params, dict) or not kv_transfer_params)
+        ):
             raise HTTPException(
                 status_code=502,
-                detail="NIXL prefill batch result does not contain kv_transfer_params",
+                detail="Connector prefill batch result does not contain transfer context",
             )
         request.Task.prefill_instance = batch_result.get(
             "instance", request.Task.prefill_instance
         )
-        request.Task.nixl_kv_transfer_params = kv_transfer_params
+        request.Task.connector_context["kv_transfer_params"] = kv_transfer_params
     else:
         selected_prefill = await _select_prefill_instance(storage, request)
         try:
-            _bind_prefill_nixl_metadata(storage, request, selected_prefill)
+            _bind_prefill_connector(storage, request, selected_prefill)
 
-            prefill_payload = build_nixl_prefill_payload(request)
+            connector_manager = get_connector_manager()
+            prefill_payload = connector_manager.build_prefill_payload(request)
             prefill_response = await forward_request_json(
                 f"http://{selected_prefill}/v1/{endpoint_type}",
                 prefill_payload,
-                extra_headers=nixl_headers_for_request(request),
+                extra_headers=connector_manager.headers(request),
             )
-            request.Task.nixl_kv_transfer_params = extract_kv_transfer_params(
-                prefill_response
-            )
+            connector_manager.bind_prefill_result(request, prefill_response)
         finally:
             request_batcher.scheduler_mgr.on_request_finished(request)
 
@@ -175,7 +176,7 @@ async def _handle_pd_request(request: BaseRequest, endpoint_type: str):
         slo_sec=request.Service.SLO_TTFT / 1000.0,
         request_id=request.Request_ID,
         stats_callback=request_batcher.monitor_engine.handle_ttft_stats,
-        extra_headers=nixl_headers_for_request(request),
+        extra_headers=get_connector_manager().headers(request),
     )
     return StreamingResponse(decode_generator)
 

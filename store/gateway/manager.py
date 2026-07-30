@@ -5,7 +5,7 @@ import os
 import time
 
 from .instance import Instance
-from .link import InstanceLink
+from connectors.manager import get_connector_manager
 
 
 class GatewayStoreManager:
@@ -40,11 +40,15 @@ class GatewayStoreManager:
                     self._prefill_objs = []  # prefill 池或实例
                     self._decode_objs = []  # decode 池或实例
                     self._instance_table: Dict[str, Instance] = {}
-                    self._link_table: Dict[str, InstanceLink] = {}  # 实例配对路由表
                     self._data_lock = threading.RLock()  # 数据操作锁
 
                     self._pool_id: Optional[int] = None
                     self._network_register_table: List[str] = []
+                    self.connector = {
+                        "name": "nixl",
+                        "version": "1",
+                        "metadata": {},
+                    }
 
                     self.host = "127.0.0.1"  # 临时存储 主机host
                     self.port = 8081  # 临时存储 主机监听端口
@@ -106,6 +110,15 @@ class GatewayStoreManager:
     def get_pool_id(self):
         with self._data_lock:
             return self._pool_id
+
+    def set_connector(self, descriptor):
+        validated = get_connector_manager().validate(descriptor)
+        with self._data_lock:
+            self.connector = validated.to_dict()
+
+    def get_connector(self):
+        with self._data_lock:
+            return deepcopy(self.connector)
 
     def register_ttft_predictor(self, predict_func: Callable[[int, int], Awaitable[float]]):
         """Register the in-process TTFT predictor used by synchronous scheduling."""
@@ -532,22 +545,33 @@ class GatewayStoreManager:
         self,
         instance_ip: str,
         role: str,
-        connector: str,
-        side_channel_host: str,
-        side_channel_port: int,
-        tp_size: int,
+        connector: Dict[str, Any],
         vllm_port: int = 0,
         gpu_indices: Optional[List[int]] = None,
     ) -> Instance:
-        """Register or idempotently refresh an instance and its NIXL identity."""
+        """Register an instance while enforcing one connector per Pool."""
         if role not in {"prefill", "decode"}:
             raise ValueError(f"Unsupported instance role: {role}")
-        if not instance_ip or not side_channel_host:
-            raise ValueError("instance_ip and side_channel_host are required")
-        if connector != "NixlConnector":
-            raise ValueError(f"Unsupported connector: {connector}")
-        if int(side_channel_port) <= 0 or int(tp_size) <= 0:
-            raise ValueError("side_channel_port and tp_size must be positive")
+        if not instance_ip:
+            raise ValueError("instance_ip is required")
+        connector_manager = get_connector_manager()
+        descriptor = connector_manager.validate(connector)
+        if descriptor.name == "nixl" and not descriptor.metadata:
+            raise ValueError("nixl instances require side-channel connector metadata")
+        pool_descriptor = connector_manager.validate(self.connector)
+        if (
+            descriptor.name != pool_descriptor.name
+            or descriptor.version != pool_descriptor.version
+        ):
+            raise ValueError(
+                f"instance connector {descriptor.name}:{descriptor.version} "
+                f"does not match pool connector "
+                f"{pool_descriptor.name}:{pool_descriptor.version}"
+            )
+        if descriptor.name == "lmcache" and not connector_manager.compatible(
+            descriptor, pool_descriptor
+        ):
+            raise ValueError("instance LMCache configuration does not match its pool")
 
         with self._data_lock:
             existing = self._instance_table.get(instance_ip)
@@ -557,10 +581,7 @@ class GatewayStoreManager:
                 )
             instance = existing or Instance(instance_ip=instance_ip)
             instance.role = role
-            instance.connector = connector
-            instance.side_channel_host = side_channel_host
-            instance.side_channel_port = int(side_channel_port)
-            instance.tp_size = int(tp_size)
+            instance.connector = descriptor.to_dict()
             instance.vllm_port = int(vllm_port or 0)
             if gpu_indices is not None:
                 normalized_gpu_indices = []
@@ -578,16 +599,10 @@ class GatewayStoreManager:
                 target.append(instance_ip)
             return deepcopy(instance)
 
-    def get_nixl_metadata(self, instance_ip: str) -> Dict[str, Any]:
+    def get_connector_metadata(self, instance_ip: str) -> Dict[str, Any]:
         with self._data_lock:
             instance = self._instance_table.get(instance_ip)
-            return instance.nixl_metadata() if instance else {}
-
-    def get_side_channel_addr(self, instance_ip: str) -> str:
-        meta = self.get_nixl_metadata(instance_ip)
-        host = meta.get("side_channel_host", "")
-        port = meta.get("side_channel_port", 0)
-        return f"{host}:{port}" if host and port else ""
+            return instance.connector_metadata() if instance else {}
 
     @property
     def instance_table(self) -> Dict[str, Any]:
@@ -624,39 +639,8 @@ class GatewayStoreManager:
             self._ensure_distserve_state_locked()
             self._distserve_reservations["prefill"].pop(instance_ip, None)
             self._distserve_reservations["decode"].pop(instance_ip, None)
-            self._remove_instance_links_locked(instance_ip)
             return True
 
-    @property
-    def link_table(self) -> Dict[str, Any]:
-        """获取links的深拷贝"""
-        with self._data_lock:
-            return deepcopy(self._link_table)
-
-    def set_link_table(self, key: str, value: Any):
-        """设置links的特定键值"""
-        with self._data_lock:
-            self._link_table[key] = deepcopy(value)
-
-    def remove_from_link_table(self, key: str):
-        """从link_table中删除指定键"""
-        with self._data_lock:
-            if key in self._link_table:
-                del self._link_table[key]
-
-    def _remove_instance_links_locked(self, instance_ip: str):
-        keys_to_delete = [
-            key for key, link in self._link_table.items()
-            if key == instance_ip
-            or getattr(link, "prefill_instance", "") == instance_ip
-            or getattr(link, "decode_instance", "") == instance_ip
-        ]
-        for key in keys_to_delete:
-            del self._link_table[key]
-
-    def remove_instance_links(self, instance_ip: str):
-        with self._data_lock:
-            self._remove_instance_links_locked(instance_ip)
 
     def get_compute_params(self):
         """获取 GPUtype & FLOPS & memBandwidth & max_prompt_throughput，理论上一个池里每个实例都是一样的"""
@@ -690,25 +674,6 @@ class GatewayStoreManager:
     def get_max_decode_req_num(self):
         """获取 Decode 池级最大 running requests 数。"""
         return max(1, int(self.MAX_DECODE_REQ_NUM))
-
-    def get_peer_links(self):
-        """给出本推理池（Prefill）和对端的推理池（Decode）之间的所有连接"""
-        peer_links = {}
-        for link in self._link_table.values():
-            peer_addr = link.decode_proxy
-            if peer_addr not in peer_links:
-                peer_links[peer_addr] = {
-                    "prefill_ip": link.prefill_proxy.rsplit(":", 1)[0],
-                    "prefill_port": link.prefill_proxy.rsplit(":", 1)[1],
-                    "decode_ip": link.decode_proxy.rsplit(":", 1)[0],
-                    "decode_port": link.decode_proxy.rsplit(":", 1)[1],
-                    "bandwidth": link.network.bottleneck_bandwidth,
-                    "rtt": link.network.round_trip_time,
-                    "count": 1
-                }
-            else:
-                peer_links[peer_addr]["count"] += 1
-        return peer_links
 
     def get_predicted_availability(self, instance_ip: str) -> float:
         """Get the scheduler's predicted available time for an instance."""

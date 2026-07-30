@@ -26,14 +26,13 @@ async def select_instance(raw_request: Request):
     if not _active_decode_instance(storage, instance):
         raise HTTPException(status_code=503, detail="No active decode instance")
 
-    nixl_meta = storage.get_nixl_metadata(instance)
-    if not nixl_meta:
-        raise HTTPException(status_code=503, detail=f"Missing NIXL metadata for decode instance {instance}")
-    if nixl_meta.get("connector") != "NixlConnector" or nixl_meta.get("role") != "decode":
-        raise HTTPException(status_code=503, detail=f"Invalid NIXL metadata for decode instance {instance}: {nixl_meta}")
+    connector = storage.get_connector_metadata(instance)
+    descriptor = connector.get("descriptor") or {}
+    if connector.get("role") != "decode" or descriptor.get("name") != request.Task.pd_connector:
+        raise HTTPException(status_code=503, detail=f"Invalid connector metadata for decode instance {instance}: {connector}")
 
     return {
         "instance": instance,
         "kv_addr": "",
-        "nixl": nixl_meta,
+        "connector": connector,
     }

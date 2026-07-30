@@ -10,7 +10,7 @@ from fastapi import APIRouter
 
 from core.handlers.instance.proxy import create_completion, create_chat_completion
 from core.handlers.instance.metadata import handle_metadata
-from core.handlers.instance.pair import handle_pd_pair, handle_pd_close
+from core.handlers.instance.connector import connector_capabilities
 
 router = APIRouter()
 
@@ -21,6 +21,4 @@ router.post("/v1/chat/completions")(create_chat_completion)
 router.get("/metadata")(handle_metadata)
 router.put("/metadata")(handle_metadata)
 router.delete("/metadata")(handle_metadata)
-
-router.post("/pd/pair")(handle_pd_pair)
-router.post("/pd/close")(handle_pd_close)
+router.get("/connectors")(connector_capabilities)

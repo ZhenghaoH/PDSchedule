@@ -39,20 +39,11 @@ class Instance:
     network_metric: Dict[str, Any] = field(default_factory=dict)
     online: bool = False
     role: str = ""
-    connector: str = ""
-    side_channel_host: str = ""
-    side_channel_port: int = 0
-    tp_size: int = 0
+    connector: Dict[str, Any] = field(default_factory=dict)
     vllm_port: int = 0
 
-    def nixl_metadata(self) -> Dict[str, Any]:
-        return {
-            "connector": self.connector,
-            "role": self.role,
-            "side_channel_host": self.side_channel_host,
-            "side_channel_port": self.side_channel_port,
-            "tp_size": self.tp_size,
-        }
+    def connector_metadata(self) -> Dict[str, Any]:
+        return {"role": self.role, "descriptor": dict(self.connector)}
 
     def __post_init__(self):
         if self.predicted_available_time <= 0:

@@ -5,6 +5,7 @@ from fastapi.responses import StreamingResponse
 from proxy.forward import forward_request
 from store.instance.store import InstanceStore
 from instance.simulator.mock_resp import mock_chat, mock_completion
+from connectors.manager import get_connector_manager
 
 
 async def handle_completion_request(raw_request: Request, endpoint_type: str):
@@ -22,10 +23,9 @@ async def handle_completion_request(raw_request: Request, endpoint_type: str):
         else:
             return mock_chat(request_json)
 
-    extra_headers = {}
-    nixl_request_id = raw_request.headers.get("X-Request-Id")
-    if nixl_request_id:
-        extra_headers["X-Request-Id"] = nixl_request_id
+    descriptor = get_connector_manager().validate(storage.connector)
+    adapter = get_connector_manager().registry.get(descriptor.name)
+    extra_headers = adapter.forward_headers(raw_request.headers)
     try:
         generator = forward_request(
                 f"http://{storage.vllm_addr()}/v1/{endpoint_type}",

@@ -17,7 +17,8 @@ def prefill_compute_register():
         "proxy_port": storage.port,
         "flops": flops,
         "GPU_type": gpu_type,
-        "max_prompt_throughput": max_prompt_throughput
+        "max_prompt_throughput": max_prompt_throughput,
+        "connector": storage.get_connector(),
     }
 
     logging.info(f"[Node] 正在发起注册...")
@@ -96,6 +97,7 @@ def decode_compute_register():
         "mem_bandwidth": mem_bandwidth,
         "GPU_type": gpu_type,
         "max_decode_req_num": max_decode_req_num,
+        "connector": storage.get_connector(),
     }
 
     logging.info(f"[Node] 正在发起注册...")

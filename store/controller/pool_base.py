@@ -27,6 +27,13 @@ class BasePool:
     current_load: float = 0.0
     last_updated: float = field(default_factory=time.time)
     GPU_type: str = ""
+    connector: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "name": "nixl",
+            "version": "1",
+            "metadata": {},
+        }
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         """通用序列化方法"""

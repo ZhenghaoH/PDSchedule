@@ -2,7 +2,7 @@
 
 # 简介
 
-**FlexPD** 是一种基于**vLLM**、**LMCache**和**Mooncake**开发的LLM推理任务调度平台，专注于实现 Prefill 阶段与 Decode 阶段的算力分离与灵活配对。在大语言模型推理过程中，Prefill 阶段需要高并行计算能力且耗时较短，而 Decode 阶段则需持续占用计算资源但算力需求相对较低；传统静态调度方式常导致两阶段资源争抢或利用率不足，难以有效利用分布式的零散算力。为此，FlexPD 设计了一套轻量级调度算法，能够实时感知可用的 Prefill 与 Decode 算力资源，并根据任务队列长度、模型结构、输入输出长度等特征，动态将两阶段计算任务匹配至合适的算力节点。该系统通过解耦并灵活配对 Prefill 与 Decode 算力，显著提升异构算力资源的整体利用率，支持在分布式环境下实现更低延迟、更高吞吐的大语言模型推理服务。
+**PDSchedule** 是一种基于 **vLLM** 的 LLM Prefill/Decode 分离推理调度平台。系统实时感知 P/D Gateway Pool 与池内实例状态，通过分层调度动态选择 Prefill 和 Decode 资源，并由统一 Connector 协议负责底层 KV 传输协商；首期运行时 Connector 仅支持 **NIXL** 与 **LMCache**。
 
 # 架构
 
@@ -24,7 +24,6 @@
 - vLLM 0.13.0
 - LMCache 3.11
 - Pytorch 2.9.1
-- Mooncake 0.3.8 (可选)
 
 此外还需要一个Redis容器环境，点击 [这里](./doc/docker/Redis安装笔记.md) 查看环境安装相关记录：
 
@@ -34,9 +33,7 @@
 
 此项目在 vLLM PD分离方案的基础上进行推理池和推理实例的选择与动态配对，点击 [这里](./doc/PD分离案例.md) 查看PD分离基础案例。
 
-此项目的旧版本使用基于MooncakeP2PConnector的PD分离方案，点击 [这里](./doc/Mooncake版本.md) 查看旧版本快速开始说明。
-
-当前版本使用基于LMCacheConnectorV1的PD分离方案，以下指令为在 **实验室8卡5090机器** 上的启动指令：
+当前运行时配对协议仅支持 NIXL 与 LMCache；Mooncake 相关材料作为历史部署资料保留，不属于首期运行时 Connector。以下指令为在 **实验室8卡5090机器** 上的启动指令：
 
 ### 1 启动环境
 
@@ -77,7 +74,7 @@ redis-cli info memory | grep used_memory_human
 
 `config/ADDRESS_CONFIG.py` 只保存公共默认端口，不保存机器拓扑。各模块的 IP、上级服务地址、实例列表和 NIXL 参数通过启动参数或 `FLEXPD_*` / `VLLM_NIXL_*` 环境变量提供。实例启动后会向所属网关动态注册；部署新机器时无需复制或修改 Python 地址配置。
 
-主要启动参数包括 `--host`、`--port`、`--controller`、`--gateway`、`--prefill`、`--decode`、`--side-channel-host`、`--side-channel-port` 和 `--tp-size`。可参考 `run_166.sh`、`run_167.sh`、`run_169.sh`、`run_170.sh`。
+主要启动参数包括 `--host`、`--port`、`--controller`、`--gateway`、`--prefill`、`--decode`、`--connector-name`、`--connector-version` 和 `--connector-metadata`。可参考 `run_166.sh`、`run_167.sh`、`run_169.sh`、`run_170.sh`。
 
 Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `slo_aware_prefill`、`jsq` 或 `round_robin`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generation_throughput` 或 `slo_aware_decode`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。systemd、nohup 或无 TTY 容器部署时请增加 `--no-cli`。
 
@@ -112,13 +109,23 @@ P/D 网关会在项目根目录自动创建 `gateway_logs/`，并将三类日志
 实例代理使用 `--gpu-indices` 声明其对应的物理 GPU，TP 实例使用逗号分隔，例如：
 
 ```bash
-python entrypoints/instanceP.py ... --tp-size 2 --gpu-indices 0,1
-python entrypoints/instanceD.py ... --tp-size 1 --gpu-indices 2
+python entrypoints/instanceP.py ... --connector-name nixl \
+  --connector-metadata '{"side_channel_host":"10.0.0.1","side_channel_port":5557,"tp_size":2}' \
+  --gpu-indices 0,1
+python entrypoints/instanceD.py ... --connector-name nixl \
+  --connector-metadata '{"side_channel_host":"10.0.0.2","side_channel_port":5558,"tp_size":1}' \
+  --gpu-indices 2
 ```
 
 时间日志中的 `observed_network_transfer_ms` 是 D 网关从向 D 实例发出请求到收到首个响应 chunk 的可观测时间，包含 NIXL KV 拉取、vLLM 接纳/内部排队和首 token 计算，并非纯链路传输时间。网关排队时间只统计网关可直接观测的等待，不伪造 vLLM 内部阶段。
 
 交互式网关 CLI 支持上下方向键查看历史，并支持 Tab 自动补全命令和当前网关可用的调度策略。
+
+#### Connector 协议与 Pool 约束
+
+每个 P Gateway 或 D Gateway Pool 只能配置一个 Connector，所属实例必须使用同名、同版本 Connector；LMCache 实例还必须使用相同的 `backend`、`namespace` 和 `config_fingerprint`。不同 Pool 可以分别使用 NIXL 或 LMCache。Controller 先构造 Connector 兼容的 P/D Pool 候选，再运行全局调度策略；同一次 PD 会话不支持跨 Connector 桥接。
+
+NIXL 使用 `request_scoped` 会话并在通用 `connector_context` 中携带请求 ID 与 `kv_transfer_params`。LMCache 使用 `shared_backend` 逻辑会话，只校验共享后端配置，不发起远程配对 RPC。服务可通过 `GET /connectors` 查看能力，Gateway 还提供 `/connector/sessions` 会话管理接口。旧 `/pd/pair` 与 `/pd/close` 已删除。
 
 #### 单 P/D 网关自动直连
 

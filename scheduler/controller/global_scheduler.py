@@ -86,6 +86,32 @@ class GlobalScheduler:
     def uses_single_gateway_route(self) -> bool:
         return self._uses_single_gateway_route(self.resource_state.snapshot())
 
+    def validate_cached_route(self, route: Dict[str, Any]) -> bool:
+        snapshot = self.resource_state.snapshot()
+        prefill = next(
+            (
+                pool for pool in snapshot.prefill_pools
+                if pool.proxy_ip_address == route.get("P_proxy_addr")
+                and pool.proxy_port == route.get("P_proxy_port")
+            ),
+            None,
+        )
+        decode = next(
+            (
+                pool for pool in snapshot.decode_pools
+                if pool.proxy_ip_address == route.get("D_proxy_addr")
+                and pool.proxy_port == route.get("D_proxy_port")
+            ),
+            None,
+        )
+        return bool(
+            prefill
+            and decode
+            and (prefill, decode) in snapshot.compatible_pairs
+            and route.get("PD_connector") == prefill.connector.get("name")
+            and route.get("PD_connector_descriptor") == prefill.connector
+        )
+
     def routing_status(self) -> str:
         snapshot = self.resource_state.snapshot()
         if not snapshot.prefill_pools or not snapshot.decode_pools:
@@ -129,6 +155,10 @@ class GlobalScheduler:
         if self._uses_single_gateway_route(snapshot):
             prefill = snapshot.prefill_pools[0]
             decode = snapshot.decode_pools[0]
+            if (prefill, decode) not in snapshot.compatible_pairs:
+                raise RuntimeError(
+                    "The only active P/D gateways use incompatible connectors."
+                )
             print(
                 "[GlobalScheduler] Single P/D gateway topology detected; "
                 f"direct route P{prefill.pool_id}"
@@ -141,6 +171,8 @@ class GlobalScheduler:
                 "P_proxy_port": prefill.proxy_port,
                 "D_proxy_addr": decode.proxy_ip_address,
                 "D_proxy_port": decode.proxy_port,
+                "PD_connector": prefill.connector["name"],
+                "PD_connector_descriptor": prefill.connector,
             }
 
         token_length = getattr(prompt_obj, "token_length", 0)

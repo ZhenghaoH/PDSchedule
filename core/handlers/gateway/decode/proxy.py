@@ -10,7 +10,7 @@ from proxy.batcher import RequestBatcher
 from proxy.forward import forward_request
 from scheduler.gateway.decode.manager import SchedulerManager
 from store.gateway.manager import GatewayStoreManager
-from utils.nixl_request import build_nixl_decode_payload, nixl_headers_for_request
+from connectors.manager import get_connector_manager
 from utils.gateway_observability import (
     build_end_to_end_timing,
     get_gateway_observer,
@@ -218,23 +218,25 @@ async def _select_decode_instance(storage: GatewayStoreManager, request: BaseReq
     return selected_decode
 
 
-def _bind_and_validate_nixl_metadata(
+def _bind_and_validate_connector(
     storage: GatewayStoreManager, request: BaseRequest, selected_decode: str
 ) -> None:
     prefill_instance = getattr(request.Task, "prefill_instance", "")
-    prefill_side_channel_addr = getattr(request.Task, "prefill_side_channel_addr", "")
-    prefill_tp_size = int(getattr(request.Task, "prefill_tp_size", 0) or 0)
-    decode_meta = storage.get_nixl_metadata(selected_decode)
+    prefill_meta = request.Task.connector_context.get("prefill_endpoint")
+    decode_meta = storage.get_connector_metadata(selected_decode)
 
-    if not prefill_instance or not prefill_side_channel_addr or prefill_tp_size <= 0:
-        raise HTTPException(status_code=503, detail=f"Missing NIXL metadata for prefill instance {prefill_instance}")
+    if not prefill_instance or not prefill_meta:
+        raise HTTPException(status_code=503, detail=f"Missing connector metadata for prefill instance {prefill_instance}")
     if not decode_meta:
-        raise HTTPException(status_code=503, detail=f"Missing NIXL metadata for decode instance {selected_decode}")
-    if decode_meta.get("connector") != "NixlConnector" or decode_meta.get("role") != "decode":
-        raise HTTPException(status_code=503, detail=f"Invalid decode NIXL metadata: {decode_meta}")
-
-    request.Task.decode_tp_size = int(decode_meta.get("tp_size") or 0)
-    request.Task.decode_side_channel_addr = storage.get_side_channel_addr(selected_decode)
+        raise HTTPException(status_code=503, detail=f"Missing connector metadata for decode instance {selected_decode}")
+    descriptor = decode_meta.get("descriptor") or {}
+    if decode_meta.get("role") != "decode" or descriptor.get("name") != request.Task.pd_connector:
+        raise HTTPException(status_code=503, detail=f"Invalid decode connector metadata: {decode_meta}")
+    if not get_connector_manager().compatible(
+        prefill_meta.get("descriptor"), descriptor
+    ):
+        raise HTTPException(status_code=503, detail="Selected instances use incompatible connectors")
+    request.Task.connector_context["decode_endpoint"] = decode_meta
 
 
 async def handle_completion_request(raw_request: Request, endpoint_type: str):
@@ -263,8 +265,8 @@ async def handle_completion_request(raw_request: Request, endpoint_type: str):
 
         selected_decode = await _select_decode_instance(storage, request)
         if request.Service.Enable_PD_Disaggregation:
-            _bind_and_validate_nixl_metadata(storage, request, selected_decode)
-            request_payload = build_nixl_decode_payload(request)
+            _bind_and_validate_connector(storage, request, selected_decode)
+            request_payload = get_connector_manager().build_decode_payload(request)
         else:
             request_payload = BaseRequest.to_vllm_payload(request)
 
@@ -272,7 +274,7 @@ async def handle_completion_request(raw_request: Request, endpoint_type: str):
             generator = forward_request(
                 f"http://{selected_decode}/v1/{endpoint_type}",
                 request_payload,
-                extra_headers=nixl_headers_for_request(request),
+                extra_headers=get_connector_manager().headers(request),
             )
             storage.add_decode_active_request(selected_decode, request)
             generator = _track_decode_stream(

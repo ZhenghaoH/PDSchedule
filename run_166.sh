@@ -106,14 +106,14 @@ case "$MODE" in
 
         echo -e "\033[36m=== [5/6] Start Decode Instance Proxy 1 ===\033[0m"
         cd /workspace/llm-stack/PDSchedule/entrypoints
-        python3 instanceD.py --host 172.18.0.166 --port 7001 --vllm_port 8001 --gateway 172.18.0.166:8082 --side-channel-host 172.18.0.166 --side-channel-port 5557 --tp-size 1
+        python3 instanceD.py --host 172.18.0.166 --port 7001 --vllm_port 8001 --gateway 172.18.0.166:8082 --connector-name nixl --connector-metadata '{"side_channel_host":"172.18.0.166","side_channel_port":5557,"tp_size":1}'
         ;;
     "id2")
         wait_for_loading 55 "Decode Instance 2"
 
         echo -e "\033[36m=== [6/6] Start Decode Instance Proxy 2 ===\033[0m"
         cd /workspace/llm-stack/PDSchedule/entrypoints
-        python3 instanceD.py --host 172.18.0.166 --port 7002 --vllm_port 8002 --gateway 172.18.0.166:8082 --side-channel-host 172.18.0.166 --side-channel-port 5558 --tp-size 1
+        python3 instanceD.py --host 172.18.0.166 --port 7002 --vllm_port 8002 --gateway 172.18.0.166:8082 --connector-name nixl --connector-metadata '{"side_channel_host":"172.18.0.166","side_channel_port":5558,"tp_size":1}'
         ;;
 esac
 echo "--------------------------------------------------------"

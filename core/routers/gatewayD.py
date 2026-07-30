@@ -10,8 +10,13 @@ from fastapi import APIRouter
 
 from core.handlers.gateway.decode.proxy import create_completion, create_chat_completion
 from core.handlers.gateway.decode.update import register_instance, update_instance_metric, unregister_instance
-from core.handlers.gateway.decode.pair import handle_pd_pair, handle_pd_close
 from core.handlers.gateway.decode.select_instance import select_instance
+from core.handlers.gateway.connector import (
+    close_connector_session,
+    connector_capabilities,
+    create_connector_session,
+    get_connector_session,
+)
 
 router = APIRouter()
 
@@ -23,6 +28,8 @@ router.post("/instance/register")(register_instance)
 router.post("/instance/update")(update_instance_metric)
 router.post("/instance/unregister")(unregister_instance)
 
-router.post("/pd/pair")(handle_pd_pair)
-router.post("/pd/close")(handle_pd_close)
 router.post("/pd/select_instance")(select_instance)
+router.get("/connectors")(connector_capabilities)
+router.post("/connector/sessions")(create_connector_session)
+router.get("/connector/sessions/{session_id}")(get_connector_session)
+router.delete("/connector/sessions/{session_id}")(close_connector_session)

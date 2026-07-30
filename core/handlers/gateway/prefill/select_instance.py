@@ -30,16 +30,15 @@ async def select_instance(raw_request: Request):
         raise HTTPException(status_code=503, detail="No active prefill instance")
 
     try:
-        nixl_meta = storage.get_nixl_metadata(instance)
-        if not nixl_meta:
-            raise HTTPException(status_code=503, detail=f"Missing NIXL metadata for prefill instance {instance}")
-        if nixl_meta.get("connector") != "NixlConnector" or nixl_meta.get("role") != "prefill":
-            raise HTTPException(status_code=503, detail=f"Invalid NIXL metadata for {instance}: {nixl_meta}")
+        connector = storage.get_connector_metadata(instance)
+        descriptor = connector.get("descriptor") or {}
+        if connector.get("role") != "prefill" or descriptor.get("name") != request.Task.pd_connector:
+            raise HTTPException(status_code=503, detail=f"Invalid connector metadata for {instance}: {connector}")
 
         return {
             "instance": instance,
             "kv_addr": "",
-            "nixl": nixl_meta,
+            "connector": connector,
         }
     finally:
         # This endpoint returns an advisory target and does not own the

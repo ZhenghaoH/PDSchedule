@@ -21,6 +21,7 @@ temp_script.sh
 /publish.cmd
 /sync.sh
 /test/test_sync_script.py
+/simulator/
 
 .DS_Store
 Thumbs.db

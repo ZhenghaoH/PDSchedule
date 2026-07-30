@@ -17,7 +17,7 @@ from utils.kv_transfer import estimate_qwen25_7b_kv_transfer_bytes, estimate_tra
 
 
 GLOBAL_SCHEDULE_LOG_PATH = Path(__file__).resolve().parents[2] / "global_schedule.log"
-PROFILE_ROOT = Path(__file__).resolve().parents[2] / "simulator" / "profile"
+PROFILE_ROOT = Path(__file__).resolve().parents[2] / "profile" / "controller"
 
 
 def _emit_debug_log(text: str) -> None:

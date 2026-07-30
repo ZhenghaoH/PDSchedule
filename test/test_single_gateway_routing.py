@@ -16,6 +16,10 @@ if "fastapi" not in sys.modules:
 
 from core.schemas.request import BaseRequest, Prompt, Service, Task
 from scheduler.controller.global_scheduler import GlobalScheduler
+from scheduler.controller.scheduler_AdaptiveVariance import (
+    PROFILE_ROOT,
+    AdaptiveVarianceScheduler,
+)
 from store.controller.pool_base import DecodePool, PrefillPool, PoolType
 from utils.nixl_request import build_nixl_decode_payload, build_nixl_prefill_payload
 
@@ -203,6 +207,32 @@ class SingleGatewaySchedulerTest(unittest.TestCase):
         self.assertEqual(request.Task.P_proxy_addr, "10.0.0.1")
         self.assertEqual(request.Task.D_proxy_addr, "10.0.0.2")
         self.assertEqual(affinity_store[("user", "session")]["P_proxy_addr"], "old-prefill")
+
+
+class AdaptiveVarianceProfileTest(unittest.TestCase):
+    def test_runtime_profiles_are_independent_from_root_simulator(self):
+        self.assertEqual(PROFILE_ROOT, ROOT_DIR / "profile" / "controller")
+        self.assertNotIn("simulator", PROFILE_ROOT.parts)
+
+        expected_profiles = (
+            ("166", "tpot"),
+            ("167", "ttft"),
+            ("169", "tpot"),
+            ("169", "ttft"),
+            ("170", "tpot"),
+            ("170", "ttft"),
+        )
+        scheduler = AdaptiveVarianceScheduler(num_particles=2, max_iterations=1)
+        for machine_id, kind in expected_profiles:
+            with self.subTest(machine_id=machine_id, kind=kind):
+                self.assertTrue(scheduler._profile_path(machine_id, kind).is_file())
+
+        self.assertIsNotNone(
+            scheduler._load_ttft_profile(make_prefill(1, "172.18.0.167", 8081))
+        )
+        self.assertIsNotNone(
+            scheduler._load_tpot_profile(make_decode(201, "172.18.0.166", 8082))
+        )
 
 
 class SchedulerMetadataTest(unittest.TestCase):

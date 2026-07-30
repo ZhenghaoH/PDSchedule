@@ -16,10 +16,11 @@ if "fastapi" not in sys.modules:
 
 from core.schemas.request import BaseRequest, Prompt, Service, Task
 from scheduler.controller.global_scheduler import GlobalScheduler
-from scheduler.controller.scheduler_AdaptiveVariance import (
+from scheduler.controller.strategies.demand_aware import (
+    DemandAwareStrategy,
     PROFILE_ROOT,
-    AdaptiveVarianceScheduler,
 )
+from scheduler.controller.strategy import GlobalScheduleDecision
 from store.controller.pool_base import DecodePool, PrefillPool, PoolType
 from utils.nixl_request import build_nixl_decode_payload, build_nixl_prefill_payload
 
@@ -86,7 +87,10 @@ class SingleGatewaySchedulerTest(unittest.TestCase):
     def test_single_gateway_routes_directly_without_network_or_strategy(self):
         scheduler = make_scheduler([self.prefill], [self.decode])
         strategy = Mock()
-        scheduler.strategies[scheduler.current_mode] = strategy
+        scheduler.strategy_manager.replace_strategy(
+            scheduler.current_mode,
+            strategy,
+        )
 
         result = scheduler.schedule(Mock(), Mock(), 1)
 
@@ -119,9 +123,15 @@ class SingleGatewaySchedulerTest(unittest.TestCase):
             [self.decode, make_decode(202, "10.0.0.4", 8084)],
         )
         strategy = Mock()
-        strategy.schedule.return_value = ("10.0.0.3", 8083, "10.0.0.4", 8084)
-        scheduler.strategies["random"] = strategy
-        self.assertTrue(scheduler.switch_mode("random"))
+        strategy.schedule.return_value = GlobalScheduleDecision(
+            "10.0.0.3",
+            8083,
+            "10.0.0.4",
+            8084,
+            "round_robin",
+        )
+        scheduler.strategy_manager.replace_strategy("round_robin", strategy)
+        self.assertTrue(scheduler.switch_mode("round_robin"))
 
         result = scheduler.schedule(Mock(), Mock(), 2)
 
@@ -141,9 +151,15 @@ class SingleGatewaySchedulerTest(unittest.TestCase):
         ]
         scheduler = make_scheduler(active_prefills, active_decodes)
         strategy = Mock()
-        strategy.schedule.return_value = ("10.0.0.3", 8083, "10.0.0.4", 8084)
-        scheduler.strategies["random"] = strategy
-        scheduler.switch_mode("random")
+        strategy.schedule.return_value = GlobalScheduleDecision(
+            "10.0.0.3",
+            8083,
+            "10.0.0.4",
+            8084,
+            "round_robin",
+        )
+        scheduler.strategy_manager.replace_strategy("round_robin", strategy)
+        scheduler.switch_mode("round_robin")
 
         scheduler.schedule(Mock(), Mock(), 1)
         self.assertEqual(strategy.schedule.call_count, 1)
@@ -169,8 +185,8 @@ class SingleGatewaySchedulerTest(unittest.TestCase):
     def test_strategy_can_switch_while_single_gateway_route_is_active(self):
         scheduler = make_scheduler([self.prefill], [self.decode])
 
-        self.assertTrue(scheduler.switch_mode("random"))
-        self.assertEqual(scheduler.current_mode, "random")
+        self.assertTrue(scheduler.switch_mode("round_robin"))
+        self.assertEqual(scheduler.current_mode, "round_robin")
         result = scheduler.schedule(Mock(), Mock(), 1)
         self.assertEqual(result["P_proxy_addr"], self.prefill.proxy_ip_address)
 
@@ -209,7 +225,7 @@ class SingleGatewaySchedulerTest(unittest.TestCase):
         self.assertEqual(affinity_store[("user", "session")]["P_proxy_addr"], "old-prefill")
 
 
-class AdaptiveVarianceProfileTest(unittest.TestCase):
+class DemandAwareProfileTest(unittest.TestCase):
     def test_runtime_profiles_are_independent_from_root_simulator(self):
         self.assertEqual(PROFILE_ROOT, ROOT_DIR / "profile" / "controller")
         self.assertNotIn("simulator", PROFILE_ROOT.parts)
@@ -222,7 +238,7 @@ class AdaptiveVarianceProfileTest(unittest.TestCase):
             ("170", "tpot"),
             ("170", "ttft"),
         )
-        scheduler = AdaptiveVarianceScheduler(num_particles=2, max_iterations=1)
+        scheduler = DemandAwareStrategy(num_particles=2, max_iterations=1)
         for machine_id, kind in expected_profiles:
             with self.subTest(machine_id=machine_id, kind=kind):
                 self.assertTrue(scheduler._profile_path(machine_id, kind).is_file())

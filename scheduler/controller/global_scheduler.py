@@ -1,256 +1,168 @@
-from typing import List, Dict, Any, Tuple
+from types import MappingProxyType
+from typing import Any, Dict, Optional, Tuple
 
-
-# --- 导入算网状态 ---
-from store.controller.pool_base import PrefillPool, DecodePool, PoolType
-from store.controller.pool_manager import PoolManager
-from store.controller.network import NetworkManager, Network
-
-# --- 导入调度算法 ---
-from .scheduler_PSO_1 import PSO_Scheduler
-from .scheduler_Random import Random_Scheduler
-from .scheduler_RoundRobin import PairedRoundRobin_Scheduler, RoundRobin_Scheduler
-from .scheduler_LeastLoad import LeastLoad_Scheduler
-from .scheduler_AdaptiveVariance import AdaptiveVarianceScheduler
-
-# --- 导入请求 ---
 from core.schemas.request import Prompt, Service
-# from request import Prompt, Service 
-
-# ====================================================================================
-#                         Global Scheduler (全局调度器)
-# ====================================================================================
+from scheduler.controller.manager import StrategyManager
+from scheduler.controller.resource_state import (
+    ResourceSnapshot,
+    ResourceStateManager,
+)
+from scheduler.controller.strategy import GlobalScheduleContext
+from store.controller.network import NetworkManager
+from store.controller.pool_manager import PoolManager
 
 
 class GlobalScheduler:
+    """Thin controller routing facade over strategy and resource managers."""
+
     def __init__(
         self,
         pool_manager: PoolManager,
         network_manager: NetworkManager,
+        strategy_manager: Optional[StrategyManager] = None,
+        resource_state: Optional[ResourceStateManager] = None,
     ):
-        """
-        初始化全局调度器。
-        """
         self.pool_manager = pool_manager
         self.network_manager = network_manager
-
-        # 1. 资源容器
-        self.prefill_pools: List[PrefillPool] = []
-        self.decode_pools: List[DecodePool] = []
-        self.networks: List[Network] = []
-        self.network_map: Dict[Tuple[int, int], Network] = {}
-        
-        # 2. 策略管理
-        self.strategies = {
-            "pso": PSO_Scheduler(num_particles=20, max_iterations=15),
-            "random": Random_Scheduler(),
-            "round_robin": RoundRobin_Scheduler(),
-            "paired_round_robin": PairedRoundRobin_Scheduler(),
-            "least_load": LeastLoad_Scheduler(),
-            "adaptive_variance": AdaptiveVarianceScheduler(num_particles=20, max_iterations=15),
-        }
-        self.current_mode: str = "pso" # 默认策略
-        self.is_ready: bool = False
-
+        self.strategy_manager = strategy_manager or StrategyManager()
+        self.resource_state = resource_state or ResourceStateManager(
+            pool_manager,
+            network_manager,
+        )
+        self.refresh_resources()
         print(
             "[GlobalScheduler] Initializing... "
             f"routing={self.routing_status()}"
         )
 
+    @property
+    def current_mode(self) -> str:
+        return self.strategy_manager.strategy
+
+    @property
+    def available_strategies(self) -> Tuple[str, ...]:
+        return self.strategy_manager.available_strategies
+
+    @property
+    def strategies(self):
+        """Read-only compatibility view of the registered implementations."""
+        return MappingProxyType(
+            {
+                name: self.strategy_manager.get_strategy(name)
+                for name in self.available_strategies
+            }
+        )
+
+    @property
+    def prefill_pools(self):
+        return self.resource_state.snapshot().prefill_pools
+
+    @property
+    def decode_pools(self):
+        return self.resource_state.snapshot().decode_pools
+
+    @property
+    def networks(self):
+        return self.resource_state.snapshot().networks
+
+    @property
+    def network_map(self):
+        return self.resource_state.snapshot().network_map
+
+    def refresh_resources(self) -> ResourceSnapshot:
+        return self.resource_state.refresh()
+
+    def sync_state(self) -> ResourceSnapshot:
+        """Compatibility alias for periodic reconciliation callers."""
+        return self.refresh_resources()
+
+    @staticmethod
+    def _uses_single_gateway_route(snapshot: ResourceSnapshot) -> bool:
+        return (
+            len(snapshot.prefill_pools) == 1
+            and len(snapshot.decode_pools) == 1
+        )
+
     def uses_single_gateway_route(self) -> bool:
-        """Return whether the active topology has exactly one P and one D pool."""
-        return len(self.prefill_pools) == 1 and len(self.decode_pools) == 1
+        return self._uses_single_gateway_route(self.resource_state.snapshot())
 
     def routing_status(self) -> str:
-        if not self.prefill_pools or not self.decode_pools:
+        snapshot = self.resource_state.snapshot()
+        if not snapshot.prefill_pools or not snapshot.decode_pools:
             topology = "resource_wait"
-        elif self.uses_single_gateway_route():
+        elif self._uses_single_gateway_route(snapshot):
             topology = "single_gateway_direct"
         else:
             topology = "multi_gateway_scheduled"
         return (
             f"mode=global, topology={topology}, "
-            f"scheduler={self.current_mode}"
+            f"scheduler={self.current_mode}, resources=v{snapshot.version}"
+            f"(p={len(snapshot.prefill_pools)},"
+            f"d={len(snapshot.decode_pools)},"
+            f"network={len(snapshot.networks)}), "
+            f"available={','.join(self.available_strategies)}"
         )
 
-    def sync_state(self):
-        """
-        同步状态：
-        从 ResourceManager 拉取最新数据，更新本地快照。
-        这个方法通常由后台线程定期调用，或者在 schedule 之前按需调用（带节流）。
-        """
-        # 1. 从 Manager 拉取活跃节点 (这一步会获取 Manager 的锁)
-        active_p = self.pool_manager.get_active_Pools(PoolType.PREFILL)
-        active_d = self.pool_manager.get_active_Pools(PoolType.DECODE)
-        active_nets = self.network_manager.get_all_networks()
-        
-        # 2. 更新本地列表 (切换引用是原子操作，通常不需要加锁，除非有多线程调度)
-        self.prefill_pools = active_p
-        self.decode_pools = active_d
-        
-        # 3. 计算网络查找表
-        # 这一步开销较大，只在同步时做一次，调度时直接查表
-        self.network_map = {
-            (net.prefill_pool.pool_id, net.decode_pool.pool_id): net 
-            for net in active_nets
-        }
-                
-
-    
-    # 可以在此处添加更多策略，例如 RoundRobin, Greedy
-    def switch_mode(self, mode: str):
-        """切换调度策略 (e.g., 'pso', 'random')"""
-        mode = mode.lower()
-        if mode in self.strategies:
-            self.current_mode = mode
-            print(f"[GlobalScheduler] Switched strategy to: {self.current_mode.upper()}")
+    def switch_mode(self, mode: str) -> bool:
+        if self.strategy_manager.switch_strategy(mode):
+            print(
+                "[GlobalScheduler] Switched strategy to: "
+                f"{self.current_mode.upper()}"
+            )
             return True
-        else:
-            valid_modes = list(self.strategies.keys())
-            print(f"[GlobalScheduler] Error: Mode '{mode}' invalid. Available: {valid_modes}")
-            return False
+        print(
+            f"[GlobalScheduler] Error: Mode '{mode}' invalid. "
+            f"Available: {list(self.available_strategies)}"
+        )
+        return False
 
-    def schedule(self, prompt_obj: Prompt, service_obj: Service, request_id: int) -> Dict[str, Any]:
-        """
-        调度接口：根据输入的Prompt和服务需求，使用当前策略选择最优的Prefill和Decode节点
-        
-        参数说明:
-            prompt_obj (Prompt): 包含提示信息的对象，用于获取token长度等信息
-            service_obj (Service): 服务对象，包含服务质量要求(SLO)和压缩因子等参数
-            request_id (int): 请求唯一标识符，可用于日志追踪和调试
-            
-        返回值:
-            Dict[str, Any]: 包含选定的Prefill和Decode节点地址信息的字典
-                - P_proxy_addr: 选定的Prefill节点IP地址
-                - P_proxy_port: 选定的Prefill节点端口号
-                - D_proxy_addr: 选定的Decode节点IP地址
-                - D_proxy_port: 选定的Decode节点端口号
-                
-        异常:
-            RuntimeError: 当资源未初始化或为空时抛出异常，提示需要先调用update_state()
-        """
-        # 1. 基础检查 - 确保调度器已加载必要的资源
-        if not self.prefill_pools or not self.decode_pools:
-            raise RuntimeError("Resources empty. Call update_state first.")
+    def schedule(
+        self,
+        prompt_obj: Prompt,
+        service_obj: Service,
+        request_id: int,
+    ) -> Dict[str, Any]:
+        snapshot = self.resource_state.snapshot()
+        if not snapshot.prefill_pools or not snapshot.decode_pools:
+            raise RuntimeError("Resources empty. Wait for pool registration.")
 
-        if self.uses_single_gateway_route():
-            prefill_pool = self.prefill_pools[0]
-            decode_pool = self.decode_pools[0]
+        if self._uses_single_gateway_route(snapshot):
+            prefill = snapshot.prefill_pools[0]
+            decode = snapshot.decode_pools[0]
             print(
                 "[GlobalScheduler] Single P/D gateway topology detected; "
-                f"direct route P{prefill_pool.pool_id}"
-                f"({prefill_pool.proxy_ip_address}:{prefill_pool.proxy_port}) -> "
-                f"D{decode_pool.pool_id}"
-                f"({decode_pool.proxy_ip_address}:{decode_pool.proxy_port})"
+                f"direct route P{prefill.pool_id}"
+                f"({prefill.proxy_ip_address}:{prefill.proxy_port}) -> "
+                f"D{decode.pool_id}"
+                f"({decode.proxy_ip_address}:{decode.proxy_port})"
             )
             return {
-                "P_proxy_addr": prefill_pool.proxy_ip_address,
-                "P_proxy_port": prefill_pool.proxy_port,
-                "D_proxy_addr": decode_pool.proxy_ip_address,
-                "D_proxy_port": decode_pool.proxy_port,
+                "P_proxy_addr": prefill.proxy_ip_address,
+                "P_proxy_port": prefill.proxy_port,
+                "D_proxy_addr": decode.proxy_ip_address,
+                "D_proxy_port": decode.proxy_port,
             }
 
-        # 2. 准备参数 - 从Prompt和服务对象中提取调度所需的关键参数
-        token_len = getattr(prompt_obj, 'token_length', 0)     # 获取输入提示的token长度
-        max_tokens = getattr(prompt_obj, 'max_tokens', None)   # 获取Decode侧输出token上限
+        token_length = getattr(prompt_obj, "token_length", 0)
+        max_tokens = getattr(prompt_obj, "max_tokens", None)
         max_tokens_fallback = max_tokens is None
         if max_tokens_fallback:
-            max_tokens = token_len
-        slo_ttft = getattr(service_obj, 'SLO_TTFT', 0.0)       # 获取首Token时延目标(SLO)
-        slo_tpot = getattr(service_obj, 'SLO_TPOT', 0.0)       # 获取后续Token生成时延目标(SLO)
-        comp_fac = getattr(service_obj, 'Compress_factor', 1.0) # 获取KV缓存压缩因子
+            max_tokens = token_length
 
-        # 获取当前激活的调度策略，如果未找到则回退到随机策略
-        strategy = self.strategies.get(self.current_mode, self.strategies["random"])
-
-        # 3. 执行调度
-        # 根据不同策略模式传递相应的参数
-        if self.current_mode == "pso":
-            # PSO策略需要详细的系统状态信息来进行优化计算
-            p_ip, p_port, d_ip, d_port = strategy.schedule(
-                token_length=token_len,           # 输入token长度
-                slo_ttft=slo_ttft,                # 首Token时延目标
-                slo_tpot=slo_tpot,                # 后续Token时延目标
-                compress_factor=comp_fac,         # KV缓存压缩因子
-                # --- 注入当前系统状态 ---
-                prefill_pools=self.prefill_pools, # Prefill节点池状态
-                decode_pools=self.decode_pools,   # Decode节点池状态
-                network_map=self.network_map      # 网络连接状态映射
-            )
-        elif self.current_mode == "adaptive_variance":
-            p_ip, p_port, d_ip, d_port = strategy.schedule(
-                token_length=token_len,
-                max_tokens=max_tokens,
-                slo_ttft=slo_ttft,
-                slo_tpot=slo_tpot,
-                compress_factor=comp_fac,
-                prefill_pools=self.prefill_pools,
-                decode_pools=self.decode_pools,
-                network_map=self.network_map,
-                request_id=request_id,
-                max_tokens_fallback=max_tokens_fallback,
-            )
-        else:
-            # Random等简单策略只需要基本的节点池信息
-            p_ip, p_port, d_ip, d_port = strategy.schedule(
-                prefill_pools=self.prefill_pools,  # Prefill节点池
-                decode_pools=self.decode_pools     # Decode节点池
-            )
-
-        # 返回调度结果，包含选定节点的网络地址信息
-        return {
-            "P_proxy_addr": p_ip, "P_proxy_port": p_port,
-            "D_proxy_addr": d_ip, "D_proxy_port": d_port,
-        }
-
-# --- 测试代码 (可以直接运行此文件) ---
-if __name__ == "__main__":
-    # 1. 创建测试资源
-    p_nodes = [PrefillPool(i, f"10.0.1.{i}", 8000+i, 100.0) for i in range(2)]
-    d_nodes = [DecodePool(i, f"10.0.2.{i}", 9000+i, 500.0) for i in range(2)]
-    
-    # 2. 初始化调度器 (故意不传 network，测试自动生成功能)
-    # 修复这里的错误：应该调用update_state而不是直接传参给构造函数
-    scheduler = GlobalScheduler()
-    # 添加网络连接
-    networks = []
-    for p_node in p_nodes:
-        for d_node in d_nodes:
-            networks.append(Network(p_node, d_node, 1000.0, 10.0))
-    
-    scheduler.update_state(p_nodes, d_nodes, networks)
-
-    # 3. 构造 Mock 数据
-    class MockData: pass
-    prompt = MockData()
-    prompt.token_length = 1024
-    service = MockData()
-    service.SLO_TTFT = 500
-    service.SLO_TPOT = 50
-    service.Compress_factor = 0.8
-
-    # 4. 测试
-    print("\n--- PSO Schedule ---")
-    res = scheduler.schedule(prompt, service, 1)  # 修改为schedule方法
-    print(res)
-    
-    print("\n--- Random Schedule ---")
-    scheduler.switch_mode("random")
-    res = scheduler.schedule(prompt, service, 2)  # 修改为schedule方法
-    print(res)
-    
-    print("\n--- Round Robin Schedule ---")
-    scheduler.switch_mode("round_robin")
-    res = scheduler.schedule(prompt, service, 3)  # 修改为schedule方法
-    print(res)
-    
-    # 测试轮询效果
-    print("\n--- Round Robin Multiple Schedules ---")
-    for i in range(4):
-        res = scheduler.schedule(prompt, service, 3 + i)
-        print(f"Schedule {i+1}: {res}")
-    
-    print("\n--- Least Load Schedule ---")
-    scheduler.switch_mode("least_load")
-    res = scheduler.schedule(prompt, service, 7)  # 修改为schedule方法
-    print(res)
+        context = GlobalScheduleContext(
+            token_length=token_length,
+            max_tokens=max_tokens,
+            slo_ttft=getattr(service_obj, "SLO_TTFT", 0.0),
+            slo_tpot=getattr(service_obj, "SLO_TPOT", 0.0),
+            compress_factor=getattr(
+                service_obj,
+                "Compress_factor",
+                1.0,
+            ),
+            request_id=request_id,
+            max_tokens_fallback=max_tokens_fallback,
+        )
+        return self.strategy_manager.schedule(
+            context,
+            snapshot,
+        ).to_proxy_dict()

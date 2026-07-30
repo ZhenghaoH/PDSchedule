@@ -14,10 +14,16 @@ import numpy as np
 from store.controller.network import Network
 from store.controller.pool_base import DecodePool, PrefillPool
 from utils.kv_transfer import estimate_qwen25_7b_kv_transfer_bytes, estimate_transfer_time_ms
+from scheduler.controller.resource_state import ResourceSnapshot
+from scheduler.controller.strategy import (
+    GlobalScheduleContext,
+    GlobalScheduleDecision,
+)
 
 
-GLOBAL_SCHEDULE_LOG_PATH = Path(__file__).resolve().parents[2] / "global_schedule.log"
-PROFILE_ROOT = Path(__file__).resolve().parents[2] / "profile" / "controller"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+GLOBAL_SCHEDULE_LOG_PATH = PROJECT_ROOT / "global_schedule.log"
+PROFILE_ROOT = PROJECT_ROOT / "profile" / "controller"
 
 
 def _emit_debug_log(text: str) -> None:
@@ -28,7 +34,7 @@ def _emit_debug_log(text: str) -> None:
             if not text.endswith("\n"):
                 log_file.write("\n")
     except Exception as exc:
-        print(f"[AdaptiveVarianceScheduler] failed to write debug log: {exc}")
+        print(f"[DemandAwareStrategy] failed to write debug log: {exc}")
 
 
 def _clamp(value: float, lower: float = 0.0, upper: float = 1.0) -> float:
@@ -111,7 +117,9 @@ class TPOTProfile:
         return max(0.0001, float(pred)) * 1000.0
 
 
-class AdaptiveVarianceScheduler:
+class DemandAwareStrategy:
+    name = "demand_aware"
+
     def __init__(
         self,
         num_particles: int = 20,
@@ -465,7 +473,7 @@ class AdaptiveVarianceScheduler:
     ) -> None:
         lines = [
             "+" * 100,
-            "[AdaptiveVarianceScheduler] 全局调度调试信息",
+            "[DemandAwareStrategy] 全局调度调试信息",
             "+" * 100,
             f"日志时间: {datetime.now().isoformat(timespec='seconds')}",
             f"Request_ID: {request_id if request_id is not None else 'N/A'}",
@@ -547,21 +555,23 @@ class AdaptiveVarianceScheduler:
 
     def schedule(
         self,
-        token_length: int,
-        max_tokens: int,
-        slo_ttft: float,
-        slo_tpot: float,
-        compress_factor: float,
-        prefill_pools: List[PrefillPool],
-        decode_pools: List[DecodePool],
-        network_map: Dict[Tuple[int, int], Network],
-        request_id: Optional[int] = None,
-        max_tokens_fallback: bool = False,
-    ) -> Tuple[str, int, str, int]:
+        context: GlobalScheduleContext,
+        resources: ResourceSnapshot,
+    ) -> GlobalScheduleDecision:
+        token_length = context.token_length
+        max_tokens = context.max_tokens
+        slo_ttft = context.slo_ttft
+        slo_tpot = context.slo_tpot
+        compress_factor = context.compress_factor
+        request_id = context.request_id
+        max_tokens_fallback = context.max_tokens_fallback
+        prefill_pools = resources.prefill_pools
+        decode_pools = resources.decode_pools
+        network_map = resources.network_map
         num_p = len(prefill_pools)
         num_d = len(decode_pools)
         if num_p == 0 or num_d == 0:
-            raise ValueError("Empty pools passed to adaptive_variance schedule")
+            raise ValueError("Empty pools passed to demand_aware schedule")
 
         safe_token_length = max(1, int(token_length or 0))
         safe_max_tokens = max(1, int(max_tokens or safe_token_length))
@@ -664,9 +674,10 @@ class AdaptiveVarianceScheduler:
             selected_d,
             selected_components,
         )
-        return (
-            selected_p.proxy_ip_address,
-            selected_p.proxy_port,
-            selected_d.proxy_ip_address,
-            selected_d.proxy_port,
+        return GlobalScheduleDecision(
+            prefill_address=selected_p.proxy_ip_address,
+            prefill_port=selected_p.proxy_port,
+            decode_address=selected_d.proxy_ip_address,
+            decode_port=selected_d.proxy_port,
+            strategy=self.name,
         )

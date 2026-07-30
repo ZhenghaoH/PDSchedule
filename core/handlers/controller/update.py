@@ -1,9 +1,14 @@
-from fastapi import FastAPI, Request as FastAPIRequest
+from fastapi import Request as FastAPIRequest
 from fastapi.responses import JSONResponse
 
 from store.controller import PoolManager, PoolType
 from store.controller import NetworkManager
-from scheduler.controller.global_scheduler import GlobalScheduler
+
+
+def _refresh_scheduler_resources(request: FastAPIRequest) -> None:
+    scheduler = getattr(request.app.state, "global_scheduler", None)
+    if scheduler is not None:
+        scheduler.refresh_resources()
 
 
 def _is_same_machine(prefill_pool, decode_pool) -> bool:
@@ -39,6 +44,7 @@ async def _unregister_pool(request: FastAPIRequest, pool_type: PoolType):
             content={"detail": f"{pool_type.value} Pool {pool_id} not registered."}
         )
     net_mgr.remove_connections_for_pool(pool_id, pool_type)
+    _refresh_scheduler_resources(request)
 
     return {"status": "success"}
 
@@ -128,6 +134,8 @@ async def update_decode_pool_status(request: FastAPIRequest):
             status_code=404,
             content={"detail": f"Decode Pool {pool_id} not registered. Please call /register first."}
         )
+
+    _refresh_scheduler_resources(request)
 
     # 成功返回
     return {
@@ -220,6 +228,8 @@ async def register_decode_pool(request: FastAPIRequest):
     except Exception:
         pass
 
+    _refresh_scheduler_resources(request)
+
     # 3. 返回分配的 ID
     return {
         "status": "success",
@@ -296,6 +306,8 @@ async def update_prefill_pool_status(request: FastAPIRequest):
             status_code=404,
             content={"detail": f"Prefill Pool {pool_id} not registered. Please call /register first."}
         )
+
+    _refresh_scheduler_resources(request)
 
     # 成功返回
     return {
@@ -386,6 +398,8 @@ async def register_prefill_pool(request: FastAPIRequest):
             pool_obj.GPU_type = str(gpu_type)
     except Exception:
         pass
+
+    _refresh_scheduler_resources(request)
 
     # 3. 返回分配的 ID
     return {
@@ -579,6 +593,8 @@ async def update_network_status(request: FastAPIRequest):
             status_code=500,
             content={"detail": "Network update failed."}
         )
+
+    _refresh_scheduler_resources(request)
 
     return {
         "status": "success",

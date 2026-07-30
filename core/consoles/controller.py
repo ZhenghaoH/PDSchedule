@@ -69,7 +69,7 @@ def info():
     print("  - show pool_id         : 显示推理池ID")
     print("  - show scheduler       : 显示Controller路由模式或全局调度策略")
     print("  - pair pd -p <p> -d <d>: 配对PD池")
-    print("  - switch scheduler -m <mode>: 切换全局调度策略，可选 pso/random/round_robin/paired_round_robin/least_load")
+    print("  - switch scheduler -m <mode>: 切换全局调度策略（可用项见 show scheduler）")
     print("  - history              : 查看历史记录")
     print("  - clear / cls          : 清空屏幕")
     print("  - quit / exit          : 停止调度器并退出")
@@ -143,15 +143,18 @@ def run_scheduler_cli(app: FastAPI, server: "object") -> None:
 
         # 切换调度策略
         elif cmd == BaseCommand("switch", "scheduler"):
-            mode = cmd.get("m")
-            if not mode:
-                print("[CLI] Missing required parameter: -m <mode>")
-                print("[CLI] Available modes: pso, random, round_robin, paired_round_robin, least_load")
-                continue
-
             scheduler = getattr(app.state, "global_scheduler", None)
             if scheduler is None:
                 print("[CLI] Global scheduler is not initialized.")
+                continue
+
+            mode = cmd.get("m")
+            if not mode:
+                print("[CLI] Missing required parameter: -m <mode>")
+                print(
+                    "[CLI] Available modes: "
+                    f"{', '.join(scheduler.available_strategies)}"
+                )
                 continue
 
             scheduler.switch_mode(str(mode))

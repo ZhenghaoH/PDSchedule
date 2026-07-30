@@ -14,6 +14,8 @@ from store.controller import NetworkManager
 from scheduler.controller.global_scheduler import GlobalScheduler
 import asyncio  # 如果其他函数也用到了可以往前提
 
+RESOURCE_RECONCILE_INTERVAL_SECONDS = 1.0
+
 
 # ======================= 日志过滤器配置 =======================
 class EndpointFilter(logging.Filter):
@@ -48,12 +50,13 @@ def silence_heartbeat_logs():
         logging.warning(f"[Scheduler] 配置日志过滤器失败: {e}")
 
 
-async def scheduler_sync_loop(scheduler: GlobalScheduler, interval: float = 0.1):
-    """后台任务：每2秒同步一次资源状态"""
+async def scheduler_sync_loop(
+    scheduler: GlobalScheduler,
+    interval: float = RESOURCE_RECONCILE_INTERVAL_SECONDS,
+):
+    """Periodic timeout reconciliation; handlers publish normal updates."""
     while True:
         try:
-            # 由于 sync_state 内部主要是 CPU 操作和短暂锁，可以直接调用
-            # 如果计算量极大，可以用 await loop.run_in_executor(None, scheduler.sync_state)
             scheduler.sync_state()
         except Exception as e:
             logging.error(f"Sync failed: {e}")
@@ -88,6 +91,8 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logging.info(f"[Scheduler] 分词器预热失败:{e}")
 
+    sync_pool_net_state_task = None
+
     # 初始化全局调度器
     try:
         logging.info("[Scheduler] Init: Starting GlobalScheduler...")
@@ -113,7 +118,9 @@ async def lifespan(app: FastAPI):
         )
 
         # 启动后台同步循环
-        sync_pool_net_state_task = asyncio.create_task(scheduler_sync_loop(app.state.global_scheduler))
+        sync_pool_net_state_task = asyncio.create_task(
+            scheduler_sync_loop(app.state.global_scheduler)
+        )
 
     except Exception as e:
         logging.exception(f"[Scheduler] Failed to initialize GlobalScheduler: {e}")
@@ -127,6 +134,13 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         # ---------- shutdown ----------
+        if sync_pool_net_state_task is not None:
+            sync_pool_net_state_task.cancel()
+            try:
+                await sync_pool_net_state_task
+            except asyncio.CancelledError:
+                pass
+
         cp_server = getattr(app.state, "_cp_server", None)  # type: ignore
         cp_task = getattr(app.state, "_cp_task", None)  # type: ignore
 

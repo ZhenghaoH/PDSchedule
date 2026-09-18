@@ -13,6 +13,7 @@ from connectors.models import (
 class NixlAdapter:
     name = "nixl"
     mode = ConnectorMode.REQUEST_SCOPED
+    requires_transfer_context = True
     header = "X-Request-Id"
 
     def validate_descriptor(self, descriptor):
@@ -31,6 +32,35 @@ class NixlAdapter:
 
     def compatible(self, prefill, decode):
         return prefill.name == decode.name == self.name and prefill.version == decode.version
+
+    def validate_instance(self, descriptor, pool_descriptor, role):
+        if role not in {"prefill", "decode"}:
+            raise ValueError(f"Unsupported connector instance role: {role}")
+        normalized = self.validate_descriptor(descriptor)
+        pool = self.validate_descriptor(pool_descriptor)
+        if not self.compatible(normalized, pool):
+            raise ValueError("nixl instance connector does not match its pool")
+        if not normalized.metadata:
+            raise ValueError("nixl instances require side-channel connector metadata")
+        return normalized
+
+    def compatible_endpoints(self, prefill_endpoint, decode_endpoint):
+        if (
+            not isinstance(prefill_endpoint, Mapping)
+            or not isinstance(decode_endpoint, Mapping)
+            or prefill_endpoint.get("role") != "prefill"
+            or decode_endpoint.get("role") != "decode"
+        ):
+            return False
+        try:
+            prefill = self.validate_descriptor(prefill_endpoint.get("descriptor"))
+            decode = self.validate_descriptor(decode_endpoint.get("descriptor"))
+        except (TypeError, ValueError):
+            return False
+        return self.compatible(prefill, decode)
+
+    def instance_conflict(self, candidate, existing):
+        return False
 
     def create_session(self, session_id, prefill, decode, descriptor):
         return ConnectorSession(

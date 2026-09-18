@@ -31,6 +31,67 @@ class ConnectorManager:
             return False
         return self.registry.get(p.name).compatible(p, d)
 
+    def validate_instance(self, descriptor, pool_descriptor, role):
+        instance = self.validate(descriptor)
+        pool = self.validate(pool_descriptor)
+        if instance.name != pool.name or instance.version != pool.version:
+            raise ValueError(
+                f"instance connector {instance.name}:{instance.version} "
+                f"does not match pool connector {pool.name}:{pool.version}"
+            )
+        adapter = self.registry.get(instance.name)
+        validator = getattr(adapter, "validate_instance", None)
+        if validator is None:
+            return instance
+        return validator(instance, pool, role)
+
+    def compatible_endpoints(self, prefill_endpoint, decode_endpoint) -> bool:
+        if not isinstance(prefill_endpoint, Mapping) or not isinstance(
+            decode_endpoint, Mapping
+        ):
+            return False
+        try:
+            prefill_descriptor = self.validate(prefill_endpoint.get("descriptor"))
+            decode_descriptor = self.validate(decode_endpoint.get("descriptor"))
+        except (TypeError, ValueError):
+            return False
+        if prefill_descriptor.name != decode_descriptor.name:
+            return False
+        adapter = self.registry.get(prefill_descriptor.name)
+        checker = getattr(adapter, "compatible_endpoints", None)
+        if checker is None:
+            return self.compatible(prefill_descriptor, decode_descriptor)
+        normalized_prefill = dict(prefill_endpoint)
+        normalized_decode = dict(decode_endpoint)
+        normalized_prefill["descriptor"] = prefill_descriptor
+        normalized_decode["descriptor"] = decode_descriptor
+        return bool(checker(normalized_prefill, normalized_decode))
+
+    def instance_conflict(self, candidate, existing) -> bool:
+        try:
+            candidate_descriptor = self.validate(candidate)
+            existing_descriptor = self.validate(existing)
+        except (TypeError, ValueError):
+            return False
+        if (
+            candidate_descriptor.name != existing_descriptor.name
+            or candidate_descriptor.version != existing_descriptor.version
+        ):
+            return False
+        adapter = self.registry.get(candidate_descriptor.name)
+        checker = getattr(adapter, "instance_conflict", None)
+        return bool(checker(candidate_descriptor, existing_descriptor)) if checker else False
+
+    def requires_transfer_context(self, connector) -> bool:
+        if isinstance(connector, Mapping):
+            name = connector.get("name", "")
+        else:
+            name = connector
+        try:
+            return bool(self.registry.get(name).requires_transfer_context)
+        except (TypeError, ValueError, AttributeError):
+            return False
+
     def create_session(
         self,
         prefill: Mapping[str, Any],

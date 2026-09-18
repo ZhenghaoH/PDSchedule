@@ -556,22 +556,12 @@ class GatewayStoreManager:
             raise ValueError("instance_ip is required")
         connector_manager = get_connector_manager()
         descriptor = connector_manager.validate(connector)
-        if descriptor.name == "nixl" and not descriptor.metadata:
-            raise ValueError("nixl instances require side-channel connector metadata")
         pool_descriptor = connector_manager.validate(self.connector)
-        if (
-            descriptor.name != pool_descriptor.name
-            or descriptor.version != pool_descriptor.version
-        ):
-            raise ValueError(
-                f"instance connector {descriptor.name}:{descriptor.version} "
-                f"does not match pool connector "
-                f"{pool_descriptor.name}:{pool_descriptor.version}"
-            )
-        if descriptor.name == "lmcache" and not connector_manager.compatible(
-            descriptor, pool_descriptor
-        ):
-            raise ValueError("instance LMCache configuration does not match its pool")
+        descriptor = connector_manager.validate_instance(
+            descriptor,
+            pool_descriptor,
+            role,
+        )
 
         with self._data_lock:
             existing = self._instance_table.get(instance_ip)
@@ -579,6 +569,17 @@ class GatewayStoreManager:
                 raise ValueError(
                     f"Instance {instance_ip} is already registered as {existing.role}"
                 )
+            for existing_ip, existing_instance in self._instance_table.items():
+                if existing_ip == instance_ip or not existing_instance.connector:
+                    continue
+                if connector_manager.instance_conflict(
+                    descriptor,
+                    existing_instance.connector,
+                ):
+                    raise ValueError(
+                        "connector instance identity or side-channel port range "
+                        f"conflicts with registered instance {existing_ip}"
+                    )
             instance = existing or Instance(instance_ip=instance_ip)
             instance.role = role
             instance.connector = descriptor.to_dict()

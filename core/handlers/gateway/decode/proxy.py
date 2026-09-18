@@ -234,8 +234,9 @@ def _bind_and_validate_connector(
     descriptor = decode_meta.get("descriptor") or {}
     if decode_meta.get("role") != "decode" or descriptor.get("name") != request.Task.pd_connector:
         raise HTTPException(status_code=503, detail=f"Invalid decode connector metadata: {decode_meta}")
-    if not get_connector_manager().compatible(
-        prefill_meta.get("descriptor"), descriptor
+    if not get_connector_manager().compatible_endpoints(
+        prefill_meta,
+        decode_meta,
     ):
         raise HTTPException(status_code=503, detail="Selected instances use incompatible connectors")
     request.Task.connector_context["decode_endpoint"] = decode_meta

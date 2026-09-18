@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Mapping
+
 from connectors.models import (
     ConnectorDescriptor,
     ConnectorMode,
@@ -11,6 +13,7 @@ from connectors.models import (
 class LMCacheAdapter:
     name = "lmcache"
     mode = ConnectorMode.SHARED_BACKEND
+    requires_transfer_context = False
     compatibility_keys = ("backend", "namespace", "config_fingerprint")
 
     def validate_descriptor(self, descriptor):
@@ -31,6 +34,33 @@ class LMCacheAdapter:
             prefill.metadata.get(key) == decode.metadata.get(key)
             for key in self.compatibility_keys
         )
+
+    def validate_instance(self, descriptor, pool_descriptor, role):
+        if role not in {"prefill", "decode"}:
+            raise ValueError(f"Unsupported connector instance role: {role}")
+        normalized = self.validate_descriptor(descriptor)
+        pool = self.validate_descriptor(pool_descriptor)
+        if not self.compatible(normalized, pool):
+            raise ValueError("instance LMCache configuration does not match its pool")
+        return normalized
+
+    def compatible_endpoints(self, prefill_endpoint, decode_endpoint):
+        if (
+            not isinstance(prefill_endpoint, Mapping)
+            or not isinstance(decode_endpoint, Mapping)
+            or prefill_endpoint.get("role") != "prefill"
+            or decode_endpoint.get("role") != "decode"
+        ):
+            return False
+        try:
+            prefill = self.validate_descriptor(prefill_endpoint.get("descriptor"))
+            decode = self.validate_descriptor(decode_endpoint.get("descriptor"))
+        except (TypeError, ValueError):
+            return False
+        return self.compatible(prefill, decode)
+
+    def instance_conflict(self, candidate, existing):
+        return False
 
     def create_session(self, session_id, prefill, decode, descriptor):
         return ConnectorSession(

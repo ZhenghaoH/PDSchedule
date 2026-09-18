@@ -121,6 +121,19 @@ def _bind_prefill_connector(
             detail=f"Invalid prefill connector metadata for {selected_prefill}: {meta}",
         )
 
+    connector_manager = get_connector_manager()
+    try:
+        connector_manager.validate_instance(
+            descriptor,
+            storage.get_connector(),
+            "prefill",
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Invalid prefill connector metadata for {selected_prefill}: {exc}",
+        ) from exc
+
     request.Task.connector_context["prefill_endpoint"] = meta
 
 
@@ -137,18 +150,22 @@ async def _handle_pd_request(request: BaseRequest, endpoint_type: str):
             raise HTTPException(status_code=500, detail="Connector prefill batch failed")
 
         kv_transfer_params = batch_result.get("kv_transfer_params")
-        if (
-            request.Task.pd_connector == "nixl"
-            and (not isinstance(kv_transfer_params, dict) or not kv_transfer_params)
-        ):
-            raise HTTPException(
-                status_code=502,
-                detail="Connector prefill batch result does not contain transfer context",
+        connector_manager = get_connector_manager()
+        if connector_manager.requires_transfer_context(request.Task.pd_connector):
+            if not isinstance(kv_transfer_params, dict) or not kv_transfer_params:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Connector prefill batch result does not contain transfer context",
+                )
+            connector_manager.bind_prefill_result(
+                request,
+                {"kv_transfer_params": kv_transfer_params},
             )
+        else:
+            request.Task.connector_context["kv_transfer_params"] = kv_transfer_params
         request.Task.prefill_instance = batch_result.get(
             "instance", request.Task.prefill_instance
         )
-        request.Task.connector_context["kv_transfer_params"] = kv_transfer_params
     else:
         selected_prefill = await _select_prefill_instance(storage, request)
         try:

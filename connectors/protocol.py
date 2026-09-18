@@ -8,6 +8,7 @@ from connectors.models import ConnectorDescriptor, ConnectorMode, ConnectorSessi
 class ConnectorAdapter(Protocol):
     name: str
     mode: ConnectorMode
+    requires_transfer_context: bool
 
     def validate_descriptor(
         self, descriptor: ConnectorDescriptor
@@ -17,6 +18,25 @@ class ConnectorAdapter(Protocol):
         self,
         prefill: ConnectorDescriptor,
         decode: ConnectorDescriptor,
+    ) -> bool: ...
+
+    def validate_instance(
+        self,
+        descriptor: ConnectorDescriptor,
+        pool_descriptor: ConnectorDescriptor,
+        role: str,
+    ) -> ConnectorDescriptor: ...
+
+    def compatible_endpoints(
+        self,
+        prefill_endpoint: Mapping[str, Any],
+        decode_endpoint: Mapping[str, Any],
+    ) -> bool: ...
+
+    def instance_conflict(
+        self,
+        candidate: ConnectorDescriptor,
+        existing: ConnectorDescriptor,
     ) -> bool: ...
 
     def create_session(

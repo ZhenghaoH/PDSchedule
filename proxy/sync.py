@@ -43,6 +43,18 @@ def _bind_prefill_connector(request: BaseRequest, selected_prefill: str) -> None
             f"Invalid prefill connector metadata for {selected_prefill}: {meta}"
         )
 
+    connector_manager = get_connector_manager()
+    try:
+        connector_manager.validate_instance(
+            descriptor,
+            storage.get_connector(),
+            "prefill",
+        )
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(
+            f"Invalid prefill connector metadata for {selected_prefill}: {exc}"
+        ) from exc
+
     request.Task.connector_context["prefill_endpoint"] = meta
 
 

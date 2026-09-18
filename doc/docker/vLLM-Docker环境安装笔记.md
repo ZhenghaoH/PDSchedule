@@ -1086,7 +1086,7 @@ curl -s http://172.18.0.167:8000/v1/completions -H "Content-Type: application/js
 
 ### IPv6
 
-启用IPv6需要修改源码`Mooncake/mooncake-transfer-engine/src/transport/tcp_transport/tcp_transport.cpp`将里面的两个有v4的参数改成v6然后按照Mooncake的安装流程重新安装。`cp /workspace/workspace/tcp_transport.cpp  Mooncake/mooncake-transfer-engine/src/transport/tcp_transport/tcp_transport.cpp`
+旧版通过仓库内 `tcp_transport.cpp` 覆盖 Mooncake 源码的实验方法已移除。需要 IPv6 时应以所用 Mooncake 版本的上游实现和文档为准。
 
 配置文件mooncake2.json
 
@@ -1970,9 +1970,8 @@ class SimpleBuffer(KVLookupBufferBase):
 sudo docker run --gpus all -it --network host -v /home/jtdx/vLLM/workspace:/workspace/workspace --name test vllm-cuda128:latest
 sudo docker exec -it test /bin/bash
 
-# 修改vLLM源码
-cp /workspace/workspace/mooncake_pipe.py /workspace/vllm/vllm/distributed/kv_transfer/kv_pipe/mooncake_pipe.py 
-cp /workspace/workspace/simple_buffer.py /workspace/vllm/vllm/distributed/kv_transfer/kv_lookup_buffer/simple_buffer.py
+# 旧版通过本地 mooncake_pipe.py 和 simple_buffer.py 覆盖 vLLM 源码的步骤已移除
+# 请使用所安装 vLLM 版本正式提供的 Connector 实现
 
 # 在166启动metadata服务，需要在代码中修改监听的IP地址为172.18.0.167
 python3 /workspace/workspace/http_server.py

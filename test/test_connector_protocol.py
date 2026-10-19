@@ -1,6 +1,10 @@
 import ast
+import sys
 import threading
+import types
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -28,6 +32,44 @@ LMCACHE = {
         "config_fingerprint": "abc123",
     },
 }
+
+MOONCAKE_POOL = {
+    "name": "mooncake_p2p_hccl",
+    "version": "1",
+    "metadata": {
+        "platform": "ascend",
+        "transport": "hccl",
+        "connector_impl": "MooncakeConnectorV1",
+        "handshake_model": "passive_relay",
+        "runtime_fingerprint": "runtime-a",
+        "model_fingerprint": "model-a",
+        "fabric_id": "fabric-a",
+        "dp_size": 1,
+        "tp_size": 4,
+        "pp_size": 1,
+    },
+}
+
+
+def mooncake_instance(
+    host="10.0.0.1",
+    port=28000,
+    engine_id="engine-0",
+    epoch="boot-1",
+):
+    return {
+        "name": "mooncake_p2p_hccl",
+        "version": "1",
+        "metadata": {
+            **MOONCAKE_POOL["metadata"],
+            "engine_id": engine_id,
+            "instance_epoch": epoch,
+            "side_channel_host": host,
+            "side_channel_port": port,
+            "device_count": 4,
+            "rank_start": 0,
+        },
+    }
 
 
 def nixl_instance(host="10.0.0.1"):
@@ -71,13 +113,104 @@ def gateway_store(pool_connector):
     return storage
 
 
-def test_registry_only_exposes_first_phase_connectors():
+def test_registry_exposes_supported_connectors():
     manager = ConnectorManager()
-    assert manager.registry.names == ("lmcache", "nixl")
+    assert manager.registry.names == ("lmcache", "mooncake_p2p_hccl", "nixl")
     assert manager.registry.get("nixl").mode == ConnectorMode.REQUEST_SCOPED
     assert manager.registry.get("lmcache").mode == ConnectorMode.SHARED_BACKEND
+    assert (
+        manager.registry.get("mooncake_p2p_hccl").mode
+        == ConnectorMode.REQUEST_SCOPED
+    )
     with pytest.raises(ValueError, match="unsupported connector"):
         manager.validate({"name": "mooncake"})
+
+
+def test_mooncake_hccl_pool_compatibility_requires_same_runtime_model_and_fabric():
+    manager = ConnectorManager()
+    assert manager.compatible(MOONCAKE_POOL, MOONCAKE_POOL)
+    for key, value in (
+        ("runtime_fingerprint", "runtime-b"),
+        ("model_fingerprint", "model-b"),
+        ("fabric_id", "fabric-b"),
+        ("tp_size", 2),
+    ):
+        changed = {
+            **MOONCAKE_POOL,
+            "metadata": {**MOONCAKE_POOL["metadata"], key: value},
+        }
+        assert not manager.compatible(MOONCAKE_POOL, changed)
+
+
+def test_mooncake_hccl_relay_validates_selected_prefill_endpoint():
+    manager = ConnectorManager()
+    prefill = mooncake_instance(engine_id="prefill-0", epoch="p-1")
+    decode = mooncake_instance(
+        host="10.0.0.2", port=29000, engine_id="decode-0", epoch="d-1"
+    )
+    request = SimpleNamespace(
+        Task=SimpleNamespace(
+            pd_connector="mooncake_p2p_hccl",
+            connector_context={
+                "request_id": "req-1",
+                "prefill_endpoint": {"role": "prefill", "descriptor": prefill},
+            }
+        )
+    )
+    assert manager.compatible_endpoints(
+        {"role": "prefill", "descriptor": prefill},
+        {"role": "decode", "descriptor": decode},
+    )
+    with patch(
+        "core.schemas.request.BaseRequest.to_vllm_payload",
+        return_value={"prompt": "hello"},
+    ):
+        payload = manager.registry.get("mooncake_p2p_hccl").build_prefill_payload(
+            request
+        )
+    assert payload["kv_transfer_params"]["do_remote_decode"] is True
+
+    params = {
+        "do_remote_decode": True,
+        "do_remote_prefill": False,
+        "remote_engine_id": "prefill-0",
+        "remote_block_ids": [1, 2],
+        "remote_host": "10.0.0.1",
+        "remote_port": 28001,
+    }
+    class FakeHTTPException(Exception):
+        def __init__(self, status_code, detail):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+
+    fake_fastapi = types.ModuleType("fastapi")
+    fake_fastapi.HTTPException = FakeHTTPException
+    with patch.dict(sys.modules, {"fastapi": fake_fastapi}):
+        manager.bind_prefill_result(request, {"kv_transfer_params": params})
+    with (
+        patch.dict(sys.modules, {"fastapi": fake_fastapi}),
+        patch(
+            "core.schemas.request.BaseRequest.to_vllm_payload",
+            return_value={"prompt": "hello"},
+        ),
+    ):
+        decode_payload = manager.registry.get(
+            "mooncake_p2p_hccl"
+        ).build_decode_payload(request)
+    assert decode_payload["kv_transfer_params"] == params
+
+    with patch.dict(sys.modules, {"fastapi": fake_fastapi}):
+        with pytest.raises(Exception, match="does not belong to selected Prefill"):
+            manager.bind_prefill_result(
+                request,
+                {
+                    "kv_transfer_params": {
+                        **params,
+                        "remote_engine_id": "other-prefill",
+                    }
+                },
+            )
 
 
 def test_lmcache_compatibility_is_shared_configuration_not_fake_rpc():

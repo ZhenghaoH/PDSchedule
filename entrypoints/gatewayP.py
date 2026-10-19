@@ -95,7 +95,11 @@ def parse_args():
         action="store_true",
         help="Disable the interactive gateway CLI for background deployments.",
     )
-    parser.add_argument("--connector-name", choices=["nixl", "lmcache"], default="nixl")
+    parser.add_argument(
+        "--connector-name",
+        choices=["nixl", "lmcache", "mooncake_p2p_hccl"],
+        default="nixl",
+    )
     parser.add_argument("--connector-version", default="1")
     parser.add_argument("--connector-metadata", type=json.loads, default={})
 

@@ -80,7 +80,11 @@ def parse_args():
         default=DEFAULT_HOST,
         help="The IP address for the proxy server to listen on. Supports IPv4 and IPv6."
     )
-    parser.add_argument("--connector-name", choices=["nixl", "lmcache"], default="nixl")
+    parser.add_argument(
+        "--connector-name",
+        choices=["nixl", "lmcache", "mooncake_p2p_hccl"],
+        default="nixl",
+    )
     parser.add_argument("--connector-version", default="1")
     parser.add_argument("--connector-metadata", type=json.loads, default={})
     parser.add_argument(

@@ -31,6 +31,36 @@ def nixl_connector(host="10.0.0.1", port=5557, tp_size=1):
     }
 
 
+def mooncake_connector(
+    host="10.0.0.1",
+    port=28000,
+    engine_id="engine-0",
+    epoch="boot-1",
+):
+    return {
+        "name": "mooncake_p2p_hccl",
+        "version": "1",
+        "metadata": {
+            "platform": "ascend",
+            "transport": "hccl",
+            "connector_impl": "MooncakeConnectorV1",
+            "handshake_model": "passive_relay",
+            "runtime_fingerprint": "runtime-a",
+            "model_fingerprint": "model-a",
+            "fabric_id": "fabric-a",
+            "dp_size": 1,
+            "tp_size": 4,
+            "pp_size": 1,
+            "engine_id": engine_id,
+            "instance_epoch": epoch,
+            "side_channel_host": host,
+            "side_channel_port": port,
+            "device_count": 4,
+            "rank_start": 0,
+        },
+    }
+
+
 def import_update_handler(module_name):
     fastapi = types.ModuleType("fastapi")
     responses = types.ModuleType("fastapi.responses")
@@ -112,6 +142,74 @@ class RuntimeInstanceRegistrationTest(unittest.TestCase):
             self.manager.register_instance(
                 "10.0.0.5:7001", "prefill",
                 {"name": "nixl", "version": "1", "metadata": {}},
+            )
+
+    def test_registers_mooncake_instance_and_rejects_identity_conflict(self) -> None:
+        self.manager.connector = {
+            "name": "mooncake_p2p_hccl",
+            "version": "1",
+            "metadata": {
+                "platform": "ascend",
+                "transport": "hccl",
+                "connector_impl": "MooncakeConnectorV1",
+                "handshake_model": "passive_relay",
+                "runtime_fingerprint": "runtime-a",
+                "model_fingerprint": "model-a",
+                "fabric_id": "fabric-a",
+                "dp_size": 1,
+                "tp_size": 4,
+                "pp_size": 1,
+            },
+        }
+        instance = self.manager.register_instance(
+            "10.0.0.1:7001",
+            "prefill",
+            mooncake_connector(engine_id="prefill-0"),
+        )
+        self.assertEqual(
+            instance.connector["name"], "mooncake_p2p_hccl"
+        )
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            self.manager.register_instance(
+                "10.0.0.2:7001",
+                "prefill",
+                mooncake_connector(
+                    host="10.0.0.2",
+                    port=29000,
+                    engine_id="prefill-0",
+                    epoch="boot-2",
+                ),
+            )
+
+    def test_rejects_mooncake_side_channel_port_overlap(self) -> None:
+        self.manager.connector = {
+            "name": "mooncake_p2p_hccl",
+            "version": "1",
+            "metadata": {
+                "platform": "ascend",
+                "transport": "hccl",
+                "connector_impl": "MooncakeConnectorV1",
+                "handshake_model": "passive_relay",
+                "runtime_fingerprint": "runtime-a",
+                "model_fingerprint": "model-a",
+                "fabric_id": "fabric-a",
+                "dp_size": 1,
+                "tp_size": 4,
+                "pp_size": 1,
+            },
+        }
+        self.manager.register_instance(
+            "10.0.0.1:7001",
+            "prefill",
+            mooncake_connector(host="10.0.0.10", port=28000, engine_id="p0"),
+        )
+        with self.assertRaisesRegex(ValueError, "conflicts"):
+            self.manager.register_instance(
+                "10.0.0.2:7001",
+                "prefill",
+                mooncake_connector(
+                    host="10.0.0.10", port=28002, engine_id="p1"
+                ),
             )
 
     def test_distserve_reservation_covers_heartbeat_lag_and_can_be_released(self) -> None:

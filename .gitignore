@@ -20,6 +20,7 @@ temp_script.sh
 /publish.ps1
 /publish.cmd
 /sync.sh
+/run_170_connector_compatibility.sh
 /test/test_sync_script.py
 /simulator/
 

@@ -2,7 +2,7 @@
  save_unfull_chunk: true
 
  local_cpu: false
- max_local_cpu_size: 80.0
+ max_local_cpu_size: 16.0
 
  remote_url: "redis://172.18.0.170:6378"
  #remote_url: null

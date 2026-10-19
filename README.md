@@ -18,6 +18,10 @@
 
 # 环境说明
 
+TTFT/TPOT 仅发布测量、拟合和预测代码，不附带实验机器的已拟合模型。部署时在目标
+环境自行校准并将模型保存在本地；缺少 Controller 模型时 `demand_aware` 使用已有
+fallback。合成冷启动结果不代表实测精度，详见 [预测器说明](./profile/README.md)。
+
 项目当前版本使用 Docker 环境。旧版环境学习笔记已移出发布树，新的环境安装指南将在后续编写。当前环境记录如下，版本兼容性仍需在发布前统一验证：
 
 - Ubuntu 22.04
@@ -33,7 +37,7 @@
 
 此项目在 vLLM PD分离方案的基础上进行推理池和推理实例的选择与动态配对，点击 [这里](./doc/PD分离案例.md) 查看PD分离基础案例。
 
-当前运行时配对协议仅支持 NIXL 与 LMCache；Mooncake 相关材料作为历史部署资料保留，不属于首期运行时 Connector。以下指令为在 **实验室8卡5090机器** 上的启动指令：
+当前运行时配对协议仅支持 NIXL 与 LMCache。文档中的 Mooncake Store 仅作为 LMCache 存储后端的部署材料，不代表支持其他 P2P Connector。以下指令为在 **实验室8卡5090机器** 上的启动指令：
 
 ### 1 启动环境
 
@@ -123,27 +127,11 @@ python entrypoints/instanceD.py ... --connector-name nixl \
 
 #### Connector 协议与 Pool 约束
 
-每个 P Gateway 或 D Gateway Pool 只能配置一个 Connector，所属实例必须使用同名、同版本 Connector；LMCache 实例还必须使用相同的 `backend`、`namespace` 和 `config_fingerprint`。不同 Pool 可以分别使用 NIXL、LMCache 或 `mooncake_p2p_hccl`。Controller 先构造 Connector 兼容的 P/D Pool 候选，再运行全局调度策略；同一次 PD 会话不支持跨 Connector 桥接。
+每个 P Gateway 或 D Gateway Pool 只能配置一个 Connector，所属实例必须使用同名、同版本 Connector；LMCache 实例还必须使用相同的 `backend`、`namespace` 和 `config_fingerprint`。不同 Pool 可以分别使用 NIXL 或 LMCache。Controller 先构造 Connector 兼容的 P/D Pool 候选，再运行全局调度策略；同一次 PD 会话不支持跨 Connector 桥接。
 
-NIXL 使用 `request_scoped` 会话并在通用 `connector_context` 中携带请求 ID 与 `kv_transfer_params`。LMCache 使用 `shared_backend` 逻辑会话，只校验共享后端配置，不发起远程配对 RPC。`mooncake_p2p_hccl` 使用 Ascend/NPU、Mooncake P2P、HCCL 和 `passive_relay` 请求级会话；PDSchedule 只负责筛选兼容的 P/D 实例并转发 Prefill 返回的 `kv_transfer_params`，握手、KV 拉取和完成通知仍由 vLLM-Ascend/Mooncake 完成。服务可通过 `GET /connectors` 查看能力，Gateway 还提供 `/connector/sessions` 会话管理接口。旧 `/pd/pair` 与 `/pd/close` 已删除。
+NIXL 使用 `request_scoped` 会话并在通用 `connector_context` 中携带请求 ID 与 `kv_transfer_params`。LMCache 使用 `shared_backend` 逻辑会话，只校验共享后端配置，不发起远程配对 RPC。服务可通过 `GET /connectors` 查看能力，Gateway 还提供 `/connector/sessions` 会话管理接口。旧 `/pd/pair` 与 `/pd/close` 已删除。
 
-Mooncake P2P HCCL 的 P/D Pool 必须提供一致的 `platform=ascend`、`transport=hccl`、`connector_impl`、`handshake_model=passive_relay`、`runtime_fingerprint`、`model_fingerprint`、`fabric_id`、`dp_size`、`tp_size` 和 `pp_size`。首期要求 P/D 的 TP、PP 拓扑一致。实例还必须提供唯一 `engine_id`、`instance_epoch`、`side_channel_host`、`side_channel_port`、`device_count` 和 `rank_start`，端口范围不能冲突。
-
-示例（P/D Pool 的公共元数据应保持一致；实例再追加各自的 engine 和端点信息）：
-
-```bash
-MOONCAKE_META='{"platform":"ascend","transport":"hccl","connector_impl":"MooncakeConnectorV1","handshake_model":"passive_relay","runtime_fingerprint":"vllm-ascend-cann-mooncake-build-a","model_fingerprint":"model-rev-dtype-kvblock-a","fabric_id":"ascend-rdma-domain-1","dp_size":1,"tp_size":4,"pp_size":1}'
-
-python entrypoints/gatewayP.py --connector-name mooncake_p2p_hccl \
-  --connector-metadata "$MOONCAKE_META"
-python entrypoints/gatewayD.py --connector-name mooncake_p2p_hccl \
-  --connector-metadata "$MOONCAKE_META"
-
-python entrypoints/instanceP.py --connector-name mooncake_p2p_hccl \
-  --connector-metadata '{"platform":"ascend","transport":"hccl","connector_impl":"MooncakeConnectorV1","handshake_model":"passive_relay","runtime_fingerprint":"vllm-ascend-cann-mooncake-build-a","model_fingerprint":"model-rev-dtype-kvblock-a","fabric_id":"ascend-rdma-domain-1","dp_size":1,"tp_size":4,"pp_size":1,"engine_id":"prefill-0","instance_epoch":"p0-boot-1","side_channel_host":"10.0.0.11","side_channel_port":28000,"device_count":4,"rank_start":0}'
-```
-
-实际部署时请通过 JSON 工具正确合并 Pool 和实例字段；示例中的 HCCL/RDMA 网卡、端口和 CANN 环境变量必须按 vLLM-Ascend 部署文档配置。`mooncake_p2p_hccl` 不等同于 Mooncake Store，也不支持通用 vLLM Router 的 HTTP bootstrap `/query` 流程。
+四个 Gateway/Instance 启动入口的 `--connector-name` 仅接受 `nixl` 或 `lmcache`，默认 `nixl`；未支持的 Connector 名称会被拒绝。NIXL 的兼容性校验不要求 P/D 使用相同 TP 数量，具体可运行的不对称 TP 组合仍取决于所安装 vLLM/NIXL 的能力与实测结果。
 
 #### 单 P/D 网关自动直连
 
@@ -197,4 +185,8 @@ python3 client.py
 # Error constructing proxy for org.gnome.Terminal:/org/gnome/Terminal/Factory0: Failed to execute child process “dbus-launch” (No such file or directory)
 sudo apt install dbus-x11
 ```
+
+# 许可证
+
+本项目采用 [Apache License 2.0](./LICENSE)，作者信息暂保留占位值。
 

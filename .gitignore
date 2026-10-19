@@ -24,5 +24,11 @@ temp_script.sh
 /test/test_sync_script.py
 /simulator/
 
+# Fitted predictors and profiling outputs are generated for each deployment.
+/profile/**/artifacts/
+/profile/**/*.pkl
+/profile/**/*.pickle
+/profile/**/*.joblib
+
 .DS_Store
 Thumbs.db

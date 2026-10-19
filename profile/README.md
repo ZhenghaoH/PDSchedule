@@ -1,5 +1,27 @@
 # Profiling tools
 
+## Source-only predictor distribution
+
+The repository ships TTFT/TPOT measurement, fitting, prediction, and local
+save/load code. It does not distribute fitted models from experiment machines.
+Generated artifacts and pickle/joblib files under profile are ignored by Git.
+
+- [TTFT predictor](TTFT_predictor/README.md): fit and use a local prefill predictor.
+- [TPOT predictor](TPOT_predictor/README.md): fit and use local decode predictors.
+- [Controller profiles](controller/README.md): optional local calibration files
+  used by demand_aware, including the behavior when files are missing.
+
+Cold-start estimates and synthetic initialization samples are not calibrated
+hardware measurements. Refit and validate in the actual deployment environment.
+Do not load untrusted pickle files. Locally generated models are not release
+assets and should not be force-added to Git.
+
+Predictor modules currently depend on NumPy, aiohttp, scikit-learn, and
+transformers, even for a cold-start import. HTTP services additionally use
+FastAPI, Pydantic, and Uvicorn. Prepare compatible application dependencies in
+the serving environment before running the examples; no model/tokenizer is
+downloaded by the numerical cold-start prediction itself.
+
 ## DistServe `L_m` offline profiler
 
 `profile_distserve_lm.py` finds the shortest prompt length that saturates a

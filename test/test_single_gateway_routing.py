@@ -1,7 +1,9 @@
 import unittest
 import sys
 import types
+import pickle
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 
@@ -241,25 +243,48 @@ class DemandAwareProfileTest(unittest.TestCase):
         self.assertEqual(PROFILE_ROOT, ROOT_DIR / "profile" / "controller")
         self.assertNotIn("simulator", PROFILE_ROOT.parts)
 
-        expected_profiles = (
-            ("166", "tpot"),
-            ("167", "ttft"),
-            ("169", "tpot"),
-            ("169", "ttft"),
-            ("170", "tpot"),
-            ("170", "ttft"),
-        )
-        scheduler = DemandAwareStrategy(num_particles=2, max_iterations=1)
-        for machine_id, kind in expected_profiles:
-            with self.subTest(machine_id=machine_id, kind=kind):
-                self.assertTrue(scheduler._profile_path(machine_id, kind).is_file())
+    def test_missing_local_profiles_use_existing_fallback(self):
+        prefill = make_prefill(1, "10.0.0.7", 8081)
+        prefill.max_prompt_tokens = 1000.0
+        decode = make_decode(201, "10.0.0.8", 8082)
+        with TemporaryDirectory() as directory, patch(
+            "scheduler.controller.strategies.demand_aware.PROFILE_ROOT", Path(directory)
+        ):
+            scheduler = DemandAwareStrategy(num_particles=2, max_iterations=1)
+            self.assertIsNone(scheduler._load_ttft_profile(prefill))
+            self.assertIsNone(scheduler._load_tpot_profile(decode))
+            prefill_ms, prefill_source = scheduler._estimate_prefill_time_ms(128, prefill)
+            decode_ms, decode_source = scheduler._estimate_decode_time_ms(32, 128, decode)
 
-        self.assertIsNotNone(
-            scheduler._load_ttft_profile(make_prefill(1, "172.18.0.167", 8081))
-        )
-        self.assertIsNotNone(
-            scheduler._load_tpot_profile(make_decode(201, "172.18.0.166", 8082))
-        )
+        self.assertEqual(prefill_source, "fallback")
+        self.assertEqual(decode_source, "fallback")
+        self.assertAlmostEqual(prefill_ms, 128.0)
+        self.assertAlmostEqual(decode_ms, 64.0)
+
+    def test_generated_local_profiles_can_be_loaded_without_bundled_models(self):
+        prefill = make_prefill(1, "10.0.0.7", 8081)
+        decode = make_decode(201, "10.0.0.8", 8082)
+        with TemporaryDirectory() as directory, patch(
+            "scheduler.controller.strategies.demand_aware.PROFILE_ROOT", Path(directory)
+        ):
+            scheduler = DemandAwareStrategy(num_particles=2, max_iterations=1)
+            # Synthetic fixtures are created in a temporary directory, never shipped.
+            profiles = (
+                ("7", "ttft", {"tokens": 0.001, "d": 0.01}),
+                ("8", "tpot", {"d1": 0.000001, "d2": 0.001, "d3": 0.0001, "d4": 0.002}),
+            )
+            for machine_id, kind, coeffs in profiles:
+                path = scheduler._profile_path(machine_id, kind)
+                path.parent.mkdir(parents=True)
+                with path.open("wb") as handle:
+                    pickle.dump({"coeffs": coeffs}, handle)
+            prefill_ms, prefill_source = scheduler._estimate_prefill_time_ms(128, prefill)
+            decode_ms, decode_source = scheduler._estimate_decode_time_ms(32, 128, decode)
+
+        self.assertEqual(prefill_source, "profile")
+        self.assertEqual(decode_source, "profile")
+        self.assertAlmostEqual(prefill_ms, 138.0)
+        self.assertAlmostEqual(decode_ms, 509.696)
 
 
 class SchedulerMetadataTest(unittest.TestCase):

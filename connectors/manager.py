@@ -5,11 +5,7 @@ import time
 import uuid
 from typing import Any, Dict, Mapping, Optional
 
-from connectors.adapters import (
-    LMCacheAdapter,
-    MooncakeP2PHCCLAdapter,
-    NixlAdapter,
-)
+from connectors.adapters import LMCacheAdapter, NixlAdapter
 from connectors.models import ConnectorDescriptor, ConnectorSessionState
 from connectors.registry import ConnectorRegistry
 
@@ -17,7 +13,7 @@ from connectors.registry import ConnectorRegistry
 class ConnectorManager:
     def __init__(self, registry: Optional[ConnectorRegistry] = None):
         self.registry = registry or ConnectorRegistry(
-            (NixlAdapter(), LMCacheAdapter(), MooncakeP2PHCCLAdapter())
+            (NixlAdapter(), LMCacheAdapter())
         )
         self._sessions: Dict[str, Any] = {}
         self._lock = threading.RLock()

@@ -97,7 +97,7 @@ def parse_args():
     )
     parser.add_argument(
         "--connector-name",
-        choices=["nixl", "lmcache", "mooncake_p2p_hccl"],
+        choices=["nixl", "lmcache"],
         default="nixl",
     )
     parser.add_argument("--connector-version", default="1")

@@ -32,3 +32,6 @@ temp_script.sh
 
 .DS_Store
 Thumbs.db
+
+# Shell launch and operation scripts are local-only.
+*.sh

@@ -1,4 +1,6 @@
-![img](doc/images/logo.png)
+<p align="center">
+  <img src="doc/images/logo.png" alt="PDSchedule logo" width="680">
+</p>
 
 # 简介
 

@@ -16,7 +16,7 @@
 - 全局控制器收到请求后解析请求和标识信息并构造推理任务，通过调度策略选择合适的 Prefill 与 Decode 推理算力池，并转发推理任务请求。
 - 算力池网关接收任务请求后通过调度策略选择池内的推理实例并转发请求。
 - 实例代理接收请求并转发给vLLM实例，并实时感知实例状态。
-- vLLM实例完成推理任务，并在KV Cache传输时提供压缩功能。
+- vLLM 实例完成 Prefill/Decode，具体 Connector 负责 KV Cache 的传输或共享后端读写。
 
 # 环境说明
 
@@ -24,76 +24,42 @@ TTFT/TPOT 仅发布测量、拟合和预测代码，不附带实验机器的已�
 环境自行校准并将模型保存在本地；缺少 Controller 模型时 `demand_aware` 使用已有
 fallback。合成冷启动结果不代表实测精度，详见 [预测器说明](./profile/README.md)。
 
-项目当前版本使用 Docker 环境。旧版环境学习笔记已移出发布树，新的环境安装指南将在后续编写。当前环境记录如下，版本兼容性仍需在发布前统一验证：
-
-- Ubuntu 22.04
-- vLLM 0.13.0
-- LMCache 3.11
-- Pytorch 2.9.1
-
-此外还需要一个Redis容器环境，点击 [这里](./doc/docker/Redis安装笔记.md) 查看环境安装相关记录：
-
-- Redis 7
+参见[环境准备](docs/environment.md)：以 NVIDIA CUDA、vLLM 0.13.0、Torch 2.9.0
+和 NIXL 0.7.1 为例，提供容器创建、应用依赖安装、GPU/模型/端口检查。
+PyTorch 与 CUDA 库由匹配的 serving 环境管理，不用旧实验镜像标签代替实际包版本。
+本条 NIXL 部署不需要 Redis 或 LMCache。
 
 # 快速开始
 
-此项目在 vLLM PD分离方案的基础上进行推理池和推理实例的选择与动态配对，点击 [这里](./doc/PD分离案例.md) 查看PD分离基础案例。
+按[真实部署：NIXL 1P/1D](docs/quickstart.md)启动。文档包含：
 
-当前运行时配对协议仅支持 NIXL 与 LMCache。文档中的 Mooncake Store 仅作为 LMCache 存储后端的部署材料，不代表支持其他 P2P Connector。以下指令为在 **实验室8卡5090机器** 上的启动指令：
+- 两张 GPU、两个 vLLM、Controller、两个 Gateway、两个 Instance Proxy 的拓扑表。
+- 全部七个服务的完整 Python 命令，无需仓库之外的 Shell 启动器。
+- 动态注册检查、经 Controller 的 Python 请求示例与 JSON 预期输出。
+- 服务就绪、PD 请求路径和 NIXL 实际传输指标的分层检查。
 
-### 1 启动环境
+这是通用单机真实部署流程，不要求实验室 8 卡拓扑。其他模型、TP 和多机部署的调整方法见文档末尾。
 
-启动 vLLM 容器环境
-
-```bash
-# 新建容器
-sudo docker run --gpus all --shm-size=16g -it --network host -v /llm-stack:/workspace/llm-stack --name test cacheroute:vllm0.13-lmcache3.11-pytorch2.9.1
-
-sudo docker run --shm-size=16g -it --network host -v /llm-stack:/workspace/llm-stack --name test-proxyp cacheroute:vllm0.13-lmcache3.11-pytorch2.9.1
-
-sudo docker run --shm-size=16g -it --network host -v /llm-stack:/workspace/llm-stack --name test-proxyd cacheroute:vllm0.13-lmcache3.11-pytorch2.9.1
-
-# 启动容器
-sudo docker start test
-# 打开容器
-sudo docker exec -it test /bin/bash
-# 停止容器
-sudo docker stop test
-# 关闭容器
-sudo docker rm test
-```
-
-启动 Redis 容器环境
-
-```bash
-# 新建容器
-sudo docker run -d --name flexpd-redis -p 6378:6379 redis:7 redis-server --save "" --appendonly no --maxmemory 200gb --maxmemory-policy allkeys-lru
-# 打开容器
-sudo docker exec -it flexpd-redis /bin/bash
-# 清除 Redis 缓存
-redis-cli flushall
-# 查看 Redis 缓存大小
-redis-cli info memory | grep used_memory_human
-```
-
-### 2 启动系统
+### 启动参数与策略
 
 `config/ADDRESS_CONFIG.py` 只保存公共默认端口，不保存机器拓扑。各模块的 IP、上级服务地址、实例列表和 NIXL 参数通过启动参数或 `FLEXPD_*` / `VLLM_NIXL_*` 环境变量提供。实例启动后会向所属网关动态注册；部署新机器时无需复制或修改 Python 地址配置。
 
-主要启动参数包括 `--host`、`--port`、`--controller`、`--gateway`、`--prefill`、`--decode`、`--connector-name`、`--connector-version` 和 `--connector-metadata`。可参考 `run_166.sh`、`run_167.sh`、`run_169.sh`、`run_170.sh`。
+主要启动参数包括 `--host`、`--port`、`--controller`、`--gateway`、`--prefill`、`--decode`、`--connector-name`、`--connector-version` 和 `--connector-metadata`。Instance 的 vLLM 端口参数为 `--vllm_port`。
 
-Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `slo_aware_prefill`、`jsq` 或 `round_robin`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generation_throughput` 或 `slo_aware_decode`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。systemd、nohup 或无 TTY 容器部署时请增加 `--no-cli`。
+Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `slo_aware_prefill`、`jsq` 或 `round_robin`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generation_throughput` 或 `slo_aware_decode`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。Gateway 无交互部署可增加 `--no-cli`；Controller 不支持该参数，当前需保留交互终端。
 
 #### P 网关 JSQ 与 D 网关吞吐量调度
 
 P 网关的 `jsq` 不等待或按 token 形成逻辑 batch：每个请求到达后，以网关维护的各实例“未完成输入 token 总数”独立执行 token-weighted JSQ，并立即转发到负载最低的 P 实例。每个请求使用 `Prompt.token_length` 作为权重，不包含主要属于 Decode 阶段的输出预算 `max_tokens`；预约会立即影响下一个请求的选择，并在请求成功、失败或取消后释放。P heartbeat 上报的是请求数，不能与 token 负载混加，因此不会覆盖 P 网关维护的 token 预约；异常泄漏保护 TTL 为 240 秒。D 网关的 `lowest_generation_throughput` 会立即选择当前生成吞吐量最低的在线 D 实例；`slo_aware_decode` 则按 TPOT 预测优先选择不会违反 SLO 的候选实例。策略保留既有 NIXL Pull 参数链路；P 网关的 `jsq` 关闭自适应策略切换和 Prefill 抢占。
 
 ```bash
-python entrypoints/gatewayP.py \
+python3 entrypoints/gatewayP.py \
+  --host 127.0.0.1 --controller 127.0.0.1:5000 \
   --prefill-scheduler-strategy jsq \
   --no-ttft-warmup
 
-python entrypoints/gatewayD.py \
+python3 entrypoints/gatewayD.py \
+  --host 127.0.0.1 --controller 127.0.0.1:5000 \
   --decode-scheduler-strategy lowest_generation_throughput \
   --no-tpot-warmup
 ```
@@ -115,12 +81,16 @@ P/D 网关会在项目根目录自动创建 `gateway_logs/`，并将三类日志
 实例代理使用 `--gpu-indices` 声明其对应的物理 GPU，TP 实例使用逗号分隔，例如：
 
 ```bash
-python entrypoints/instanceP.py ... --connector-name nixl \
-  --connector-metadata '{"side_channel_host":"10.0.0.1","side_channel_port":5557,"tp_size":2}' \
-  --gpu-indices 0,1
-python entrypoints/instanceD.py ... --connector-name nixl \
-  --connector-metadata '{"side_channel_host":"10.0.0.2","side_channel_port":5558,"tp_size":1}' \
-  --gpu-indices 2
+python3 entrypoints/instanceP.py \
+  --host 127.0.0.1 --port 7001 --vllm_port 8001 --gateway 127.0.0.1:8081 \
+  --connector-name nixl \
+  --connector-metadata '{"side_channel_host":"127.0.0.1","side_channel_port":5557,"tp_size":1}' \
+  --gpu-indices 0
+python3 entrypoints/instanceD.py \
+  --host 127.0.0.1 --port 7003 --vllm_port 8003 --gateway 127.0.0.1:8082 \
+  --connector-name nixl \
+  --connector-metadata '{"side_channel_host":"127.0.0.1","side_channel_port":5559,"tp_size":1}' \
+  --gpu-indices 1
 ```
 
 时间日志中的 `observed_network_transfer_ms` 是 D 网关从向 D 实例发出请求到收到首个响应 chunk 的可观测时间，包含 NIXL KV 拉取、vLLM 接纳/内部排队和首 token 计算，并非纯链路传输时间。网关排队时间只统计网关可直接观测的等待，不伪造 vLLM 内部阶段。
@@ -140,8 +110,8 @@ NIXL 使用 `request_scoped` 会话并在通用 `connector_context` 中携带请
 论文调度实验可以使用一个 P 网关管理全部 Prefill 实例、一个 D 网关管理全部 Decode 实例。P/D Gateway 完成动态注册后，Controller 若检测到活跃资源恰好为一个 P Pool 和一个 D Pool，会直接选择唯一组合，不运行 PSO 等全局配对算法，也不要求额外的 P→D 网络记录。实例级策略仍由现有 P/D Gateway 调度器执行。
 
 ```bash
-python entrypoints/controller.py \
-  --host 0.0.0.0 \
+python3 entrypoints/controller.py \
+  --host 127.0.0.1 \
   --port 5000
 ```
 
@@ -160,33 +130,23 @@ P/D 网关均使用统一策略协议和 manager 注册表，不再按 sync/asyn
 
 `Task.scheduler_metadata` 是 P→D 内部使用的空扩展容器。后续策略如需跨阶段传递少量 JSON 数据，应使用策略名作为一级命名空间；该字段不会进入发送给 vLLM 实例的标准或 NIXL payload。
 
-```bash
-# 进入项目所在目录
-cd /workspace/llm-stack/workspace_LLL/FlexPD
-# 启动脚本 (脚本需777)
-./run.sh
-```
+### 网页交互
 
-### 3 网页交互
-
-系统启动后，可以通过访问 "3.Controller" 提供的IP地址和端口来查看系统管理页面
+按上述单机流程启动后，通过 `http://127.0.0.1:5000/requests` 查看请求记录。
 
 除此之外，还可以通过用户侧网页脚本发送请求，试验全流程
 
 ```bash
 # 进入目录
-cd /workspace/llm-stack/workspace_LLL/FlexPD/examples/clientUI
+cd /workspace/llm-stack/PDSchedule/examples/clientUI
 # 启动脚本，在脚本提供的网页中发送请求
 python3 client.py
 ```
 
 # 常见问题
 
-```bash
-# 使用脚本 多窗口同时启动 时遇到这个问题
-# Error constructing proxy for org.gnome.Terminal:/org/gnome/Terminal/Factory0: Failed to execute child process “dbus-launch” (No such file or directory)
-sudo apt install dbus-x11
-```
+模型/GPU、NIXL/UCX、注册、端口冲突和传输检查见[启动流程的常见问题](docs/quickstart.md#13-常见问题)。
+公开流程不依赖 GNOME Terminal，不需要为多窗口脚本安装桌面组件。
 
 # 许可证
 

@@ -1,5 +1,8 @@
-torch==2.3.1
+# Application/research dependencies. Keep the CUDA-compatible serving stack
+# (PyTorch, vLLM, NIXL and optional LMCache) in the serving environment.
+# See docs/environment.md for the minimal NIXL deployment installation.
 fastapi~=0.124.0
+jinja2~=3.1.6
 pyyaml~=6.0.3
 uvicorn~=0.38.0
 matplotlib~=3.10.7
@@ -7,15 +10,11 @@ aiohttp~=3.13.2
 jupyter_client~=8.6.3
 transformers~=4.57.3
 requests~=2.32.5
-jupyter_client~=8.6.3
 pandas~=2.3.3
 scikit-learn~=1.7.2
-jupyter_client~=8.6.3
 scipy~=1.16.3
-jupyter_client~=8.6.3
 datasets~=4.4.2
 numpy~=1.26.4
-jupyter_client~=8.6.3
 warcio~=1.7.5
 bs4~=0.0.2
 beautifulsoup4~=4.14.3

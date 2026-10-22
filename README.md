@@ -34,7 +34,6 @@
   <a href="docs/environment.md">Environment</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#api-usage">API</a> •
-  <a href="#evaluation-results">Evaluation</a> •
   <a href="#documentation">Docs</a>
 </p>
 
@@ -157,7 +156,7 @@ The NIXL deployment guide uses the following environment:
 
 Use [`docs/environment.md`](docs/environment.md) for container creation, the minimal application dependency installation, model checks, and port checks. PyTorch, vLLM, NIXL, and CUDA libraries belong to the serving environment and should not be replaced by an unrelated application dependency installation. The root `requirements.txt` also includes research/data-processing tools beyond the minimal serving path.
 
-Redis and LMCache are not needed for this NIXL example. The paper's multi-pool evaluation uses a different setup, described under [Evaluation Results](#evaluation-results).
+Redis and LMCache are not needed for this NIXL example. The paper's multi-pool evaluation uses a different setup.
 
 ---
 

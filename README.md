@@ -1,154 +1,607 @@
 <p align="center">
-  <img src="doc/images/logo.png" alt="PDSchedule logo" width="680">
+  <img width="1000" alt="PDSchedule" src="doc/images/logo.png" />
 </p>
 
-# 简介
+<p align="center">
+  <b>On-demand prefill-decode scheduling across wide-area networks</b>
+</p>
 
-**PDSchedule** 是一种基于 **vLLM** 的 LLM Prefill/Decode 分离推理调度平台。系统实时感知 P/D Gateway Pool 与池内实例状态，通过分层调度动态选择 Prefill 和 Decode 资源，并由统一 Connector 协议负责底层 KV 传输协商；首期运行时 Connector 仅支持 **NIXL** 与 **LMCache**。
+<p align="center">
+  <i>Built on vLLM. Designed for compute-network-aware resource pairing and SLO-aware execution scheduling.</i>
+</p>
 
-# 架构
+<p align="center">
+  <img src="https://img.shields.io/badge/status-research%20prototype-blue" alt="Research prototype" />
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License" />
+  </a>
+  <a href="https://github.com/vllm-project/vllm">
+    <img src="https://img.shields.io/badge/Built%20on-vLLM-6C5CE7?style=flat-square&logo=github&logoColor=white" alt="Built on vLLM" />
+  </a>
+  <a href="https://github.com/ai-dynamo/nixl">
+    <img src="https://img.shields.io/badge/KV%20transfer-NIXL-00B894?style=flat-square" alt="NIXL KV transfer" />
+  </a>
+  <img src="https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white" alt="Python 3.12" />
+  <img src="https://img.shields.io/badge/FastAPI-Backend-009688?logo=fastapi&logoColor=white" alt="FastAPI backend" />
+  <img src="https://img.shields.io/badge/Docker-Deployment-2496ED?logo=docker&logoColor=white" alt="Docker deployment" />
+</p>
 
-项目结构图如下所示，点击 [这里](./doc/项目代码结构说明.md) 查看关于项目代码结构的具体说明。
+<p align="center">
+  <a href="#why-pdschedule">Why PDSchedule?</a> •
+  <a href="#key-features">Features</a> •
+  <a href="#architecture">Architecture</a> •
+  <a href="#frontend-urls">Frontend URLs</a> •
+  <a href="docs/environment.md">Environment</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#api-usage">API</a> •
+  <a href="#evaluation-results">Evaluation</a> •
+  <a href="#documentation">Docs</a>
+</p>
 
-![img](doc/images/struct.png)
+> [!IMPORTANT]
+> **Deployment scope:** the complete example uses real vLLM instances and NIXL over TCP/UCX. LMCache is also implemented as a shared-backend adapter, but is not required for this example. Each Gateway Pool uses one Connector; a PD request cannot bridge incompatible Connectors.
 
-- 由用户请求发送模块发起推理任务，发送prompt给全局控制器做全局资源池选择。
-- 全局控制器收到请求后解析请求和标识信息并构造推理任务，通过调度策略选择合适的 Prefill 与 Decode 推理算力池，并转发推理任务请求。
-- 算力池网关接收任务请求后通过调度策略选择池内的推理实例并转发请求。
-- 实例代理接收请求并转发给vLLM实例，并实时感知实例状态。
-- vLLM 实例完成 Prefill/Decode，具体 Connector 负责 KV Cache 的传输或共享后端读写。
+## PDSchedule
 
-# 环境说明
+PDSchedule is a two-tier scheduling framework for prefill-decode (P-D) disaggregated LLM inference built on [vLLM](https://github.com/vllm-project/vllm). It targets serving environments where heterogeneous compute pools are connected by links with different bandwidths, delays, and runtime loads. Separating prefill from decode reduces cross-phase interference, but makes KV cache transfer part of the request's critical path. Choosing a faster GPU alone does not necessarily produce a faster response when the selected pool pair is connected by a slower or congested link.
 
-TTFT/TPOT 仅发布测量、拟合和预测代码，不附带实验机器的已拟合模型。部署时在目标
-环境自行校准并将模型保存在本地；缺少 Controller 模型时 `demand_aware` 使用已有
-fallback。合成冷启动结果不代表实测精度，详见 [预测器说明](./profile/README.md)。
+PDSchedule addresses this problem by separating global resource-pool selection from local execution scheduling. The Controller matches request demands with compatible prefill/decode pools using compute and network state. Within each selected pool, Gateway schedulers choose instances and organize work according to the phase's latency objective. A modular Connector layer carries the transfer context needed to connect the two phases.
 
-参见[环境准备](docs/environment.md)：以 NVIDIA CUDA、vLLM 0.13.0、Torch 2.9.0
-和 NIXL 0.7.1 为例，提供容器创建、应用依赖安装、GPU/模型/端口检查。
-PyTorch 与 CUDA 库由匹配的 serving 环境管理，不用旧实验镜像标签代替实际包版本。
-本条 NIXL 部署不需要 Redis 或 LMCache。
+## Why PDSchedule?
 
-# 快速开始
+- 🌐 **Match compute and communication together:** account for prefill work, decode demand, and the cost of transferring KV cache instead of selecting pools from compute load alone.
+- ⏱️ **Schedule for request-level objectives:** distinguish TTFT urgency in prefill from TPOT pressure in decode, rather than treating every queued request as equally urgent.
+- 🔀 **Use heterogeneous resources through two scheduling tiers:** separate WAN-scale pool selection from instance-level decisions, with dynamic registration and Connector-compatible pairing.
 
-按[真实部署：NIXL 1P/1D](docs/quickstart.md)启动。文档包含：
+<p align="center">
+  <img width="48%" alt="Azure Conversation goodput reported in the PDSchedule paper" src="doc/images/readme-goodput-conversation.png" />
+  <img width="48%" alt="Azure Code goodput reported in the PDSchedule paper" src="doc/images/readme-goodput-code.png" />
+</p>
 
-- 两张 GPU、两个 vLLM、Controller、两个 Gateway、两个 Instance Proxy 的拓扑表。
-- 全部七个服务的完整 Python 命令，无需仓库之外的 Shell 启动器。
-- 动态注册检查、经 Controller 的 Python 请求示例与 JSON 预期输出。
-- 服务就绪、PD 请求路径和 NIXL 实际传输指标的分层检查。
+<p align="center">
+  <em>The paper reports up to 2.48× higher peak goodput than round robin on the evaluated traces. Goodput counts input and output tokens from requests that meet their specified SLOs.</em>
+</p>
 
-这是通用单机真实部署流程，不要求实验室 8 卡拓扑。其他模型、TP 和多机部署的调整方法见文档末尾。
+## Key Features
 
-### 启动参数与策略
+| Feature | Description |
+|---|---|
+| ⚙️ **Compute-network-aware pool selection** | The global scheduler evaluates request demands, pool capabilities, runtime load, and inter-pool network state to select a compatible P/D pool pair. |
+| 🧭 **Phase-specific Gateway scheduling** | Prefill policies include TTFT-aware scheduling, token-weighted JSQ, and round robin. Decode policies include TPOT-aware placement, lowest generation throughput, and round robin. |
+| 🔗 **Modular KV transfer protocols** | NIXL propagates request-scoped transfer context; LMCache checks shared-backend identity. Incompatible Pool pairs are filtered before a global policy runs. |
+| 📊 **Runtime state and request observability** | Instance proxies register dynamically and report resource state. The Controller request page and separate Gateway scheduling, timing, and resource logs expose the execution path. |
 
-`config/ADDRESS_CONFIG.py` 只保存公共默认端口，不保存机器拓扑。各模块的 IP、上级服务地址、实例列表和 NIXL 参数通过启动参数或 `FLEXPD_*` / `VLLM_NIXL_*` 环境变量提供。实例启动后会向所属网关动态注册；部署新机器时无需复制或修改 Python 地址配置。
+---
 
-主要启动参数包括 `--host`、`--port`、`--controller`、`--gateway`、`--prefill`、`--decode`、`--connector-name`、`--connector-version` 和 `--connector-metadata`。Instance 的 vLLM 端口参数为 `--vllm_port`。
+## Architecture
 
-Prefill 网关可通过 `--prefill-scheduler-strategy` 选择 `slo_aware_prefill`、`jsq` 或 `round_robin`；Decode 网关可通过 `--decode-scheduler-strategy` 选择 `round_robin`、`lowest_generation_throughput` 或 `slo_aware_decode`。网关默认启动交互式 CLI，运行期间可使用 `show scheduler` 查看策略，使用 `switch scheduler -m <mode>` 在线切换策略。Gateway 无交互部署可增加 `--no-cli`；Controller 不支持该参数，当前需保留交互终端。
+PDSchedule separates global task steering, pool-local scheduling, instance execution, and KV transfer coordination.
 
-#### P 网关 JSQ 与 D 网关吞吐量调度
+<p align="center">
+  <img width="900" alt="Two-tier PDSchedule architecture from the paper" src="doc/images/readme-architecture.png" />
+</p>
 
-P 网关的 `jsq` 不等待或按 token 形成逻辑 batch：每个请求到达后，以网关维护的各实例“未完成输入 token 总数”独立执行 token-weighted JSQ，并立即转发到负载最低的 P 实例。每个请求使用 `Prompt.token_length` 作为权重，不包含主要属于 Decode 阶段的输出预算 `max_tokens`；预约会立即影响下一个请求的选择，并在请求成功、失败或取消后释放。P heartbeat 上报的是请求数，不能与 token 负载混加，因此不会覆盖 P 网关维护的 token 预约；异常泄漏保护 TTL 为 240 秒。D 网关的 `lowest_generation_throughput` 会立即选择当前生成吞吐量最低的在线 D 实例；`slo_aware_decode` 则按 TPOT 预测优先选择不会违反 SLO 的候选实例。策略保留既有 NIXL Pull 参数链路；P 网关的 `jsq` 关闭自适应策略切换和 Prefill 抢占。
+- **Controller / Global Scheduler:** maintains resource snapshots, filters compatible Pool pairs, and performs global selection using demand-aware, least-load, or round-robin policies.
+- **Prefill Gateway / Pool Scheduler:** selects a prefill instance and manages request execution using the configured prefill policy.
+- **Decode Gateway / Pool Scheduler:** selects a decode instance using the configured generation-throughput or TPOT-aware policy.
+- **Instance Proxy:** forwards requests to its local vLLM service, registers its Connector metadata, and reports resource measurements.
+- **Connector:** validates endpoints and prepares the context required by NIXL or a shared LMCache backend. KV data does not pass through the Controller.
+- **Profiling tools:** measure and fit TTFT/TPOT predictors. The repository provides predictor code; fitted artifacts are generated for each deployment rather than shipped with the project.
 
-```bash
-python3 entrypoints/gatewayP.py \
-  --host 127.0.0.1 --controller 127.0.0.1:5000 \
-  --prefill-scheduler-strategy jsq \
-  --no-ttft-warmup
+The figure presents the paper's two-tier design. In this repository, profile information is held in local files and runtime state; it is not a separately deployed database service. Gateway-level request organization and instance placement do not replace vLLM's internal continuous-batching scheduler.
 
-python3 entrypoints/gatewayD.py \
-  --host 127.0.0.1 --controller 127.0.0.1:5000 \
-  --decode-scheduler-strategy lowest_generation_throughput \
-  --no-tpot-warmup
+### Default ports
+
+The single-machine example uses the following ports. All components bind to loopback inside the same host-networked container.
+
+| Component | Service Plane | Control Plane / Auxiliary | UI |
+|---|---|---|---|
+| Controller | 5000 | Registration and resource updates share 5000 | `/requests` on 5000 |
+| Prefill Gateway | 8081 | Instance registration and Connector APIs share 8081 | - |
+| Decode Gateway | 8082 | Instance registration and Connector APIs share 8082 | - |
+| Prefill Instance Proxy | 7001 | `/connectors` on 7001 | - |
+| Decode Instance Proxy | 7003 | `/connectors` on 7003 | - |
+| Prefill vLLM | 8001 | NIXL side channel 5557 | - |
+| Decode vLLM | 8003 | NIXL side channel 5559 | - |
+| Optional Client UI | 5050 | - | `/` on 5050 |
+
+### Frontend URLs
+
+| Component | Frontend | Default URL | How to start | Status |
+|---|---|---|---|---|
+| Controller | Request records and request details | `http://127.0.0.1:5000/requests` | Start `entrypoints/controller.py` as described below. | Available |
+| Client | Browser request interface | `http://127.0.0.1:5050` | `python3 examples/clientUI/client.py` | Available |
+| Gateway / Instance | Resource and execution inspection | Log files and `/connectors` endpoints | Start the corresponding service; see the observability section below. | Available without a dedicated dashboard |
+
+The URLs assume loopback access on the deployment host. A browser on another machine needs an appropriate reachable listen address or SSH forwarding; `0.0.0.0` is a bind address, not a browser destination.
+
+### System Workflow
+
+1. The Client sends an OpenAI-compatible request to the Controller.
+2. The Controller builds the request's service context and selects a compatible prefill/decode Pool pair.
+3. The Prefill Gateway schedules the request on an active prefill instance.
+4. The prefill vLLM executes prefill. Its request-scoped NIXL transfer parameters return through the Instance Proxy to the Prefill Gateway.
+5. The Prefill Gateway forwards the request and Connector context to the Decode Gateway, which selects an active decode instance.
+6. The decode vLLM retrieves KV cache through NIXL and generates the response; the response returns through the Gateway and Controller chain.
+7. Instances and Gateways continue reporting load and resource state for later scheduling decisions.
+
+### Scheduling policies
+
+| Scheduling level | Policies |
+|---|---|
+| Controller | `demand_aware`, `least_load`, `round_robin` |
+| Prefill Gateway | `slo_aware_prefill`, `jsq`, `round_robin` |
+| Decode Gateway | `slo_aware_decode`, `lowest_generation_throughput`, `round_robin` |
+
+With exactly one active P Pool and one active D Pool, the Controller selects the sole compatible pair directly. This does not bypass registration or instance-level scheduling. Multiple Pools restore the selected global policy automatically.
+
+`jsq` balances unfinished input-token reservations and dispatches requests without forming a Gateway logical batch. `slo_aware_prefill` provides queued SLO-aware scheduling. Decode policies select instances; the underlying vLLM engine owns its active batches. Gateway CLI commands `show scheduler` and `switch scheduler -m <mode>` inspect or change local policies when CLI mode is enabled.
+
+---
+
+## Requirements
+
+The NIXL deployment guide uses the following environment:
+
+| Component | Version / Configuration |
+|---|---|
+| Platform | NVIDIA CUDA on Linux x86_64 |
+| Python | 3.12 |
+| vLLM | 0.13.0 |
+| PyTorch | 2.9.0, matching the vLLM dependency constraint |
+| Container CUDA | 12.9.1 in the official vLLM 0.13.0 image build |
+| NIXL | `nixl==0.7.1` and `nixl-cu12==0.7.1` |
+| KV transport | UCX backend with `tcp,cuda_copy` |
+| Example model | Local DeepSeek-R1-Distill-Qwen-7B weights and tokenizer |
+| Example GPU layout | Two GPUs, one TP=1 instance per phase; sufficient memory for the model and KV cache |
+
+Use [`docs/environment.md`](docs/environment.md) for container creation, the minimal application dependency installation, model checks, and port checks. PyTorch, vLLM, NIXL, and CUDA libraries belong to the serving environment and should not be replaced by an unrelated application dependency installation. The root `requirements.txt` also includes research/data-processing tools beyond the minimal serving path.
+
+Redis and LMCache are not needed for this NIXL example. The paper's multi-pool evaluation uses a different setup, described under [Evaluation Results](#evaluation-results).
+
+---
+
+## Quick Start
+
+PDSchedule provides a complete NIXL-based deployment with real vLLM services. Each long-running process runs in a separate terminal; no local-only Shell launcher is required.
+
+The host and container paths are:
+
+```text
+Host repository:      /llm-stack/PDSchedule
+Container repository: /workspace/llm-stack/PDSchedule
+Model directory:      /workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
 ```
 
-vLLM 的 continuous batching 由实例自身的 `max_num_batched_tokens` 等参数控制，P 网关 `jsq` 不提供逻辑 batch 大小参数。该基线不包含论文的 placement algorithm、周期性 workload replan、模型迁移或资源重配置。
-
-P 侧 JSQ 未完成 token 预约保存在网关进程内存中；网关重启后不能从仅包含请求数的实例心跳恢复原 token 负载。正常请求结束会立即释放预约，异常情况下预约最多保留 240 秒。
-
-#### 网关调度、时间追踪与资源日志
-
-P/D 网关会在项目根目录自动创建 `gateway_logs/`，并将三类日志严格分开：
-
-- `prefill_gateway_schedule.log`、`decode_gateway_schedule.log`：策略、候选实例、选择结果、选择来源和选择理由。
-- `prefill_gateway_timing.log`、`decode_gateway_timing.log`：请求生命周期事件及 Prefill 排队/执行、D 网关排队、首响应等待、Decode 流式生成和端到端耗时。
-- `prefill_gateway_resource.log`、`decode_gateway_resource.log`：实例逐卡 GPU 利用率、真实显存容量占用率和实例网卡利用率。
-
-日志为 UTF-8 JSON Lines，每行可独立解析。可通过 `FLEXPD_GATEWAY_LOG_DIR` 修改统一日志目录，通过 `FLEXPD_RESOURCE_LOG_INTERVAL_SEC` 修改资源日志最小写入间隔（默认 1 秒），通过 `FLEXPD_RESOURCE_ZERO_PAUSE_SEC` 修改连续全零静默阈值（默认 30 秒）。资源组全零达到阈值后仅写一次 `logging_paused`，后台继续采样；恢复非零时写 `logging_resumed` 并自动恢复记录。
-
-实例代理使用 `--gpu-indices` 声明其对应的物理 GPU，TP 实例使用逗号分隔，例如：
+Prepare the host, model files, and dependencies using the [environment guide](docs/environment.md). Create the container once on the host:
 
 ```bash
+docker pull vllm/vllm-openai:v0.13.0
+docker run --name pdschedule-nixl --gpus all -it \
+  --network host --ipc=host --shm-size=16g \
+  -v /llm-stack:/workspace/llm-stack \
+  -w /workspace/llm-stack/PDSchedule \
+  --entrypoint /bin/bash \
+  vllm/vllm-openai:v0.13.0
+```
+
+For each additional service terminal, enter the same container with:
+
+```bash
+docker exec -it pdschedule-nixl /bin/bash
+```
+
+<details>
+<summary><b>Full single-machine run: P/D vLLM → Controller → P/D Gateway → P/D Instance Proxy → Client</b></summary>
+
+The following commands assume the model and minimal application dependencies are already available inside the container. Ports and GPU assignments follow the table above. Adjust model paths and resource limits together when using another model.
+
+#### 1. Terminal 1: start the prefill vLLM
+
+```bash
+cd /workspace/llm-stack/PDSchedule
+export CUDA_VISIBLE_DEVICES=0
+export PYTHONHASHSEED=0
+export VLLM_USE_FLASHINFER_SAMPLER=0
+export UCX_TLS=tcp,cuda_copy
+export UCX_NET_DEVICES=all
+export VLLM_NIXL_SIDE_CHANNEL_HOST=127.0.0.1
+export VLLM_NIXL_SIDE_CHANNEL_PORT=5557
+python3 -m vllm.entrypoints.openai.api_server \
+  --model /workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B \
+  --host 127.0.0.1 --port 8001 \
+  --tensor-parallel-size 1 --dtype half \
+  --gpu-memory-utilization 0.8 --max-model-len 4096 \
+  --max-num-batched-tokens 4096 \
+  --enforce-eager --attention-backend TRITON_ATTN \
+  --no-enable-prefix-caching --disable-hybrid-kv-cache-manager \
+  --kv-cache-metrics \
+  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
+```
+
+#### 2. Terminal 2: start the decode vLLM
+
+```bash
+cd /workspace/llm-stack/PDSchedule
+export CUDA_VISIBLE_DEVICES=1
+export PYTHONHASHSEED=0
+export VLLM_USE_FLASHINFER_SAMPLER=0
+export UCX_TLS=tcp,cuda_copy
+export UCX_NET_DEVICES=all
+export VLLM_NIXL_SIDE_CHANNEL_HOST=127.0.0.1
+export VLLM_NIXL_SIDE_CHANNEL_PORT=5559
+python3 -m vllm.entrypoints.openai.api_server \
+  --model /workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B \
+  --host 127.0.0.1 --port 8003 \
+  --tensor-parallel-size 1 --dtype half \
+  --gpu-memory-utilization 0.8 --max-model-len 4096 \
+  --max-num-batched-tokens 4096 \
+  --enforce-eager --attention-backend TRITON_ATTN \
+  --no-enable-prefix-caching --disable-hybrid-kv-cache-manager \
+  --kv-cache-metrics \
+  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
+```
+
+The `kv_both` engine capability is distinct from the P/D role of each PDSchedule Instance Proxy. The request context determines which phase each instance performs. This example uses identical model, dtype, TP, and attention settings on both sides. `kv_load_failure_policy=fail` prevents silent recomputation after a KV load failure.
+
+#### 3. Wait for both model endpoints
+
+From a separate check terminal:
+
+```bash
+python3 - <<'PY'
+import json
+import urllib.request
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+model = "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
+for port in (8001, 8003):
+    with opener.open(f"http://127.0.0.1:{port}/v1/models", timeout=10) as response:
+        body = json.load(response)
+    assert model in [item["id"] for item in body["data"]], body
+    print(f"vLLM {port}: ready")
+PY
+```
+
+Expected output:
+
+```text
+vLLM 8001: ready
+vLLM 8003: ready
+```
+
+Wait for model loading to finish before proceeding; a fixed startup delay is not a readiness check.
+
+#### 4. Terminal 3: start the Controller
+
+```bash
+cd /workspace/llm-stack/PDSchedule
+export CUDA_VISIBLE_DEVICES=""
+python3 entrypoints/controller.py --host 127.0.0.1 --port 5000
+```
+
+Keep this terminal open at the `scheduler-cli>` prompt. The Controller requires an interactive terminal and does not implement `--no-cli`.
+
+#### 5. Terminal 4: start the Prefill Gateway
+
+```bash
+cd /workspace/llm-stack/PDSchedule
+export CUDA_VISIBLE_DEVICES=""
+python3 entrypoints/gatewayP.py \
+  --host 127.0.0.1 --port 8081 \
+  --controller 127.0.0.1:5000 \
+  --prefill 127.0.0.1:7001 --decode 127.0.0.1:8082 \
+  --prefill-scheduler-strategy jsq \
+  --connector-name nixl --connector-version 1 --connector-metadata '{}' \
+  --no-ttft-warmup --no-cli
+```
+
+#### 6. Terminal 5: start the Decode Gateway
+
+```bash
+cd /workspace/llm-stack/PDSchedule
+export CUDA_VISIBLE_DEVICES=""
+python3 entrypoints/gatewayD.py \
+  --host 127.0.0.1 --port 8082 \
+  --controller 127.0.0.1:5000 --decode 127.0.0.1:7003 \
+  --decode-scheduler-strategy round_robin \
+  --connector-name nixl --connector-version 1 --connector-metadata '{}' \
+  --no-tpot-warmup --no-cli
+```
+
+The baseline policies avoid making predictor calibration a prerequisite for the first request. Gateway member addresses do not replace dynamic Instance registration.
+
+#### 7. Terminal 6: start the Prefill Instance Proxy
+
+```bash
+cd /workspace/llm-stack/PDSchedule
+unset CUDA_VISIBLE_DEVICES
 python3 entrypoints/instanceP.py \
-  --host 127.0.0.1 --port 7001 --vllm_port 8001 --gateway 127.0.0.1:8081 \
-  --connector-name nixl \
+  --host 127.0.0.1 --port 7001 --vllm_port 8001 \
+  --gateway 127.0.0.1:8081 \
+  --connector-name nixl --connector-version 1 \
   --connector-metadata '{"side_channel_host":"127.0.0.1","side_channel_port":5557,"tp_size":1}' \
   --gpu-indices 0
+```
+
+#### 8. Terminal 7: start the Decode Instance Proxy
+
+```bash
+cd /workspace/llm-stack/PDSchedule
+unset CUDA_VISIBLE_DEVICES
 python3 entrypoints/instanceD.py \
-  --host 127.0.0.1 --port 7003 --vllm_port 8003 --gateway 127.0.0.1:8082 \
-  --connector-name nixl \
+  --host 127.0.0.1 --port 7003 --vllm_port 8003 \
+  --gateway 127.0.0.1:8082 \
+  --connector-name nixl --connector-version 1 \
   --connector-metadata '{"side_channel_host":"127.0.0.1","side_channel_port":5559,"tp_size":1}' \
   --gpu-indices 1
 ```
 
-时间日志中的 `observed_network_transfer_ms` 是 D 网关从向 D 实例发出请求到收到首个响应 chunk 的可观测时间，包含 NIXL KV 拉取、vLLM 接纳/内部排队和首 token 计算，并非纯链路传输时间。网关排队时间只统计网关可直接观测的等待，不伪造 vLLM 内部阶段。
+`--gpu-indices` identifies NVML-visible physical GPUs for resource reporting. It is not the local CUDA index after vLLM applies `CUDA_VISIBLE_DEVICES`. Instance Proxy and its vLLM service run on the same host; `--host` is also used to reach that vLLM port.
 
-交互式网关 CLI 支持上下方向键查看历史，并支持 Tab 自动补全命令和当前网关可用的调度策略。
+#### 9. Inspect registration and Connector identity
 
-#### Connector 协议与 Pool 约束
-
-每个 P Gateway 或 D Gateway Pool 只能配置一个 Connector，所属实例必须使用同名、同版本 Connector；LMCache 实例还必须使用相同的 `backend`、`namespace` 和 `config_fingerprint`。不同 Pool 可以分别使用 NIXL 或 LMCache。Controller 先构造 Connector 兼容的 P/D Pool 候选，再运行全局调度策略；同一次 PD 会话不支持跨 Connector 桥接。
-
-NIXL 使用 `request_scoped` 会话并在通用 `connector_context` 中携带请求 ID 与 `kv_transfer_params`。LMCache 使用 `shared_backend` 逻辑会话，只校验共享后端配置，不发起远程配对 RPC。服务可通过 `GET /connectors` 查看能力，Gateway 还提供 `/connector/sessions` 会话管理接口。旧 `/pd/pair` 与 `/pd/close` 已删除。
-
-四个 Gateway/Instance 启动入口的 `--connector-name` 仅接受 `nixl` 或 `lmcache`，默认 `nixl`；未支持的 Connector 名称会被拒绝。NIXL 的兼容性校验不要求 P/D 使用相同 TP 数量，具体可运行的不对称 TP 组合仍取决于所安装 vLLM/NIXL 的能力与实测结果。
-
-#### 单 P/D 网关自动直连
-
-论文调度实验可以使用一个 P 网关管理全部 Prefill 实例、一个 D 网关管理全部 Decode 实例。P/D Gateway 完成动态注册后，Controller 若检测到活跃资源恰好为一个 P Pool 和一个 D Pool，会直接选择唯一组合，不运行 PSO 等全局配对算法，也不要求额外的 P→D 网络记录。实例级策略仍由现有 P/D Gateway 调度器执行。
+From the check terminal:
 
 ```bash
-python3 entrypoints/controller.py \
-  --host 127.0.0.1 \
-  --port 5000
+python3 - <<'PY'
+import json
+import urllib.request
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+for port in (8081, 8082, 7001, 7003):
+    with opener.open(f"http://127.0.0.1:{port}/connectors", timeout=10) as response:
+        body = json.load(response)
+    assert body["connector"]["name"] == "nixl", body
+    assert body["connector"]["version"] == "1", body
+    print(f"{port}: connector=nixl version=1 mode={body['mode']}")
+PY
 ```
 
-该快速路径完全由当前活跃 Pool 数量决定，不需要路由模式或固定地址参数。拓扑扩展为多个 P 或多个 D Gateway 后，Controller 会自动恢复当前全局调度策略；若 P 或 D 尚未注册，则继续报告资源未就绪。Controller CLI 可使用 `show scheduler` 查看当前拓扑与调度策略。
+Expected output contains four lines with `connector=nixl version=1 mode=request_scoped`.
 
-#### 后续直接增加网关策略的检查表
+At the Controller's `scheduler-cli>` prompt, enter:
 
-P/D 网关均使用统一策略协议和 manager 注册表，不再按 sync/async 拆分策略文件。增加策略时按以下位置逐项核对：
+```text
+show pool_id
+show scheduler
+```
 
-- P 策略：在 `scheduler/gateway/prefill/` 增加与公开策略同名的文件，实现 `strategy.py` 定义的统一异步接口、能力声明及必要生命周期钩子，再将策略类加入 `manager.py` 注册表。manager 不包含具体算法分支。
-- D 策略：在 `scheduler/gateway/decode/` 增加与公开策略同名的文件，实现 `strategy.py` 定义的统一异步接口，再将策略类加入 `manager.py` 注册表。D 策略必须直接返回实例，不支持等待队列。
-- 将策略名加入 `store/gateway/manager.py` 对应的 P/D 白名单。
-- 将策略名加入 `entrypoints/gatewayP.py` 或 `entrypoints/gatewayD.py` 的启动参数合法值。
-- 将策略名加入 `core/consoles/gateway.py` 的对应角色列表，使在线切换和 Tab 自动补全一致。
-- 增加策略单元测试，并核对未知策略、无在线实例、能力驱动的队列行为、资源释放和在线切换边界。
+The Pool table should contain `127.0.0.1:8081` and `127.0.0.1:8082`; IDs are assigned at runtime. The routing status should contain `single_gateway_direct`, not `resource_wait`. Instance startup must also complete without recurring registration errors.
 
-`Task.scheduler_metadata` 是 P→D 内部使用的空扩展容器。后续策略如需跨阶段传递少量 JSON 数据，应使用策略名作为一级命名空间；该字段不会进入发送给 vLLM 实例的标准或 NIXL payload。
+#### 10. Send a request through the Controller
 
-### 网页交互
-
-按上述单机流程启动后，通过 `http://127.0.0.1:5000/requests` 查看请求记录。
-
-除此之外，还可以通过用户侧网页脚本发送请求，试验全流程
+Execute this Python request inside the same container:
 
 ```bash
-# 进入目录
-cd /workspace/llm-stack/PDSchedule/examples/clientUI
-# 启动脚本，在脚本提供的网页中发送请求
-python3 client.py
+python3 - <<'PY'
+import json
+import urllib.error
+import urllib.request
+payload = {
+    "model": "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    "messages": [{"role": "user", "content": "Explain prefill and decode in two sentences."}],
+    "max_tokens": 128,
+    "temperature": 0.7,
+    "stream": False,
+}
+request = urllib.request.Request(
+    "http://127.0.0.1:5000/v1/chat/completions",
+    data=json.dumps(payload).encode("utf-8"),
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+try:
+    with opener.open(request, timeout=300) as response:
+        status = response.status
+        body = json.load(response)
+except urllib.error.HTTPError as exc:
+    raise SystemExit(f"HTTP {exc.code}: {exc.read().decode('utf-8', errors='replace')}")
+assert status == 200 and body.get("choices") and not body.get("error"), body
+assert body["choices"][0].get("finish_reason") != "error", body
+print("HTTP", status)
+print(json.dumps(body, ensure_ascii=False, indent=2))
+PY
 ```
 
-# 常见问题
+Expected response shape; text, IDs, token counts, and finish reasons vary:
 
-模型/GPU、NIXL/UCX、注册、端口冲突和传输检查见[启动流程的常见问题](docs/quickstart.md#13-常见问题)。
-公开流程不依赖 GNOME Terminal，不需要为多窗口脚本安装桌面组件。
+```json
+{
+  "id": "chatcmpl-<request-id>",
+  "object": "chat.completion",
+  "model": "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+  "choices": [
+    {"index": 0, "message": {"role": "assistant", "content": "<model-generated text>"}, "finish_reason": "stop"}
+  ]
+}
+```
 
-# 许可证
+The current service-context mapping uses the Client source address. Keep this example on loopback: requests arriving from `10.0.*` or `192.168.*` may select a non-PD path. A successful text response alone is not evidence that a request used PD.
 
-本项目采用 [Apache License 2.0](./LICENSE)，作者信息暂保留占位值。
+#### 11. Confirm the PD path and actual KV transfer
 
+Correlate these log fragments for the same request:
+
+```text
+PD分离:  True
+[Controller-Connector] ... connector=nixl session_id=nixl-...
+[Prefill Schedule] Selected instance: 127.0.0.1:7001
+[Decode-Connector] validation succeeded request_id=... connector=nixl prefill_instance=127.0.0.1:7001 decode_instance=127.0.0.1:7003 session_id=...
+```
+
+Read the following metrics before and after a request, allowing for the vLLM statistics refresh interval:
+
+```bash
+python3 - <<'PY'
+import urllib.request
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+prefixes = (
+    "vllm:nixl_bytes_transferred_sum",
+    "vllm:nixl_bytes_transferred_count",
+    "vllm:nixl_num_failed_transfers_total",
+)
+with opener.open("http://127.0.0.1:8003/metrics", timeout=10) as response:
+    text = response.read().decode("utf-8")
+for line in text.splitlines():
+    if line.startswith(prefixes):
+        print(line)
+PY
+```
+
+The transferred-byte sum and transfer count should increase, without an increase in failed transfers. Connector identity and the Decode validation log establish compatibility; they do not by themselves establish data transfer. See the [deployment guide](docs/quickstart.md) for troubleshooting and shutdown.
+
+</details>
+
+### Optional: Browser Client
+
+After the services are ready, start the existing browser Client from another terminal:
+
+```bash
+cd /workspace/llm-stack/PDSchedule
+python3 examples/clientUI/client.py
+```
+
+Open `http://127.0.0.1:5050` and use the Controller's `http://127.0.0.1:5000/v1/chat/completions` endpoint rather than a vLLM endpoint.
+
+---
+
+## API Usage
+
+### Chat Completion
+
+```bash
+curl http://127.0.0.1:5000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    "messages": [{"role": "user", "content": "Explain prefill-decode disaggregation."}],
+    "max_tokens": 128,
+    "temperature": 0.7,
+    "stream": false
+  }'
+```
+
+### Completion
+
+```bash
+curl http://127.0.0.1:5000/v1/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B",
+    "prompt": "Prefill-decode disaggregation separates",
+    "max_tokens": 128,
+    "temperature": 0.7,
+    "stream": false
+  }'
+```
+
+### Request Options
+
+| Option | Required | Description |
+|---|---|---|
+| `model` | Yes | The model identifier accepted by the selected vLLM services; this example uses the shared local model path. |
+| `messages` / `prompt` | Yes | Chat messages or completion input. |
+| `max_tokens` | No | Requested output-token budget. |
+| `stream` | No | Whether to request streaming output; the examples above use non-streaming JSON. |
+| `temperature`, `top_p` | No | Sampling controls parsed by the request schema; the examples use a positive temperature. |
+| `Enable_Affinity` | No | Enable affinity lookup when `user_id` and `session_id` are also supplied. The single-Pool route still takes precedence. |
+| `user_id`, `session_id` | Conditional | Session identity used by the affinity path. |
+
+The Controller constructs internal scheduling and Connector context. Do not manually insert NIXL block IDs into a normal Client request. Current SLO values and PD enablement come from the service-context mapping, not arbitrary extra request fields.
+
+---
+
+## Evaluation Results
+
+These figures and values come from Section IV and Figures 3-4 of the PDSchedule manuscript, *PDSchedule: Facilitating On-demand Scheduling for Prefill-Decode Disaggregated LLM Inference across Wide-Area Networks*.
+
+The paper evaluates Qwen2.5-7B in FP16 on vLLM 0.23, with three Prefill Pools and three Decode Pools, two instances per Pool, and heterogeneous RTX 5090/3090 configurations. Emulated links use 1 or 40 Gbps bandwidth and 0.2 or 10 ms RTT. Workloads are sampled from the Conversation and Code traces of Azure LLM Inference Trace 2024.
+
+This evaluation setup is distinct from the vLLM 0.13.0 / DeepSeek-R1-Distill-Qwen-7B deployment example. Reported gains describe the paper's workloads and configurations, not a fixed performance guarantee for every deployment.
+
+| Paper metric | PDSchedule | DistServe | Round robin |
+|---|---|---|---|
+| Conversation peak goodput, SLO-satisfied tokens/s | **8,610** | 3,882 | 3,473 |
+| Code peak goodput, SLO-satisfied tokens/s | **6,726** | 5,481 | 4,966 |
+| Conversation mean TTFT at 3.2 QPS | **0.74 s** | 2.40 s | 3.62 s |
+| Conversation mean TPOT at 3.2 QPS | **8.55 ms** | 10.99 ms | 12.15 ms |
+
+Goodput counts both input and output tokens from requests satisfying their specified SLOs. The Conversation workload uses TTFT ≤ 6 s and TPOT ≤ 20 ms; the Code workload uses E2E latency ≤ 25 s. Peak goodput is taken over each evaluated query-rate sweep.
+
+<details>
+<summary>View paper evaluation figures</summary>
+
+### Task TTFT distribution
+
+The Conversation trace at 3.2 QPS illustrates the effect of joint compute-network selection and phase-specific scheduling on time to first token.
+
+<img width="1000" alt="Paper Figure 4a: Conversation TTFT distribution at 3.2 QPS" src="doc/images/readme-ttft.png" />
+
+### Task TPOT distribution
+
+The same workload shows the distribution of output-token latency relative to its 20 ms TPOT objective.
+
+<img width="1000" alt="Paper Figure 4b: Conversation TPOT distribution at 3.2 QPS" src="doc/images/readme-tpot.png" />
+
+### Phase-specific latency breakdown
+
+The paper decomposes P90 end-to-end latency using average phase proportions, separating prefill computation, KV transfer, and decode computation.
+
+<img width="1000" alt="Paper Figure 4c: Phase contributions to P90 end-to-end latency" src="doc/images/readme-latency-breakdown.png" />
+
+</details>
+
+---
+
+## Current Status
+
+PDSchedule is under active development. The repository currently provides:
+
+- Two-tier Controller/Gateway scheduling with three policies at each scheduling level.
+- Dynamic Pool and Instance registration, resource reporting, and a single-P/D-Pool direct route.
+- Connector-aware candidate filtering, NIXL request-scoped transfer, and LMCache shared-backend identity checks.
+- OpenAI-compatible chat/completion forwarding, an optional browser Client, and a Controller request page.
+- Separate Gateway scheduling, timing, and resource logs.
+- TTFT/TPOT measurement, fitting, and prediction code without deployment-specific fitted models.
+
+Paper plots are included for context. The complete paper workload harness and calibrated experiment artifacts are not distributed as a reproducibility bundle in this repository.
+
+Suggested focused regression commands, from a prepared application environment:
+
+```bash
+python3 -m pip install pytest
+python3 -m pytest -q test/test_connector_protocol.py
+python3 -m unittest discover -s test -p test_runtime_instance_registration.py
+python3 -m unittest discover -s test -p test_single_gateway_routing.py
+python3 -m unittest discover -s test -p test_gateway_scheduler_strategy.py
+```
+
+### Roadmap
+
+- [x] Modular global and Pool-local scheduling policies
+- [x] Dynamic registration and live resource-state updates
+- [x] Connector-compatible P/D pairing
+- [x] NIXL and LMCache adapters
+- [x] Complete Python-based NIXL deployment instructions
+- [x] Controller request page and Gateway execution/resource logs
+- [x] Source-only TTFT/TPOT profiling and prediction tools
+- [ ] More multi-Pool and multi-machine deployment examples
+- [ ] Packaged installation and source-independent resource loading
+- [ ] Public workload replay tools and a reproducible paper-evaluation bundle
+- [ ] Tagged release and public paper/citation entry
+
+---
+
+## Documentation
+
+| Document | Description |
+|---|---|
+| [`docs/environment.md`](docs/environment.md) | Container setup, version constraints, minimal dependencies, GPU/model checks, and port preparation. |
+| [`docs/quickstart.md`](docs/quickstart.md) | Complete NIXL 1P/1D topology, all seven service commands, requests, transfer checks, and shutdown. |
+| [`doc/项目代码结构说明.md`](doc/项目代码结构说明.md) | Repository structure, runtime flow, and extension points for schedulers and Connectors. |
+| [`examples/nixl_tcp_fallback/README.md`](examples/nixl_tcp_fallback/README.md) | TCP transport guidance and the distinction between upstream Connector checks and the PDSchedule path. |
+| [`profile/README.md`](profile/README.md) | Profiling tools and deployment-local predictor artifacts. |
+| [`profile/TTFT_predictor/README.md`](profile/TTFT_predictor/README.md) | TTFT measurement, fitting, prediction, and local calibration. |
+| [`profile/TPOT_predictor/README.md`](profile/TPOT_predictor/README.md) | TPOT measurement and prediction interfaces. |
+| [`profile/controller/README.md`](profile/controller/README.md) | Optional Controller calibration files and missing-profile behavior. |
+| [`LICENSE`](LICENSE) | Apache License 2.0. Author information remains a placeholder. |

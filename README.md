@@ -7,11 +7,11 @@
 </p>
 
 <p align="center">
-  <i>Built on vLLM. Designed for compute-network-aware resource pairing and SLO-aware execution scheduling.</i>
+  <i>Built on vLLM. Designed for joint compute-network resource pairing and SLO-aware execution scheduling.</i>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/status-research%20prototype-blue" alt="Research prototype" />
+  <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version 0.1.0" />
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License" />
   </a>
@@ -43,13 +43,13 @@
 
 ## PDSchedule
 
-PDSchedule is a two-tier scheduling framework for prefill-decode (P-D) disaggregated LLM inference built on [vLLM](https://github.com/vllm-project/vllm). It targets serving environments where heterogeneous compute pools are connected by links with different bandwidths, delays, and runtime loads. Separating prefill from decode reduces cross-phase interference, but makes KV cache transfer part of the request's critical path. Choosing a faster GPU alone does not necessarily produce a faster response when the selected pool pair is connected by a slower or congested link.
+PDSchedule is a two-tier scheduling framework for prefill-decode (P-D) disaggregated LLM inference built on [vLLM](https://github.com/vllm-project/vllm). It targets serving environments where heterogeneous inference pools are connected by links with different bandwidths, delays, and runtime loads. Separating prefill from decode reduces cross-phase interference, but makes KV cache transfer part of the request's critical path. Choosing a faster GPU alone does not necessarily produce a faster response when the selected pool pair is connected by a slower or congested link.
 
-PDSchedule addresses this problem by separating global resource-pool selection from local execution scheduling. The Controller matches request demands with compatible prefill/decode pools using compute and network state. Within each selected pool, Gateway schedulers choose instances and organize work according to the phase's latency objective. A modular Connector layer carries the transfer context needed to connect the two phases.
+PDSchedule addresses this problem by introducing joint compute-network task steering and SLO-aware execution scheduling. The Controller matches request demands with compatible prefill/decode pools using compute and network state. Within each selected pool, Gateway schedulers choose instances and organize work according to the phase's latency objective. A modular Connector layer carries the transfer context needed to connect the two phases.
 
 ## Why PDSchedule?
 
-- 🌐 **Match compute and communication together:** account for prefill work, decode demand, and the cost of transferring KV cache instead of selecting pools from compute load alone.
+- 🌐 **Match compute and network together:** account for prefill work, decode demand, and the cost of transferring KV cache instead of selecting pools from compute load alone.
 - ⏱️ **Schedule for request-level objectives:** distinguish TTFT urgency in prefill from TPOT pressure in decode, rather than treating every queued request as equally urgent.
 - 🔀 **Use heterogeneous resources through two scheduling tiers:** separate WAN-scale pool selection from instance-level decisions, with dynamic registration and Connector-compatible pairing.
 
@@ -64,12 +64,12 @@ PDSchedule addresses this problem by separating global resource-pool selection f
 
 ## Key Features
 
-| Feature | Description |
-|---|---|
-| ⚙️ **Compute-network-aware pool selection** | The global scheduler evaluates request demands, pool capabilities, runtime load, and inter-pool network state to select a compatible P/D pool pair. |
-| 🧭 **Phase-specific Gateway scheduling** | Prefill policies include TTFT-aware scheduling, token-weighted JSQ, and round robin. Decode policies include TPOT-aware placement, lowest generation throughput, and round robin. |
-| 🔗 **Modular KV transfer protocols** | NIXL propagates request-scoped transfer context; LMCache checks shared-backend identity. Incompatible Pool pairs are filtered before a global policy runs. |
-| 📊 **Runtime state and request observability** | Instance proxies register dynamically and report resource state. The Controller request page and separate Gateway scheduling, timing, and resource logs expose the execution path. |
+| Feature                                                         | Description                                                                                                                                                                        |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ⚙️ **Joint** **Compute-network pool selection** | The global scheduler evaluates request demands, pool capabilities, runtime load, and inter-pool network state to select a compatible P/D pool pair.                                |
+| 🧭 **Phase-specific Gateway scheduling**                  | Prefill policies include TTFT-aware scheduling, token-weighted JSQ, and round robin. Decode policies include TPOT-aware placement, lowest generation throughput, and round robin.  |
+| 🔗 **Modular KV transfer protocols**                      | NIXL propagates request-scoped transfer context; LMCache checks shared-backend identity. Incompatible Pool pairs are filtered before a global policy runs.                         |
+| 📊 **Runtime state and request observability**            | Instance proxies register dynamically and report resource state. The Controller request page and separate Gateway scheduling, timing, and resource logs expose the execution path. |
 
 ---
 
@@ -94,24 +94,24 @@ The figure presents the paper's two-tier design. In this repository, profile inf
 
 The single-machine example uses the following ports. All components bind to loopback inside the same host-networked container.
 
-| Component | Service Plane | Control Plane / Auxiliary | UI |
-|---|---|---|---|
-| Controller | 5000 | Registration and resource updates share 5000 | `/requests` on 5000 |
-| Prefill Gateway | 8081 | Instance registration and Connector APIs share 8081 | - |
-| Decode Gateway | 8082 | Instance registration and Connector APIs share 8082 | - |
-| Prefill Instance Proxy | 7001 | `/connectors` on 7001 | - |
-| Decode Instance Proxy | 7003 | `/connectors` on 7003 | - |
-| Prefill vLLM | 8001 | NIXL side channel 5557 | - |
-| Decode vLLM | 8003 | NIXL side channel 5559 | - |
-| Optional Client UI | 5050 | - | `/` on 5050 |
+| Component              | Service Plane | Control Plane / Auxiliary                           | UI                    |
+| ---------------------- | ------------- | --------------------------------------------------- | --------------------- |
+| Controller             | 5000          | Registration and resource updates share 5000        | `/requests` on 5000 |
+| Prefill Gateway        | 8081          | Instance registration and Connector APIs share 8081 | -                     |
+| Decode Gateway         | 8082          | Instance registration and Connector APIs share 8082 | -                     |
+| Prefill Instance Proxy | 7001          | `/connectors` on 7001                             | -                     |
+| Decode Instance Proxy  | 7003          | `/connectors` on 7003                             | -                     |
+| Prefill vLLM           | 8001          | NIXL side channel 5557                              | -                     |
+| Decode vLLM            | 8003          | NIXL side channel 5559                              | -                     |
+| Optional Client UI     | 5050          | -                                                   | `/` on 5050         |
 
 ### Frontend URLs
 
-| Component | Frontend | Default URL | How to start | Status |
-|---|---|---|---|---|
-| Controller | Request records and request details | `http://127.0.0.1:5000/requests` | Start `entrypoints/controller.py` as described below. | Available |
-| Client | Browser request interface | `http://127.0.0.1:5050` | `python3 examples/clientUI/client.py` | Available |
-| Gateway / Instance | Resource and execution inspection | Log files and `/connectors` endpoints | Start the corresponding service; see the observability section below. | Available without a dedicated dashboard |
+| Component          | Frontend                            | Default URL                             | How to start                                                          | Status                                  |
+| ------------------ | ----------------------------------- | --------------------------------------- | --------------------------------------------------------------------- | --------------------------------------- |
+| Controller         | Request records and request details | `http://127.0.0.1:5000/requests`      | Start `entrypoints/controller.py` as described below.               | Available                               |
+| Client             | Browser request interface           | `http://127.0.0.1:5050`               | `python3 examples/clientUI/client.py`                               | Available                               |
+| Gateway / Instance | Resource and execution inspection   | Log files and `/connectors` endpoints | Start the corresponding service; see the observability section below. | Available without a dedicated dashboard |
 
 The URLs assume loopback access on the deployment host. A browser on another machine needs an appropriate reachable listen address or SSH forwarding; `0.0.0.0` is a bind address, not a browser destination.
 
@@ -127,11 +127,11 @@ The URLs assume loopback access on the deployment host. A browser on another mac
 
 ### Scheduling policies
 
-| Scheduling level | Policies |
-|---|---|
-| Controller | `demand_aware`, `least_load`, `round_robin` |
-| Prefill Gateway | `slo_aware_prefill`, `jsq`, `round_robin` |
-| Decode Gateway | `slo_aware_decode`, `lowest_generation_throughput`, `round_robin` |
+| Scheduling level | Policies                                                                |
+| ---------------- | ----------------------------------------------------------------------- |
+| Controller       | `demand_aware`, `least_load`, `round_robin`                       |
+| Prefill Gateway  | `slo_aware_prefill`, `jsq`, `round_robin`                         |
+| Decode Gateway   | `slo_aware_decode`, `lowest_generation_throughput`, `round_robin` |
 
 With exactly one active P Pool and one active D Pool, the Controller selects the sole compatible pair directly. This does not bypass registration or instance-level scheduling. Multiple Pools restore the selected global policy automatically.
 
@@ -143,16 +143,16 @@ With exactly one active P Pool and one active D Pool, the Controller selects the
 
 The NIXL deployment guide uses the following environment:
 
-| Component | Version / Configuration |
-|---|---|
-| Platform | NVIDIA CUDA on Linux x86_64 |
-| Python | 3.12 |
-| vLLM | 0.13.0 |
-| PyTorch | 2.9.0, matching the vLLM dependency constraint |
-| Container CUDA | 12.9.1 in the official vLLM 0.13.0 image build |
-| NIXL | `nixl==0.7.1` and `nixl-cu12==0.7.1` |
-| KV transport | UCX backend with `tcp,cuda_copy` |
-| Example model | Local DeepSeek-R1-Distill-Qwen-7B weights and tokenizer |
+| Component          | Version / Configuration                                                             |
+| ------------------ | ----------------------------------------------------------------------------------- |
+| Platform           | NVIDIA CUDA on Linux x86_64                                                         |
+| Python             | 3.12                                                                                |
+| vLLM               | 0.13.0                                                                              |
+| PyTorch            | 2.9.0, matching the vLLM dependency constraint                                      |
+| Container CUDA     | 12.9.1 in the official vLLM 0.13.0 image build                                      |
+| NIXL               | `nixl==0.7.1` and `nixl-cu12==0.7.1`                                            |
+| KV transport       | UCX backend with `tcp,cuda_copy`                                                  |
+| Example model      | Local DeepSeek-R1-Distill-Qwen-7B weights and tokenizer                             |
 | Example GPU layout | Two GPUs, one TP=1 instance per phase; sufficient memory for the model and KV cache |
 
 Use [`docs/environment.md`](docs/environment.md) for container creation, the minimal application dependency installation, model checks, and port checks. PyTorch, vLLM, NIXL, and CUDA libraries belong to the serving environment and should not be replaced by an unrelated application dependency installation. The root `requirements.txt` also includes research/data-processing tools beyond the minimal serving path.
@@ -497,61 +497,17 @@ curl http://127.0.0.1:5000/v1/completions \
 
 ### Request Options
 
-| Option | Required | Description |
-|---|---|---|
-| `model` | Yes | The model identifier accepted by the selected vLLM services; this example uses the shared local model path. |
-| `messages` / `prompt` | Yes | Chat messages or completion input. |
-| `max_tokens` | No | Requested output-token budget. |
-| `stream` | No | Whether to request streaming output; the examples above use non-streaming JSON. |
-| `temperature`, `top_p` | No | Sampling controls parsed by the request schema; the examples use a positive temperature. |
-| `Enable_Affinity` | No | Enable affinity lookup when `user_id` and `session_id` are also supplied. The single-Pool route still takes precedence. |
-| `user_id`, `session_id` | Conditional | Session identity used by the affinity path. |
+| Option                      | Required    | Description                                                                                                                 |
+| --------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `model`                   | Yes         | The model identifier accepted by the selected vLLM services; this example uses the shared local model path.                 |
+| `messages` / `prompt`   | Yes         | Chat messages or completion input.                                                                                          |
+| `max_tokens`              | No          | Requested output-token budget.                                                                                              |
+| `stream`                  | No          | Whether to request streaming output; the examples above use non-streaming JSON.                                             |
+| `temperature`, `top_p`  | No          | Sampling controls parsed by the request schema; the examples use a positive temperature.                                    |
+| `Enable_Affinity`         | No          | Enable affinity lookup when `user_id` and `session_id` are also supplied. The single-Pool route still takes precedence. |
+| `user_id`, `session_id` | Conditional | Session identity used by the affinity path.                                                                                 |
 
 The Controller constructs internal scheduling and Connector context. Do not manually insert NIXL block IDs into a normal Client request. Current SLO values and PD enablement come from the service-context mapping, not arbitrary extra request fields.
-
----
-
-## Evaluation Results
-
-These figures and values come from Section IV and Figures 3-4 of the PDSchedule manuscript, *PDSchedule: Facilitating On-demand Scheduling for Prefill-Decode Disaggregated LLM Inference across Wide-Area Networks*.
-
-The paper evaluates Qwen2.5-7B in FP16 on vLLM 0.23, with three Prefill Pools and three Decode Pools, two instances per Pool, and heterogeneous RTX 5090/3090 configurations. Emulated links use 1 or 40 Gbps bandwidth and 0.2 or 10 ms RTT. Workloads are sampled from the Conversation and Code traces of Azure LLM Inference Trace 2024.
-
-This evaluation setup is distinct from the vLLM 0.13.0 / DeepSeek-R1-Distill-Qwen-7B deployment example. Reported gains describe the paper's workloads and configurations, not a fixed performance guarantee for every deployment.
-
-| Paper metric | PDSchedule | DistServe | Round robin |
-|---|---|---|---|
-| Conversation peak goodput, SLO-satisfied tokens/s | **8,610** | 3,882 | 3,473 |
-| Code peak goodput, SLO-satisfied tokens/s | **6,726** | 5,481 | 4,966 |
-| Conversation mean TTFT at 3.2 QPS | **0.74 s** | 2.40 s | 3.62 s |
-| Conversation mean TPOT at 3.2 QPS | **8.55 ms** | 10.99 ms | 12.15 ms |
-
-Goodput counts both input and output tokens from requests satisfying their specified SLOs. The Conversation workload uses TTFT ≤ 6 s and TPOT ≤ 20 ms; the Code workload uses E2E latency ≤ 25 s. Peak goodput is taken over each evaluated query-rate sweep.
-
-<details>
-<summary>View paper evaluation figures</summary>
-
-### Task TTFT distribution
-
-The Conversation trace at 3.2 QPS illustrates the effect of joint compute-network selection and phase-specific scheduling on time to first token.
-
-<img width="1000" alt="Paper Figure 4a: Conversation TTFT distribution at 3.2 QPS" src="doc/images/readme-ttft.png" />
-
-### Task TPOT distribution
-
-The same workload shows the distribution of output-token latency relative to its 20 ms TPOT objective.
-
-<img width="1000" alt="Paper Figure 4b: Conversation TPOT distribution at 3.2 QPS" src="doc/images/readme-tpot.png" />
-
-### Phase-specific latency breakdown
-
-The paper decomposes P90 end-to-end latency using average phase proportions, separating prefill computation, KV transfer, and decode computation.
-
-<img width="1000" alt="Paper Figure 4c: Phase contributions to P90 end-to-end latency" src="doc/images/readme-latency-breakdown.png" />
-
-</details>
-
----
 
 ## Current Status
 
@@ -578,13 +534,13 @@ python3 -m unittest discover -s test -p test_gateway_scheduler_strategy.py
 
 ### Roadmap
 
-- [x] Modular global and Pool-local scheduling policies
-- [x] Dynamic registration and live resource-state updates
-- [x] Connector-compatible P/D pairing
-- [x] NIXL and LMCache adapters
-- [x] Complete Python-based NIXL deployment instructions
-- [x] Controller request page and Gateway execution/resource logs
-- [x] Source-only TTFT/TPOT profiling and prediction tools
+- [X] Modular global and Pool-local scheduling policies
+- [X] Dynamic registration and live resource-state updates
+- [X] Connector-compatible P/D pairing
+- [X] NIXL and LMCache adapters
+- [X] Complete Python-based NIXL deployment instructions
+- [X] Controller request page and Gateway execution/resource logs
+- [X] Source-only TTFT/TPOT profiling and prediction tools
 - [ ] More multi-Pool and multi-machine deployment examples
 - [ ] Packaged installation and source-independent resource loading
 - [ ] Public workload replay tools and a reproducible paper-evaluation bundle
@@ -594,14 +550,14 @@ python3 -m unittest discover -s test -p test_gateway_scheduler_strategy.py
 
 ## Documentation
 
-| Document | Description |
-|---|---|
-| [`docs/environment.md`](docs/environment.md) | Container setup, version constraints, minimal dependencies, GPU/model checks, and port preparation. |
-| [`docs/quickstart.md`](docs/quickstart.md) | Complete NIXL 1P/1D topology, all seven service commands, requests, transfer checks, and shutdown. |
-| [`doc/项目代码结构说明.md`](doc/项目代码结构说明.md) | Repository structure, runtime flow, and extension points for schedulers and Connectors. |
+| Document                                                                        | Description                                                                                           |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| [`docs/environment.md`](docs/environment.md)                                   | Container setup, version constraints, minimal dependencies, GPU/model checks, and port preparation.   |
+| [`docs/quickstart.md`](docs/quickstart.md)                                     | Complete NIXL 1P/1D topology, all seven service commands, requests, transfer checks, and shutdown.    |
+| [`doc/项目代码结构说明.md`](doc/项目代码结构说明.md)                           | Repository structure, runtime flow, and extension points for schedulers and Connectors.               |
 | [`examples/nixl_tcp_fallback/README.md`](examples/nixl_tcp_fallback/README.md) | TCP transport guidance and the distinction between upstream Connector checks and the PDSchedule path. |
-| [`profile/README.md`](profile/README.md) | Profiling tools and deployment-local predictor artifacts. |
-| [`profile/TTFT_predictor/README.md`](profile/TTFT_predictor/README.md) | TTFT measurement, fitting, prediction, and local calibration. |
-| [`profile/TPOT_predictor/README.md`](profile/TPOT_predictor/README.md) | TPOT measurement and prediction interfaces. |
-| [`profile/controller/README.md`](profile/controller/README.md) | Optional Controller calibration files and missing-profile behavior. |
-| [`LICENSE`](LICENSE) | Apache License 2.0. Author information remains a placeholder. |
+| [`profile/README.md`](profile/README.md)                                       | Profiling tools and deployment-local predictor artifacts.                                             |
+| [`profile/TTFT_predictor/README.md`](profile/TTFT_predictor/README.md)         | TTFT measurement, fitting, prediction, and local calibration.                                         |
+| [`profile/TPOT_predictor/README.md`](profile/TPOT_predictor/README.md)         | TPOT measurement and prediction interfaces.                                                           |
+| [`profile/controller/README.md`](profile/controller/README.md)                 | Optional Controller calibration files and missing-profile behavior.                                   |
+| [`LICENSE`](LICENSE)                                                           | Apache License 2.0. Author information remains a placeholder.                                         |

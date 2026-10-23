@@ -1,32 +1,19 @@
-# Application/research dependencies. Keep the CUDA-compatible serving stack
-# (PyTorch, vLLM, NIXL and optional LMCache) in the serving environment.
-# See docs/environment.md for the minimal NIXL deployment installation.
+# Application runtime dependencies (Python 3.12 deployment baseline).
+# Install Torch, vLLM, NIXL and optional LMCache in the compatible serving
+# environment described in docs/environment.md, not through this file.
 fastapi~=0.124.0
+uvicorn~=0.38.0
+aiohttp~=3.13.2
+requests~=2.32.5
+pydantic~=2.12.5
 jinja2~=3.1.6
 pyyaml~=6.0.3
-uvicorn~=0.38.0
-matplotlib~=3.10.7
-aiohttp~=3.13.2
-jupyter_client~=8.6.3
-transformers~=4.57.3
-requests~=2.32.5
-pandas~=2.3.3
-scikit-learn~=1.7.2
-scipy~=1.16.3
-datasets~=4.4.2
-numpy~=1.26.4
-warcio~=1.7.5
-bs4~=0.0.2
-beautifulsoup4~=4.14.3
-tqdm~=4.67.1
-Booktype~=1.5
-safetensors~=0.7.0
-pyzmq~=27.1.0
-pydantic~=2.12.5
-starlette~=0.50.0
-httpx~=0.28.1
-setuptools~=78.1.0
-huggingface-hub~=0.36.0
 psutil~=7.0.0
 nvidia-ml-py>=12.535.108
-openai~=2.2.0
+prometheus-client>=0.18.0
+
+# Gateway predictor imports need these even when warmup is disabled.
+numpy~=1.26.4
+scipy~=1.16.3
+scikit-learn~=1.7.2
+transformers~=4.57.3

@@ -1,6 +1,5 @@
 import unittest
 import sys
-import types
 import pickle
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -10,11 +9,6 @@ from unittest.mock import Mock, patch
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
-
-if "fastapi" not in sys.modules:
-    fastapi_stub = types.ModuleType("fastapi")
-    fastapi_stub.HTTPException = type("HTTPException", (Exception,), {})
-    sys.modules["fastapi"] = fastapi_stub
 
 from core.schemas.request import BaseRequest, Prompt, Service, Task
 from scheduler.controller.global_scheduler import GlobalScheduler

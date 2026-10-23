@@ -6,7 +6,6 @@ import json
 import statistics
 import sys
 import time
-import types
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional
@@ -21,15 +20,28 @@ if str(ROOT_DIR) not in sys.path:
 class MockScheduler:
     def __init__(self) -> None:
         self.calls = 0
+        self.routes: List[Dict[str, Any]] = []
 
     def schedule(self, prompt_obj: Any, service_obj: Any, request_id: int) -> Dict[str, Any]:
         self.calls += 1
-        return {
+        route = {
             "P_proxy_addr": f"127.0.0.{self.calls}",
             "P_proxy_port": 8000 + self.calls,
             "D_proxy_addr": f"127.0.1.{self.calls}",
             "D_proxy_port": 9000 + self.calls,
+            "PD_connector": "nixl",
+            "PD_connector_descriptor": {
+                "name": "nixl", "version": "1", "metadata": {}
+            },
         }
+        self.routes.append(route)
+        return route
+
+    def validate_cached_route(self, route: Dict[str, Any]) -> bool:
+        return any(
+            all(route.get(key) == value for key, value in issued.items())
+            for issued in self.routes
+        )
 
 
 ROUND_QUESTIONS = [
@@ -77,11 +89,6 @@ def _build_payload(enable_affinity: bool, user_id: Optional[str], session_id: Op
 
 
 def run_functional_tests() -> None:
-    if "yaml" not in sys.modules:
-        yaml_stub = types.ModuleType("yaml")
-        yaml_stub.safe_load = lambda *_args, **_kwargs: {}
-        sys.modules["yaml"] = yaml_stub
-
     from core.schemas.request import BaseRequest
 
     affinity_store: Dict[Any, Any] = {}
@@ -136,6 +143,8 @@ def run_functional_tests() -> None:
         assert scheduler.calls == 3, "开启亲和性后，同一 user_id/session_id 的后续请求应复用调度结果"
         assert req3.Task.P_proxy_addr == req4.Task.P_proxy_addr, "命中亲和性时应复用 Prefill 调度结果"
         assert req3.Task.D_proxy_addr == req4.Task.D_proxy_addr, "命中亲和性时应复用 Decode 调度结果"
+        assert req3.Task.pd_connector == req4.Task.pd_connector == "nixl"
+        assert req3.Task.connector_context == req4.Task.connector_context
         assert ("u2", "s2") in affinity_store, "首次亲和性调度后应写入 affinity_store"
 
         req5 = BaseRequest.build_request(
@@ -161,6 +170,11 @@ def run_functional_tests() -> None:
         assert req5.Task.P_proxy_port != req6.Task.P_proxy_port, "标识不完整时不应复用调度结果"
 
     print("[PASS] 功能测试通过：Enable_Affinity 的开启、关闭、缺失标识降级逻辑符合预期。")
+
+
+def test_affinity_functional_behavior() -> None:
+    """Collect the offline functional checks without running the benchmark."""
+    run_functional_tests()
 
 
 def _stream_ttft_once(

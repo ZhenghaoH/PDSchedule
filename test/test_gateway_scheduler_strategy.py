@@ -12,21 +12,6 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-if "fastapi" not in sys.modules:
-    class FastAPIHTTPException(Exception):
-        def __init__(self, status_code, detail=None):
-            super().__init__(detail)
-            self.status_code = status_code
-            self.detail = detail
-
-    fastapi_stub = types.ModuleType("fastapi")
-    fastapi_stub.HTTPException = FastAPIHTTPException
-    fastapi_stub.Request = type("Request", (), {})
-    fastapi_responses_stub = types.ModuleType("fastapi.responses")
-    fastapi_responses_stub.StreamingResponse = type("StreamingResponse", (), {})
-    sys.modules["fastapi"] = fastapi_stub
-    sys.modules["fastapi.responses"] = fastapi_responses_stub
-
 from fastapi import HTTPException
 
 from core.consoles.gateway import (

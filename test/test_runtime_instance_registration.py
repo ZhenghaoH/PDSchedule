@@ -4,7 +4,6 @@ import sys
 import importlib
 import os
 import asyncio
-import types
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
@@ -32,27 +31,7 @@ def nixl_connector(host="10.0.0.1", port=5557, tp_size=1):
 
 
 def import_update_handler(module_name):
-    fastapi = types.ModuleType("fastapi")
-    responses = types.ModuleType("fastapi.responses")
-
-    class HTTPException(Exception):
-        def __init__(self, status_code, detail):
-            super().__init__(detail)
-            self.status_code = status_code
-            self.detail = detail
-
-    class Response:
-        def __init__(self, status_code=200):
-            self.status_code = status_code
-
-    fastapi.HTTPException = HTTPException
-    fastapi.Request = object
-    responses.Response = Response
-    with patch.dict(
-        sys.modules,
-        {"fastapi": fastapi, "fastapi.responses": responses},
-    ):
-        return importlib.import_module(module_name)
+    return importlib.import_module(module_name)
 
 
 class RuntimeInstanceRegistrationTest(unittest.TestCase):

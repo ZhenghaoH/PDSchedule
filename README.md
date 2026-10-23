@@ -154,7 +154,7 @@ The NIXL deployment guide uses the following environment:
 | Example model      | Local DeepSeek-R1-Distill-Qwen-7B weights and tokenizer                             |
 | Example GPU layout | Two GPUs, one TP=1 instance per phase; sufficient memory for the model and KV cache |
 
-Use [`docs/environment.md`](docs/environment.md) for container creation, the minimal application dependency installation, model checks, and port checks. PyTorch, vLLM, NIXL, and CUDA libraries belong to the serving environment and should not be replaced by an unrelated application dependency installation. The root `requirements.txt` also includes research/data-processing tools beyond the minimal serving path.
+Use [`docs/environment.md`](docs/environment.md) for container creation, application dependency installation, model checks, and port checks. `requirements.txt` defines the application runtime; `requirements-dev.txt` adds public test dependencies, and `requirements-research.txt` adds optional research tools. PyTorch, vLLM, NIXL, and CUDA libraries belong to the serving environment and should not be replaced by an unrelated application dependency installation.
 
 Redis and LMCache are not needed for this NIXL example. The paper's multi-pool evaluation uses a different setup.
 
@@ -521,15 +521,15 @@ PDSchedule is under active development. The repository currently provides:
 
 Paper plots are included for context. The complete paper workload harness and calibrated experiment artifacts are not distributed as a reproducibility bundle in this repository.
 
-Suggested focused regression commands, from a prepared application environment:
+From a Python 3.12 virtual environment, install the public test dependencies and run the complete CPU regression suite:
 
 ```bash
-python3 -m pip install pytest
-python3 -m pytest -q test/test_connector_protocol.py
-python3 -m unittest discover -s test -p test_runtime_instance_registration.py
-python3 -m unittest discover -s test -p test_single_gateway_routing.py
-python3 -m unittest discover -s test -p test_gateway_scheduler_strategy.py
+python -m pip install -r requirements-dev.txt
+python -m pip check
+python -m pytest -q
 ```
+
+See [`test/README.md`](test/README.md) for environment creation, per-module checks, loopback networking, and the distinction between CPU tests and real KV-transfer validation. The default collection excludes the unpublished local synchronization test.
 
 ### Roadmap
 
@@ -560,3 +560,4 @@ python3 -m unittest discover -s test -p test_gateway_scheduler_strategy.py
 | [`profile/TPOT_predictor/README.md`](profile/TPOT_predictor/README.md)         | TPOT measurement and prediction interfaces.                                                           |
 | [`profile/controller/README.md`](profile/controller/README.md)                 | Optional Controller calibration files and missing-profile behavior.                                   |
 | [`LICENSE`](LICENSE)                                                           | Apache License 2.0. Author information remains a placeholder.                                         |
+| [`test/README.md`](test/README.md) | Public CPU regression setup, collection scope, focused commands, and external-service boundaries. |

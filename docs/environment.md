@@ -86,24 +86,41 @@ docker exec -it pdschedule-nixl /bin/bash
 
 ## 3. 安装 NIXL 和应用依赖
 
+依赖按用途分为三个入口，版本以这些文件为准，不在文档中再维护另一份应用包列表：
+
+| 入口 | 用途 | 是否包含应用依赖 |
+| --- | --- | --- |
+| [`requirements.txt`](../requirements.txt) | Controller、Gateway、Instance、预测器和现有客户端的运行依赖 | 是 |
+| [`requirements-dev.txt`](../requirements-dev.txt) | 公开 CPU 回归测试，另加 pytest/httpx | 是，引用 requirements.txt |
+| [`requirements-research.txt`](../requirements-research.txt) | 可选绘图、数据整理、Notebook 和实验客户端工具 | 是，引用 requirements.txt |
+
+CPU 测试使用 Python 3.12，按[测试说明](../test/README.md)新建虚拟环境即可，不需要 GPU、
+Torch、vLLM、NIXL、LMCache 或 Redis。NumPy 1.26.4 基线不用于 Python 3.13。
+用于 GPU 服务时继续沿用上面的兼容 serving 镜像，不要把 CPU 测试环境当作推理环境。
+
 以下命令在容器内执行。固定 Torch 约束是为了避免安装应用时替换 serving 栈：
 
 ```bash
 cd /workspace/llm-stack/PDSchedule
 python3 -m pip install \
   'torch==2.9.0' 'nixl==0.7.1' 'nixl-cu12==0.7.1' \
-  'fastapi~=0.124.0' 'uvicorn~=0.38.0' 'aiohttp~=3.13.2' \
-  'requests~=2.32.5' 'pydantic~=2.12.5' 'jinja2~=3.1.6' \
-  'pyyaml~=6.0.3' 'psutil~=7.0.0' 'nvidia-ml-py>=12.535.108' \
-  'numpy~=1.26.4' 'scipy~=1.16.3' 'scikit-learn~=1.7.2' \
-  'transformers~=4.57.3' 'prometheus-client>=0.18.0'
+  -r requirements.txt
 python3 -m pip check
 ```
 
 `nixl` 是元包；同时固定 `nixl-cu12`，避免元包的宽松依赖选择另一版 CUDA 实现。
 这里的显式依赖集合用于主服务，Gateway 即使关闭 predictor warmup 仍需导入 NumPy、
-scikit-learn 和 transformers。根 `requirements.txt` 另外包含历史研究/数据处理工具，
-不是本条最小部署路径的安装清单。不要在可用 GPU 环境中盲目升级 Torch、vLLM 或 CUDA 库。
+scikit-learn 和 transformers。`prometheus-client` 为实例指标解析的直接依赖，已显式声明。
+`nvidia-ml-py` 提供 `pynvml` 导入，但 CPU 测试不需要初始化真实 GPU。
+可选研究工具已移至 `requirements-research.txt`，启动服务不需要安装它。
+不要在可用 GPU 环境中盲目升级 Torch、vLLM 或 CUDA 库；安装后必须运行 `pip check`。
+
+如需在同一个 GPU 镜像中运行测试，用 `-r requirements-dev.txt` 替换上述命令的
+`-r requirements.txt`，保留 Torch/NIXL 版本约束。只做 CPU 回归时按测试说明安装即可。
+
+原依赖列表中，bs4 重复别名和无现有代码引用的 Booktype 已去除；starlette、safetensors、
+huggingface-hub 等由直接使用它们的上游包解析，不再作为本项目直接依赖重复固定。
+构建包所需元数据与构建工具属于后续安装交付工作，不通过本轮隐式新增。
 
 检查安装版本和 GPU：
 

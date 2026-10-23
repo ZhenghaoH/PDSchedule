@@ -249,9 +249,10 @@ def test_nvml_monitor_samples_and_cleans_up():
     assert backend.shutdown_called
 
 
+@pytest.mark.loopback
 def test_measure_request_handles_real_sse_framing():
     async def exercise():
-        aiohttp = pytest.importorskip("aiohttp")
+        import aiohttp
         from aiohttp import web
 
         async def handler(request):

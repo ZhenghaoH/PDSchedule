@@ -156,6 +156,8 @@ The NIXL deployment guide uses the following environment:
 
 Use [`docs/environment.md`](docs/environment.md) for container creation, application dependency installation, model checks, and port checks. `requirements.txt` defines the application runtime; `requirements-dev.txt` adds public test dependencies, and `requirements-research.txt` adds optional research tools. PyTorch, vLLM, NIXL, and CUDA libraries belong to the serving environment and should not be replaced by an unrelated application dependency installation.
 
+For editable installation, wheel/sdist builds, installed service commands, and deployment-owned profile paths, see [`docs/installation.md`](docs/installation.md). The existing source-checkout startup commands below remain supported.
+
 Redis and LMCache are not needed for this NIXL example. The paper's multi-pool evaluation uses a different setup.
 
 ---
@@ -541,7 +543,7 @@ See [`test/README.md`](test/README.md) for environment creation, per-module chec
 - [X] Controller request page and Gateway execution/resource logs
 - [X] Source-only TTFT/TPOT profiling and prediction tools
 - [ ] More multi-Pool and multi-machine deployment examples
-- [ ] Packaged installation and source-independent resource loading
+- [X] Minimal Python installation, wheel/sdist builds, and source-independent template loading
 - [ ] Public workload replay tools and a reproducible paper-evaluation bundle
 - [ ] Tagged release and public paper/citation entry
 
@@ -561,3 +563,4 @@ See [`test/README.md`](test/README.md) for environment creation, per-module chec
 | [`profile/controller/README.md`](profile/controller/README.md)                 | Optional Controller calibration files and missing-profile behavior.                                   |
 | [`LICENSE`](LICENSE)                                                           | Apache License 2.0. Author information remains a placeholder.                                         |
 | [`test/README.md`](test/README.md) | Public CPU regression setup, collection scope, focused commands, and external-service boundaries. |
+| [`docs/installation.md`](docs/installation.md) | Editable and wheel installation, console entrypoints, package resources, and writable profile locations. |

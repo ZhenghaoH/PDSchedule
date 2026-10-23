@@ -1,0 +1,13 @@
+include README.md LICENSE pyproject.toml requirements*.txt
+include docs/installation.md docs/environment.md docs/quickstart.md
+prune plan
+prune simulator
+prune DistServe启动脚本
+prune test
+prune doc
+prune build
+prune dist
+prune .git
+prune .venv
+global-exclude __pycache__ *.py[cod] *.sh *.ps1 *.cmd *.log
+global-exclude *.pkl *.pickle *.joblib *.sqlite3 *.sqlite3-shm *.sqlite3-wal

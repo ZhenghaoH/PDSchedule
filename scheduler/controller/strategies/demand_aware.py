@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
+from pdschedule.paths import profile_root, runtime_root
 
 from store.controller.network import Network
 from store.controller.pool_base import DecodePool, PrefillPool
@@ -21,9 +22,9 @@ from scheduler.controller.strategy import (
 )
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+PROJECT_ROOT = runtime_root()
 GLOBAL_SCHEDULE_LOG_PATH = PROJECT_ROOT / "global_schedule.log"
-PROFILE_ROOT = PROJECT_ROOT / "profile" / "controller"
+PROFILE_ROOT = profile_root() / "controller"
 
 
 def _emit_debug_log(text: str) -> None:

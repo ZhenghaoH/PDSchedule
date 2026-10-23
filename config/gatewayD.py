@@ -6,6 +6,7 @@
 - 为生产环境提供清晰的配置参考
 """
 from config.ADDRESS_CONFIG import *
+from pdschedule.paths import profile_root
 # 身份 prefill=0 decode=1
 RANK = 1
 
@@ -41,7 +42,7 @@ TPOT_WARMUP_REPEATS = 2
 TPOT_TARGET = CONFIG_INSTANCE_D_ADDRS[0] if CONFIG_INSTANCE_D_ADDRS else None
 TPOT_MODEL_ID = "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
 TPOT_TOKENIZER_PATH = "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-TPOT_MODEL_FILE = "profile/TPOT_predictor/artifacts/decode_tpot_regressor.pkl"
+TPOT_MODEL_FILE = str(profile_root() / "TPOT_predictor" / "artifacts" / "decode_tpot_regressor.pkl")
 # 同步设置 批处理批次
 SYN_BATCH_SIZE = 1
 # 同步设置 等待时间 秒

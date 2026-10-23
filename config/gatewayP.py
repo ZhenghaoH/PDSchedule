@@ -6,6 +6,7 @@
 - 为生产环境提供清晰的配置参考
 """
 import os
+from pdschedule.paths import profile_root
 from config.ADDRESS_CONFIG import *
 
 
@@ -49,4 +50,4 @@ TTFT_WARMUP_REPEATS = 3
 TTFT_TARGET = CONFIG_INSTANCE_P_ADDRS[0] if CONFIG_INSTANCE_P_ADDRS else None
 TTFT_MODEL_ID = "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
 TTFT_TOKENIZER_PATH = "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-TTFT_MODEL_FILE = "profile/TTFT_predictor/artifacts/prefill_ttft_regressor.pkl"
+TTFT_MODEL_FILE = str(profile_root() / "TTFT_predictor" / "artifacts" / "prefill_ttft_regressor.pkl")

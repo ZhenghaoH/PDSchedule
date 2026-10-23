@@ -94,6 +94,9 @@ docker exec -it pdschedule-nixl /bin/bash
 | [`requirements-dev.txt`](../requirements-dev.txt) | 公开 CPU 回归测试，另加 pytest/httpx | 是，引用 requirements.txt |
 | [`requirements-research.txt`](../requirements-research.txt) | 可选绘图、数据整理、Notebook 和实验客户端工具 | 是，引用 requirements.txt |
 
+应用也可构建为 wheel/sdist 并安装，详见[Python 安装说明](installation.md)。安装后的服务
+入口与现有 Python 文件参数一致；源码运行命令继续可用，不要求迁移已有部署。
+
 CPU 测试使用 Python 3.12，按[测试说明](../test/README.md)新建虚拟环境即可，不需要 GPU、
 Torch、vLLM、NIXL、LMCache 或 Redis。NumPy 1.26.4 基线不用于 Python 3.13。
 用于 GPU 服务时继续沿用上面的兼容 serving 镜像，不要把 CPU 测试环境当作推理环境。
@@ -120,7 +123,8 @@ scikit-learn 和 transformers。`prometheus-client` 为实例指标解析的直�
 
 原依赖列表中，bs4 重复别名和无现有代码引用的 Booktype 已去除；starlette、safetensors、
 huggingface-hub 等由直接使用它们的上游包解析，不再作为本项目直接依赖重复固定。
-构建包所需元数据与构建工具属于后续安装交付工作，不通过本轮隐式新增。
+包元数据位于 pyproject.toml，版本来源为 pdschedule.__version__；构建工具由
+requirements-dev.txt 声明。运行依赖仍只维护在 requirements.txt，不在包元数据中重复列版本。
 
 检查安装版本和 GPU：
 

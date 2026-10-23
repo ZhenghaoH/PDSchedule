@@ -30,7 +30,6 @@ from pathlib import Path
 # 获取当前Python文件所在目录
 current_dir = Path(__file__).parent
 template_dir = current_dir / "templates"
-template_dir.mkdir(exist_ok=True)
 # 初始化Jinja2模板
 templates = Jinja2Templates(directory=str(template_dir))
 
@@ -808,10 +807,14 @@ async def api_clear_history(request: Request):
 
 # ----------------- 启动服务 -----------------
 
-if __name__ == '__main__':
+def main():
     print("=== API 客户端 Web UI ===")
     print("访问地址: http://127.0.0.1:5050")
     print("按 Ctrl+C 停止服务器")
     config = uvicorn.Config(app, host="127.0.0.1", port=5050, log_level="info")
     server = uvicorn.Server(config)
     server.run()
+
+
+if __name__ == '__main__':
+    main()

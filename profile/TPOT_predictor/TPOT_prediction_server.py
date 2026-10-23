@@ -9,7 +9,10 @@ import uvicorn
 # --- 模块 1: 导入您的核心 TPOT 预测接口 ---
 try:
     # 导入 TPOT 预测器中的两个核心函数
-    from TPOT_predictor import predict_tpot, predict_generation_time
+    if __package__:
+        from .TPOT_predictor import predict_tpot, predict_generation_time
+    else:
+        from TPOT_predictor import predict_tpot, predict_generation_time
 except ImportError as e:
     print(f"导入错误: {e}")
     print("请确保此脚本与 TPOT_predictor.py 及其依赖位于同一目录中。")

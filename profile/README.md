@@ -6,6 +6,13 @@ The repository ships TTFT/TPOT measurement, fitting, prediction, and local
 save/load code. It does not distribute fitted models from experiment machines.
 Generated artifacts and pickle/joblib files under profile are ignored by Git.
 
+Installed wheels expose the two predictor packages as
+`pdschedule.profiling.TTFT_predictor` and `pdschedule.profiling.TPOT_predictor`,
+without installing a top-level `profile` package that shadows Python's standard
+library. Root offline profiler scripts remain source-checkout tools. See the
+[installation guide](../docs/installation.md) for writable profile paths and
+installed entrypoints; fitted models are never written into site-packages by default.
+
 - [TTFT predictor](TTFT_predictor/README.md): fit and use a local prefill predictor.
 - [TPOT predictor](TPOT_predictor/README.md): fit and use local decode predictors.
 - [Controller profiles](controller/README.md): optional local calibration files

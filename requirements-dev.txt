@@ -2,3 +2,7 @@
 -r requirements.txt
 pytest~=8.4.2
 httpx~=0.28.1
+# Offline builds and installed-package verification.
+build>=1.2,<2
+setuptools>=77,<85
+wheel>=0.45,<1

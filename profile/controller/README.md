@@ -4,6 +4,10 @@
 `demand_aware` 可以在没有模型文件时运行，使用现有容量/吞吐信息进行粗略代价估计。
 这保留调度可用性，但不提供硬件校准精度。
 
+源码运行默认使用仓库的 profile/；wheel 安装后默认使用服务工作目录下的 profile/。
+启动前可用 PDSCHEDULE_PROFILE_DIR 指定部署方可写的 profile 根目录；Controller 在其下
+使用 controller/，不会把拟合结果写入 site-packages。目录选择在策略导入时确定，修改后需重启。
+
 ## 本地生成与放置
 
 先使用 [TTFT](../TTFT_predictor/README.md) 或 [TPOT](../TPOT_predictor/README.md)

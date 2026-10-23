@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=77,<85", "wheel>=0.45,<1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdschedule"
+dynamic = ["version", "dependencies"]
+description = "Joint compute-network and SLO-aware scheduling for prefill-decode disaggregated LLM inference."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{name = "xxx"}]
+
+[project.urls]
+Repository = "https://github.com/ZhenghaoH/PDSchedule"
+
+[project.scripts]
+pdschedule-controller = "entrypoints.controller:main"
+pdschedule-gateway-p = "entrypoints.gatewayP:main"
+pdschedule-gateway-d = "entrypoints.gatewayD:main"
+pdschedule-instance-p = "entrypoints.instanceP:main"
+pdschedule-instance-d = "entrypoints.instanceD:main"
+pdschedule-client-ui = "examples.clientUI.client:main"
+
+[tool.setuptools]
+include-package-data = false
+# Transitional runtime layout: do not discover local-only folders automatically.
+packages = [
+    "pdschedule", "pdschedule.profiling", "pdschedule.resources",
+    "pdschedule.profiling.TTFT_predictor", "pdschedule.profiling.TPOT_predictor",
+    "pdschedule.resources.templates",
+    "config", "config.models", "config.network",
+    "connectors", "connectors.adapters",
+    "coord", "coord.controller", "coord.gateway", "coord.instance",
+    "core", "core.commands", "core.commands.controller", "core.consoles",
+    "core.handlers", "core.handlers.controller", "core.handlers.gateway",
+    "core.handlers.gateway.prefill", "core.handlers.gateway.decode",
+    "core.handlers.instance", "core.lifespans", "core.routers", "core.schemas",
+    "entrypoints", "examples", "examples.clientUI",
+    "instance", "instance.perception", "instance.simulator", "proxy",
+    "scheduler", "scheduler.controller", "scheduler.controller.strategies",
+    "scheduler.gateway", "scheduler.gateway.prefill", "scheduler.gateway.decode",
+    "store", "store.controller", "store.gateway", "store.instance", "utils",
+]
+
+[tool.setuptools.package-dir]
+"pdschedule.profiling.TTFT_predictor" = "profile/TTFT_predictor"
+"pdschedule.profiling.TPOT_predictor" = "profile/TPOT_predictor"
+"pdschedule.resources.templates" = "templates"
+
+[tool.setuptools.package-data]
+"pdschedule.resources.templates" = ["*.html"]
+"pdschedule.profiling.TTFT_predictor" = ["README.md"]
+"pdschedule.profiling.TPOT_predictor" = ["README.md"]
+"examples.clientUI" = ["templates/*.html"]
+
+[tool.setuptools.dynamic]
+version = {attr = "pdschedule.__version__"}
+dependencies = {file = ["requirements.txt"]}

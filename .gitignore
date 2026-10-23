@@ -35,3 +35,8 @@ Thumbs.db
 
 # Shell launch and operation scripts are local-only.
 *.sh
+
+# Python distribution outputs.
+/build/
+/dist/
+*.egg-info/

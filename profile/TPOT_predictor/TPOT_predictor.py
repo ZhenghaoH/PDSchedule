@@ -22,6 +22,13 @@ DEFAULT_PROMPT = "编写一个两万字的故事"
 DEFAULT_MODEL_FILE = str(
     Path(__file__).resolve().parent / "artifacts" / "decode_tpot_regressor.pkl"
 )
+try:
+    from pdschedule.paths import profile_root
+except ModuleNotFoundError as exc:
+    if exc.name != "pdschedule":
+        raise
+else:
+    DEFAULT_MODEL_FILE = str(profile_root() / "TPOT_predictor" / "artifacts" / "decode_tpot_regressor.pkl")
 
 BATCH_SIZES_TO_TEST = range(1, 8)
 GENERATION_LENGTHS_TO_TEST = range(128, 1281, 128)

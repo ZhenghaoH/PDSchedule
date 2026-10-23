@@ -28,7 +28,8 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-`requirements-dev.txt` includes the application requirements and adds pytest/httpx.
+`requirements-dev.txt` includes application requirements, pytest/httpx, and the
+build/setuptools/wheel tools used by the offline package checks.
 The suite uses real FastAPI and PyYAML imports; it does not replace those packages
 globally with incomplete stubs. Request, scheduler, and NVML fakes remain local to
 the tests that need them.
@@ -61,11 +62,12 @@ Neither the ignored root simulator nor `plan/` audit copies are default test inp
 | `test_distserve_lm_profiler.py` | Profiler arguments, saturation logic, output files, fake NVML sampling, and local HTTP SSE framing. |
 | `test_gateway_observability.py` | Separate logs, timing semantics, unavailable measurements, and per-GPU metrics. |
 | `test_gateway_scheduler_strategy.py` | Prefill/Decode policies, request batching, CLI behavior, Connector validation, and HTTP status preservation. |
+| `test_package_installation.py` | Metadata, writable paths, wheel/sdist contents, and dependency-light installation outside the source checkout. |
 | `test_runtime_instance_registration.py` | Dynamic registration, Connector identity, reservations, heartbeat fields, and address configuration. |
 | `test_single_gateway_routing.py` | Single-P/D fast path, transitions to multi-Pool selection, metadata, and local profile fallback. |
 
-The current suite collects **113 tests** across these nine modules. A complete run
-should finish with `113 passed`; a skipped or deselected subset is not the same
+The current suite collects **117 tests** across these ten modules. A complete run
+should finish with `117 passed`; a skipped or deselected subset is not the same
 result. Test counts can change when coverage changes.
 
 ## 3. Focused checks
@@ -103,7 +105,7 @@ python -m pytest -q -m loopback
 python -m pytest -q -m "not loopback"
 ```
 
-The subset without this test has 112 cases; report the deselection rather than
+The subset without this test has 116 cases; report the deselection rather than
 claiming full-suite coverage. Windows asyncio also uses internal loopback sockets
 when constructing an event loop. A sandbox that blocks these sockets can stall
 async tests even before an HTTP request is sent. Use an environment that permits
@@ -120,7 +122,25 @@ If the platform's pytest temporary directory is not writable, choose a **new,
 dedicated** directory with `--basetemp`. Pytest may remove that directory; never
 point it at the repository, a home directory, or existing user data.
 
-## 5. What requires a separate serving environment
+## 5. Installation checks
+
+```bash
+python -m pytest -q -m packaging
+```
+
+The four package checks run by default as part of the full suite. They build the
+wheel from the source distribution with the installed backend tools, inspect
+archive metadata/resources, and install the wheel without dependencies into a
+fresh temporary environment. This path uses no package index. The lean install
+checks identity, template access, writable profile defaults, and the standard
+library's profile/cProfile modules, not full runtime or GPU behavior.
+
+Build tools must be installed before running these checks. Use a short temporary
+path on Windows if the checkout and installed package paths approach the legacy
+path-length limit. See [the installation guide](../docs/installation.md) for a
+complete dependency installation and the six service commands.
+
+## 6. What requires a separate serving environment
 
 - Actual NIXL KV transfer and engine/side-channel matching.
 - LMCache store/load behavior and external cache reuse.

@@ -1,6 +1,6 @@
 # config.py
 import os
-from pathlib import Path
+from pdschedule.resources import controller_template_dir
 from config.ADDRESS_CONFIG import *
 
 # 默认模型型号，影响 token数 估算
@@ -8,7 +8,7 @@ DEFAULT_MODEL = "/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwe
 DEFAULT_MODEL_SHORTNAME = "DeepSeek-R1-Distill-Qwen-1.5B"
 
 # 网页模板路径
-TEMPLATES_PATH = str(Path(__file__).resolve().parents[1] / "templates")
+TEMPLATES_PATH = str(controller_template_dir())
 
 # 服务配置
 # DEFAULT_PORT = 8000

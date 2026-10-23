@@ -2,19 +2,13 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from pathlib import Path
-import sys
 import threading
 import time
 
 from coord.gateway.up_store import prefill_compute_register, prefill_compute_update, prefill_compute_unregister, network_update
 from store.gateway.manager import GatewayStoreManager
 
-PROFILE_DIR = Path(__file__).resolve().parents[2] / "profile"
-if str(PROFILE_DIR) not in sys.path:
-    sys.path.append(str(PROFILE_DIR))
-
-from TTFT_predictor.prefill_predictor import (
+from pdschedule.profiling.TTFT_predictor.prefill_predictor import (
     DEFAULT_MODEL_FILE as TTFT_DEFAULT_MODEL_FILE,
     VLLM_CONFIG_DEFAULT as TTFT_VLLM_CONFIG_DEFAULT,
     load_ttft_model,

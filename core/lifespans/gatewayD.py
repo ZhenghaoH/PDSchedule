@@ -1,8 +1,6 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
-import sys
 import threading
 import time
 
@@ -15,11 +13,7 @@ from coord.gateway.up_store import (
 )
 from store.gateway.manager import GatewayStoreManager
 
-PROFILE_DIR = Path(__file__).resolve().parents[2] / "profile"
-if str(PROFILE_DIR) not in sys.path:
-    sys.path.append(str(PROFILE_DIR))
-
-from TPOT_predictor.TPOT_predictor import (
+from pdschedule.profiling.TPOT_predictor.TPOT_predictor import (
     DEFAULT_MODEL_FILE as TPOT_DEFAULT_MODEL_FILE,
     VLLM_CONFIG_DEFAULT as TPOT_VLLM_CONFIG_DEFAULT,
     load_tpot_model,

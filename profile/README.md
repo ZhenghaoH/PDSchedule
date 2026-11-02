@@ -17,6 +17,9 @@ installed entrypoints; fitted models are never written into site-packages by def
 - [TPOT predictor](TPOT_predictor/README.md): fit and use local decode predictors.
 - [Controller profiles](controller/README.md): optional local calibration files
   used by demand_aware, including the behavior when files are missing.
+- [SLO operation guide](../docs/slo.md): real NIXL engine calibration, held-out
+  validation commands, per-Gateway model loading, Controller placement, and
+  multi-Pool SLO policy checks using explicit deployment paths.
 
 Cold-start estimates and synthetic initialization samples are not calibrated
 hardware measurements. Refit and validate in the actual deployment environment.

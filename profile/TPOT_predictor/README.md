@@ -3,6 +3,10 @@
 本目录只发布测量、拟合、预测和本地持久化代码，不附带预训练或实验机器模型。
 生成文件保存在本地 `artifacts/`，不进入 Git 发布树。
 
+完整的真实 NIXL 多池校准、验证命令及 Gateway 启用步骤见
+[SLO 使用流程](../../docs/slo.md)。该流程使用 `pdschedule.profiling` 导入，
+并显式指定真实 vLLM API 端口；下文保留原有 profile 目录下的调用方式。
+
 ## 文件与模型
 
 - [TPOT_regressor.py](TPOT_regressor.py)：基于完整生成时间拟合四项系数，并提供在线更新与持久化。
@@ -83,3 +87,9 @@ asyncio.run(perform_detailed_warmup(
 D Gateway 在启用 TPOT warmup 后先尝试本地加载，再按配置目标进行真实 warmup。
 缺少目标或校准尚未完成时，以实际 predictor readiness 和策略 fallback 为准。
 Controller 的模型需独立放置，参见 [Controller 本地模型说明](../controller/README.md)。
+
+注意：`--no-tpot-warmup` 同时跳过加载和拟合；仅传 `--tpot-model-file` 不会在该模式下加载。
+`--tpot-warmup` 先尝试加载，再在失败时进行真实 warmup；评估前应核对
+`[TPOT Predictor] Using persisted model: ...` 的实际文件路径。
+模型替换需重启 Gateway，不假设自动热加载。预测不可用时，`slo_aware_decode`
+退回最低生成吞吐策略；没有安全候选时仍会选择预测违约较少的候选，不进行硬性拒绝。

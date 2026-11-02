@@ -212,3 +212,17 @@ PY
 多机时，Instance Proxy 当前使用自己的 `--host` 加 `--vllm_port` 连接 vLLM，
 因此二者应位于同一主机并使用一致可达地址；不能只修改一个端口就把 vLLM 移到远端。
 具体多机地址和并行度调整见启动文档末尾。
+
+## 6. 常见环境问题
+
+| 现象 | 检查与处理 | 完成判据 |
+| --- | --- | --- |
+| 安装应用依赖时替换了 Torch/vLLM，或出现依赖冲突 | 在实际服务容器内运行 `python3 -m pip check`；按本页固定 serving 栈和应用约束安装，不在该环境套用另一套 CUDA/Torch 组合。CPU 测试环境不是 GPU 服务环境。 | 依赖一致，Torch 的 CUDA 与驱动能力相容，NixlConnector 导入通过。 |
+| `Unknown kv connector`、`ImportError`、UCX 共享库错误 | 用本页第 3 节的导入和版本检查定位实际 Python 环境；核对 NIXL CUDA 12 包及 UCX 依赖。不要只检查宿主机另一个环境。 | 运行 vLLM 的同一个解释器可导入所需 Connector，启动参数被接受。 |
+| `CUDA out of memory` 或启动停留在模型加载 | 检查模型显存需求、已有 GPU 进程、每个引擎的物理 GPU 分配和 TP；不要让多个示例意外复用同一张卡。先等 `/v1/models` 就绪，再启动上层请求。 | 每个实际引擎就绪，模型 ID 正确，无反复退出或 OOM。 |
+| tokenizer 无法离线加载，或日志出现 `Fallback to char count` | 重新运行第 4 节的本地 tokenizer 检查；使用请求中的真实模型路径，不能只修改 `SCHEDULER_MODEL_PATH` 环境变量并假设覆盖 Controller config。 | 请求对应 tokenizer 确实加载，调度 token 数不再来自字符数兜底。 |
+| `Address already in use`、连接到了旧服务 | 在容器内核对服务端口和进程，先正常结束对应前台服务再重启；第 4 节端口绑定检查只能在服务未启动时使用。 | 每个端口只有预期服务，运行时 `/v1/models` 或 `/connectors` 显示的是本次部署。 |
+
+完整地址、环境变量及默认值见[配置与接口索引](configuration-and-interfaces.md)。
+服务已启动后的注册、转发和 KV 传输故障在[部署指南](quickstart.md#13-常见问题)中处理；
+不要把“依赖安装成功”当作整个推理链路已经就绪。

@@ -4,6 +4,11 @@
 然后在同一 `pdschedule-nixl` 容器内打开七个独立服务终端。
 所有 Python 命令均从 `/workspace/llm-stack/PDSchedule` 执行。
 
+配置默认值和接口字段见[配置与接口索引](configuration-and-interfaces.md)。
+本页验证单 P/D Pool 的完整链路。要运行全局选池，继续阅读
+[NIXL 多池部署](multi_pool.md)；预测器测量、SLO 策略启用和检查见
+[SLO 使用流程](slo.md)。
+
 ## 1. 拓扑与执行顺序
 
 | 终端 | 进程/入口 | 地址 | 上级或下游 | GPU / TP |
@@ -347,14 +352,55 @@ docker stop pdschedule-nixl
 
 ## 13. 常见问题
 
-| 现象 | 检查位置 |
-| --- | --- |
-| `Unknown kv connector` / 导入 nixl 失败 | vLLM/NIXL 版本、CUDA 12实现包及共享库 |
-| UCX transport/device 或 agent 初始化错误 | UCX 的 tcp/cuda_copy支持、驱动、网卡与CUDA库 |
-| `resource_wait` 或缺少实例 | Controller/Gateway/Instance注册顺序，端口、角色与metadata |
-| `Prefill response does not contain kv_transfer_params` | 请求是否走NIXL Prefill、vLLM版本和参数；不能靠手工空字段绕过 |
-| NIXL请求失败或传输失败计数增长 | side-channel 地址/端口、模型/布局、GPU资源和D vLLM日志 |
-| `Address already in use` / GPU OOM | 遗留进程、端口冲突、模型显存、TP和上下文设置 |
+| 现象 | 检查与处理 | 不能据此判断 |
+| --- | --- | --- |
+| `Missing required deployment option(s)` | 显式提供 `--host`、Gateway 的 `--controller`，或 Instance 的 `--port`、`--vllm_port`、`--gateway`。检查[地址默认值](configuration-and-interfaces.md#addresses-and-membership)；Instance 没有默认服务/vLLM 端口。 | 不能假设省略参数会自动发现服务。 |
+| `Unknown kv connector`、导入失败或 UCX 初始化失败 | 先按[环境排错](environment.md#6-常见环境问题)检查实际容器内的解释器、版本、驱动及 UCX transport。 | 改上层 `--connector-name` 不能安装或配置 vLLM Connector。 |
+| `resource_wait`、池表不完整 | 在 Controller 执行 `show pool_id`、`show scheduler`，检查 Gateway 的注册目标、可达地址和注册日志；不能通告 `0.0.0.0`。 | 能打开请求页不代表 P/D 已注册。 |
+| `No active prefill/decode instance`、`Invalid report_label` | 先核对 Proxy 的父 Gateway、角色和 Connector metadata；再检查 `/instance/update` 是否成功。新 Instance 注册后还需有效上报才能变为在线；404 时 Proxy 会尝试重新注册。 | Proxy 的 startup 日志或 `/connectors` 200 不代表它已是可选实例。 |
+| `Prefill response does not contain kv_transfer_params` | 对照 P vLLM 的 NIXL 配置和返回 JSON，关联同一 Controller request ID；使用本页的 Controller 入口，而非自行构造内部 Task 或调用旧诊断链路。 | 不得用手工空字段或兼容日志代替真实传输上下文。 |
+| `Missing NIXL kv_transfer_params before Decode` 或 Connector 校验失败 | 沿 Controller → P Gateway → D Gateway 核对 `pd_connector`、session、实例 role/descriptor 和 Prefill 返回；检查是否误把正常客户端请求直发 Gateway。 | `/metadata` 和手工 session 创建不是 NIXL 配对握手。 |
+| 返回文字但没有 PD 日志 | 核对客户端来源地址；`10.0.*` / `192.168.*` 映射关闭 PD。按本页从容器 loopback 请求，确认 `PD分离: True`。 | 文本生成成功不能证明走了 PD。 |
+| NIXL 失败计数增长或字节数不增加 | 重新检查实际选中的 D 引擎 `/metrics`、side-channel 可达性/端口、TP metadata、模型/layout 和 D vLLM 日志；允许统计刷新后重读。 | Connector 验证成功只证明配置兼容；通用 offload 日志也不是 NIXL 传输证据。 |
+| HTTP 200 但包含 `error`、没有 choices，或 SSE 中途断开 | 检查响应体、`[DONE]` 和同一 request ID 的各级日志；部分代理已开始 StreamingResponse 后才遇到下游错误，不能保证外层状态码同步改变。 | 不把 200 或“连接建立”作为完整请求成功。 |
+| `Address already in use` / GPU OOM | 结束冲突的对应前台进程，核对端口和物理 GPU；不要在服务运行时执行本地绑定预检或直接终止所有 GPU 任务。 | 不能仅根据端口号猜测它运行的是哪个服务。 |
+
+### 运行时只读检查
+
+在本指南的同一容器内执行。只检查现有服务，不注册资源、不触发推理：
+
+```bash
+python3 - <<'PY'
+import json
+import urllib.error
+import urllib.request
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+for port, path in ((8001, "/v1/models"), (8003, "/v1/models"),
+                   (8081, "/connectors"), (8082, "/connectors"),
+                   (7001, "/connectors"), (7003, "/connectors")):
+    url = f"http://127.0.0.1:{port}{path}"
+    try:
+        with opener.open(url, timeout=10) as response:
+            body = json.load(response)
+            print(url, response.status, body)
+    except (urllib.error.URLError, ValueError) as exc:
+        print(url, "CHECK FAILED:", exc)
+PY
+```
+
+对应端口可访问时输出模型或 Connector 信息；错误行指出未通过的目标，脚本本身不是
+自动就绪门禁。`/v1/models` 在 vLLM 端口，`/connectors` 在 Gateway/Proxy 端口；
+本项目没有通用 `/healthz` 或 `/debug/status`，不要因这些地址 404 而判断引擎坏了。
+
+### 更换为 LMCache 时
+
+本页 NIXL 环境不需要 Redis。如果使用已有 LMCache Adapter，注册时出现
+`metadata requires ...` 或配置不匹配，应核对整个 Pool 和配对两端的 `backend`、
+`namespace`、`config_fingerprint`，以及实际引擎加载的 LMCache 配置，而不是把这些字段填成
+任意相同值来绕过检查。Redis 计数不增加不能单独证明请求失败或复用成功；应同时检查
+实际后端配置和引擎的存取/命中记录。根 `lmcache.yaml` 有固定 Redis 地址和 cachegen 配置，
+不是自动适配所有 LMCache 版本的通用配置。相关边界见
+[Connector descriptor 索引](configuration-and-interfaces.md#6-connector-descriptor-boundary)。
 
 底层协议/参数参考 [vLLM 0.13.0 NIXL 指南](https://docs.vllm.ai/en/v0.13.0/features/nixl_connector_usage/)。
 本项目负责完整 Controller/Gateway/Instance 链路，不另外启动上游 toy proxy。

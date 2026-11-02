@@ -3,6 +3,10 @@
 本目录只发布测量、拟合、预测和本地持久化代码，不附带任何实验机器的已拟合模型。
 `artifacts/` 中的生成物及 profile 下的 pickle/joblib 文件由 Git 忽略。
 
+完整的真实 NIXL 多池校准、验证命令及 Gateway 启用步骤见
+[SLO 使用流程](../../docs/slo.md)。该流程使用 `pdschedule.profiling` 导入，
+并显式指定真实 vLLM API 端口；下文保留原有 profile 目录下的调用方式。
+
 ## 文件与输入
 
 - [prefill_regressor.py](prefill_regressor.py)：采集 warmup 样本，拟合线性回归器，保存和加载本地状态。
@@ -73,3 +77,8 @@ fallback，而不是假设已有实测预测器。
 
 Controller 使用独立的本地 profile 路径；Gateway 模型不会自动分发给 Controller。
 参见 [Controller 本地模型说明](../controller/README.md)。
+
+注意：`--no-ttft-warmup` 同时跳过加载和拟合；仅传 `--ttft-model-file` 不会在该模式下加载。
+`--ttft-warmup` 先尝试加载，再在失败时进行真实 warmup；评估前应核对
+`[TTFT Predictor] Using persisted model: ...` 的实际文件路径。
+模型替换需重启 Gateway 以清除进程内预测及缓存，不假设自动热加载。

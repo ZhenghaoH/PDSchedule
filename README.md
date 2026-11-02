@@ -33,6 +33,7 @@
   <a href="#frontend-urls">Frontend URLs</a> •
   <a href="docs/environment.md">Environment</a> •
   <a href="#quick-start">Quick Start</a> •
+  <a href="docs/multi_pool.md">Multi-Pool &amp; SLO</a> •
   <a href="#api-usage">API</a> •
   <a href="#documentation">Docs</a>
 </p>
@@ -165,6 +166,8 @@ Redis and LMCache are not needed for this NIXL example. The paper's multi-pool e
 ## Quick Start
 
 PDSchedule provides a complete NIXL-based deployment with real vLLM services. Each long-running process runs in a separate terminal; no local-only Shell launcher is required.
+
+Start with the 1P/1D flow below to check the transfer path. For global policy selection, follow the [four-GPU 2P/2D deployment](docs/multi_pool.md), then [calibrate predictors and enable SLO policies](docs/slo.md). The SLO guide also provides an eight-GPU, two-Instances-per-Pool extension for local placement decisions.
 
 The host and container paths are:
 
@@ -542,7 +545,8 @@ See [`test/README.md`](test/README.md) for environment creation, per-module chec
 - [X] Complete Python-based NIXL deployment instructions
 - [X] Controller request page and Gateway execution/resource logs
 - [X] Source-only TTFT/TPOT profiling and prediction tools
-- [ ] More multi-Pool and multi-machine deployment examples
+- [X] NIXL multi-Pool deployment, predictor calibration, and SLO policy operation
+- [ ] Multi-machine deployment examples
 - [X] Minimal Python installation, wheel/sdist builds, and source-independent template loading
 - [ ] Public workload replay tools and a reproducible paper-evaluation bundle
 - [ ] Tagged release and public paper/citation entry
@@ -555,6 +559,9 @@ See [`test/README.md`](test/README.md) for environment creation, per-module chec
 | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | [`docs/environment.md`](docs/environment.md)                                   | Container setup, version constraints, minimal dependencies, GPU/model checks, and port preparation.   |
 | [`docs/quickstart.md`](docs/quickstart.md)                                     | Complete NIXL 1P/1D topology, all seven service commands, requests, transfer checks, and shutdown.    |
+| [`docs/multi_pool.md`](docs/multi_pool.md) | Four-GPU 2P/2D deployment, all thirteen service commands, global policy switching, and transfer checks. |
+| [`docs/slo.md`](docs/slo.md) | Real predictor calibration/validation, Controller profiles, SLO policy operation, and optional two-Instance Pools. |
+| [`docs/configuration-and-interfaces.md`](docs/configuration-and-interfaces.md) | Exact configuration defaults and precedence, service CLI, HTTP contracts, Connector metadata, and troubleshooting links. |
 | [`doc/项目代码结构说明.md`](doc/项目代码结构说明.md)                           | Repository structure, runtime flow, and extension points for schedulers and Connectors.               |
 | [`examples/nixl_tcp_fallback/README.md`](examples/nixl_tcp_fallback/README.md) | TCP transport guidance and the distinction between upstream Connector checks and the PDSchedule path. |
 | [`profile/README.md`](profile/README.md)                                       | Profiling tools and deployment-local predictor artifacts.                                             |

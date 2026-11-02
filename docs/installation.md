@@ -113,12 +113,20 @@ logs are deployment state, not files to write into site-packages.
 | Profile root | Repository `profile/` | Working directory `profile/` |
 | Controller profiles | Profile root `controller/` | Profile root `controller/` |
 | Gateway models | Profile root `TTFT_predictor/artifacts/` or `TPOT_predictor/artifacts/` | Same subdirectories under the writable profile root |
-| Global scheduler log | Repository `global_schedule.log` | Working directory `global_schedule.log` |
+| Demand-aware scheduler log | Repository `global_schedule.log` | Working directory `global_schedule.log` |
 
 Set `PDSCHEDULE_PROFILE_DIR` to a deployment-owned profile root **before starting
 services** to override the default. Gateway `--ttft-model-file` / `--tpot-model-file`
 can still select explicit files. Missing Controller models retain the existing
 fallback; installing a wheel does not supply calibration data.
+
+Current log-path exceptions: Controller SLO traces use a path relative to the
+handler module, and Gateway's default `gateway_logs/` also remains module-relative.
+After wheel installation those paths can differ from the working directory and
+may be unwritable. Set an absolute `FLEXPD_GATEWAY_LOG_DIR` for each Gateway;
+use Controller's console for SLO traces if its file write fails. The profile-root
+override does not redirect either log path. The scheduler row above applies to
+the demand-aware cost logger, not every Controller log writer.
 
 `plan/`, root `simulator/`, local launch/publish scripts, tests, audit files,
 logs, and fitted models are excluded from the runtime wheel. `instance/simulator`
@@ -136,3 +144,16 @@ contents, and install the wheel without dependencies into a fresh environment
 to check lightweight imports, resources, and the standard-library profile module.
 They do not substitute for a full dependency installation or GPU deployment.
 The full CPU suite includes these checks; see [test/README.md](../test/README.md).
+
+## Installation troubleshooting
+
+| Symptom | Check / action |
+| --- | --- |
+| `ModuleNotFoundError: pdschedule` or missing service command | Use the interpreter/environment where the project is installed. Check `python -m pip show pdschedule` and `python -m entrypoints.gatewayP --help`. Installing application requirements alone does not install this project. |
+| Installed command imports another project's `core`, `config`, or `scheduler` | These generic root packages remain transitional. Use a dedicated environment; inspect the imported module's `__file__` rather than changing `PYTHONPATH` blindly. |
+| Missing model file or a predictor falls back | No fitted predictors are packaged. Select a writable deployment profile root and explicit model files, then follow [SLO calibration/loading](slo.md). |
+| Templates or imports differ between checkout and wheel | Verify the interpreter, installed version, and actual module locations. Rebuild/install the current wheel using the commands above; don't copy source files into site-packages to repair a partial install. |
+| Logs are unwritable or absent from CWD | Use absolute Gateway log directories and inspect the console; review the log-path exceptions above. Changing `PDSCHEDULE_PROFILE_DIR` only affects models. |
+
+Exact options, environment names, and HTTP boundaries are indexed in
+[configuration and interfaces](configuration-and-interfaces.md).

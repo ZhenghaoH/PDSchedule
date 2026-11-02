@@ -1,4 +1,4 @@
-# Application runtime dependencies (Python 3.12 deployment baseline).
+# Project dependencies (Python 3.12 deployment baseline).
 # Install Torch, vLLM, NIXL and optional LMCache in the compatible serving
 # environment described in docs/environment.md, not through this file.
 fastapi~=0.124.0
@@ -17,3 +17,21 @@ numpy~=1.26.4
 scipy~=1.16.3
 scikit-learn~=1.7.2
 transformers~=4.57.3
+
+# Tests and package builds.
+pytest~=8.4.2
+httpx~=0.28.1
+build>=1.2,<2
+setuptools>=77,<85
+wheel>=0.45,<1
+
+# Plotting, data preparation, notebooks and experiment clients.
+matplotlib~=3.10.7
+pandas~=2.3.3
+datasets~=4.4.2
+warcio~=1.7.5
+beautifulsoup4~=4.14.3
+tqdm~=4.67.1
+jupyter_client~=8.6.3
+pyzmq~=27.1.0
+openai~=2.2.0

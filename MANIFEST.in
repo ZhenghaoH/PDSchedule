@@ -1,4 +1,4 @@
-include README.md LICENSE pyproject.toml requirements*.txt
+include README.md LICENSE pyproject.toml requirements.txt
 include docs/installation.md docs/environment.md docs/quickstart.md
 prune plan
 prune simulator

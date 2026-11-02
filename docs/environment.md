@@ -86,13 +86,8 @@ docker exec -it pdschedule-nixl /bin/bash
 
 ## 3. 安装 NIXL 和应用依赖
 
-依赖按用途分为三个入口，版本以这些文件为准，不在文档中再维护另一份应用包列表：
-
-| 入口 | 用途 | 是否包含应用依赖 |
-| --- | --- | --- |
-| [`requirements.txt`](../requirements.txt) | Controller、Gateway、Instance、预测器和现有客户端的运行依赖 | 是 |
-| [`requirements-dev.txt`](../requirements-dev.txt) | 公开 CPU 回归测试，另加 pytest/httpx | 是，引用 requirements.txt |
-| [`requirements-research.txt`](../requirements-research.txt) | 可选绘图、数据整理、Notebook 和实验客户端工具 | 是，引用 requirements.txt |
+项目依赖统一维护在 [`requirements.txt`](../requirements.txt)，包括服务运行、CPU 测试、
+打包、绘图、数据整理、Notebook 和实验客户端工具。构建的包也声明这份完整依赖。
 
 应用也可构建为 wheel/sdist 并安装，详见[Python 安装说明](installation.md)。安装后的服务
 入口与现有 Python 文件参数一致；源码运行命令继续可用，不要求迁移已有部署。
@@ -115,16 +110,15 @@ python3 -m pip check
 这里的显式依赖集合用于主服务，Gateway 即使关闭 predictor warmup 仍需导入 NumPy、
 scikit-learn 和 transformers。`prometheus-client` 为实例指标解析的直接依赖，已显式声明。
 `nvidia-ml-py` 提供 `pynvml` 导入，但 CPU 测试不需要初始化真实 GPU。
-可选研究工具已移至 `requirements-research.txt`，启动服务不需要安装它。
+研究和测试工具也包含在统一依赖中，但启动服务本身不需要这些工具。
 不要在可用 GPU 环境中盲目升级 Torch、vLLM 或 CUDA 库；安装后必须运行 `pip check`。
 
-如需在同一个 GPU 镜像中运行测试，用 `-r requirements-dev.txt` 替换上述命令的
-`-r requirements.txt`，保留 Torch/NIXL 版本约束。只做 CPU 回归时按测试说明安装即可。
+同一个 GPU 镜像安装上述依赖后也可运行测试。只做 CPU 回归时按测试说明安装即可。
 
 原依赖列表中，bs4 重复别名和无现有代码引用的 Booktype 已去除；starlette、safetensors、
 huggingface-hub 等由直接使用它们的上游包解析，不再作为本项目直接依赖重复固定。
 包元数据位于 pyproject.toml，版本来源为 pdschedule.__version__；构建工具由
-requirements-dev.txt 声明。运行依赖仍只维护在 requirements.txt，不在包元数据中重复列版本。
+requirements.txt 声明。项目依赖只维护在 requirements.txt，不在包元数据中重复列版本。
 
 检查安装版本和 GPU：
 

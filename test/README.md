@@ -14,7 +14,7 @@ Linux/macOS, with Python 3.12 selected:
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements.txt
 python -m pip check
 python -m pytest -q
 ```
@@ -23,20 +23,20 @@ Windows PowerShell, with `python` pointing to Python 3.12:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m pip check
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-`requirements-dev.txt` includes application requirements, pytest/httpx, and the
-build/setuptools/wheel tools used by the offline package checks.
+`requirements.txt` includes application requirements, pytest/httpx, the
+build/setuptools/wheel tools used by the offline package checks, and research tools.
 The suite uses real FastAPI and PyYAML imports; it does not replace those packages
 globally with incomplete stubs. Request, scheduler, and NVML fakes remain local to
 the tests that need them.
 
 Installing these requirements does not install Torch, vLLM, NIXL, LMCache, or Redis.
-It also does not download model weights or tokenizers. Optional research tools are
-in `requirements-research.txt`, not required for this suite. For a GPU serving
+It also does not download model weights or tokenizers. The research tools included
+in the dependency file are not required for this suite. For a GPU serving
 environment, follow [the environment guide](../docs/environment.md) instead of
 replacing an existing CUDA-compatible package stack.
 

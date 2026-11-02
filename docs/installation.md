@@ -11,16 +11,15 @@ The existing Python startup commands continue to work from the repository root.
 For development, create a Python 3.12 virtual environment and run:
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements.txt
 python -m pip install -e . --no-deps --no-build-isolation
 python -m pip check
 python -m pytest -q
 ```
 
-Application dependency constraints have one source: `requirements.txt`, which is
-also read into the package metadata at build time. `requirements-dev.txt` adds
-tests and build tools; `requirements-research.txt` remains optional. There are
-no separately maintained copies of the application dependency list in pyproject.
+Project dependency constraints have one source: `requirements.txt`. It includes
+application, test, build, and research tools and is read into package metadata at
+build time, so installing the package also installs these dependencies.
 
 In an existing GPU environment, first install application dependencies with the
 runtime constraints from the environment guide. Then use `pip install -e .
@@ -30,7 +29,7 @@ CUDA environment with the CPU test environment.
 ## Build wheel and source distribution
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements.txt
 python -m build --no-isolation
 ```
 
@@ -42,7 +41,7 @@ dist/pdschedule-0.1.0-py3-none-any.whl
 ```
 
 The wheel is built from the source distribution by the default build command.
-`--no-isolation` uses the build tools already installed by requirements-dev;
+`--no-isolation` uses the build tools already installed from requirements.txt;
 without that option the build frontend prepares its own backend environment.
 `py3-none-any` describes the application archive, not GPU-runtime portability.
 

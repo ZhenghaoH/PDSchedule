@@ -155,7 +155,7 @@ The NIXL deployment guide uses the following environment:
 | Example model      | Local DeepSeek-R1-Distill-Qwen-7B weights and tokenizer                             |
 | Example GPU layout | Two GPUs, one TP=1 instance per phase; sufficient memory for the model and KV cache |
 
-Use [`docs/environment.md`](docs/environment.md) for container creation, application dependency installation, model checks, and port checks. `requirements.txt` defines the application runtime; `requirements-dev.txt` adds public test dependencies, and `requirements-research.txt` adds optional research tools. PyTorch, vLLM, NIXL, and CUDA libraries belong to the serving environment and should not be replaced by an unrelated application dependency installation.
+Use [`docs/environment.md`](docs/environment.md) for container creation, dependency installation, model checks, and port checks. `requirements.txt` includes application, test, build, and research dependencies. PyTorch, vLLM, NIXL, and CUDA libraries belong to the serving environment and should not be replaced by an unrelated application dependency installation.
 
 For editable installation, wheel/sdist builds, installed service commands, and deployment-owned profile paths, see [`docs/installation.md`](docs/installation.md). The existing source-checkout startup commands below remain supported.
 
@@ -529,7 +529,7 @@ Paper plots are included for context. The complete paper workload harness and ca
 From a Python 3.12 virtual environment, install the public test dependencies and run the complete CPU regression suite:
 
 ```bash
-python -m pip install -r requirements-dev.txt
+python -m pip install -r requirements.txt
 python -m pip check
 python -m pytest -q
 ```

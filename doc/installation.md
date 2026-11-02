@@ -2,7 +2,7 @@
 
 PDSchedule 0.1.0 supports a Python **3.12** application installation. This package
 does not install Torch, vLLM, NIXL, LMCache, model weights, or fitted predictors.
-Prepare a compatible GPU runtime using [the environment guide](environment.md)
+Prepare a compatible GPU runtime using [the environment guide](../env/README.md)
 before running real inference services. A package version is not a GitHub Release.
 
 ## Source checkout and editable installation
@@ -80,7 +80,7 @@ python -m entrypoints.instanceD --help
 ```
 
 Use the addresses, registration metadata, GPU assignments, and readiness checks
-from [the real NIXL guide](quickstart.md). Installation does not remove the
+from [the real NIXL guide](quickstart_v1.md). Installation does not remove the
 Controller's interactive CLI requirement or change its source-address PD/SLO mapping.
 The optional browser Client retains its current loopback address and port 5050.
 
@@ -155,4 +155,4 @@ The full CPU suite includes these checks; see [test/README.md](../test/README.md
 | Logs are unwritable or absent from CWD | Use absolute Gateway log directories and inspect the console; review the log-path exceptions above. Changing `PDSCHEDULE_PROFILE_DIR` only affects models. |
 
 Exact options, environment names, and HTTP boundaries are indexed in
-[configuration and interfaces](configuration-and-interfaces.md).
+[configuration and interfaces](developer-handbook/configuration-and-interfaces.md).

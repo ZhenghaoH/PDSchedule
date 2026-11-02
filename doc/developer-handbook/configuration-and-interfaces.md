@@ -3,35 +3,35 @@
 This is an index of the current application's deployment-facing configuration,
 CLI, and HTTP surfaces, not another startup tutorial. Source definitions remain
 authoritative. Internal optimizer weights and function-local tuning constants
-are deliberately omitted. Follow [single-Pool deployment](quickstart.md),
-[multi-Pool deployment](multi_pool.md), and [SLO operation](slo.md) for commands.
+are deliberately omitted. Follow [single-Pool deployment](../quickstart_v1.md),
+[multi-Pool deployment](../multi_pool.md), and [SLO operation](../slo.md) for commands.
 
 ## 1. Configuration resolution
 
 - Service CLI arguments override their `argparse` defaults. Address defaults
-  come from [ADDRESS_CONFIG.py](../config/ADDRESS_CONFIG.py) and the role's config
+  come from [ADDRESS_CONFIG.py](../../config/ADDRESS_CONFIG.py) and the role's config
   module; the environment is read when those modules are imported.
 - This is **not** a universal CLI > environment > config rule. Malformed imported
   environment values can fail before CLI overrides are parsed. Changing a shell
   variable after a service starts does not reconfigure that process.
-- Controller [config](../config/controller.py) unconditionally assigns
+- Controller [config](../../config/controller.py) unconditionally assigns
   `SCHEDULER_MODEL_PATH`, `SCHEDULER_TOKENIZER_MAP`, `HF_HUB_OFFLINE`, and
   `TRANSFORMERS_OFFLINE` on import. Pre-setting these shell variables does not
   override those assignments. A local absolute model path in the request is
-  resolved directly by [TokenizerRegistry](../utils/tokenizer_registry.py).
+  resolved directly by [TokenizerRegistry](../../utils/tokenizer_registry.py).
 - No application `.env` loader or runtime configuration in `pyproject.toml` is
   provided. The latter describes package installation. NIXL/vLLM options and
   LMCache YAML belong to their serving processes, not this argument parser.
-- The `FLEXPD_*` environment names below are existing interfaces with a historical
-  prefix; there are no automatic `PDSCHEDULE_*` aliases except the explicit
+- The `FLEXPD_*` environment names below are current interfaces. There are no
+  automatic `PDSCHEDULE_*` aliases except the explicit
   `PDSCHEDULE_PROFILE_DIR` option.
 
 ## 2. Environment variables and configured state
 
 ### Addresses and membership
 
-Sources: [shared addresses](../config/ADDRESS_CONFIG.py),
-[P Instance config](../config/instanceP.py), [D Instance config](../config/instanceD.py).
+Sources: [shared addresses](../../config/ADDRESS_CONFIG.py),
+[P Instance config](../../config/instanceP.py), [D Instance config](../../config/instanceD.py).
 Port environment values are integers: unset or empty uses the listed default;
 other non-integer strings raise during import. No port-range validation is added
 by the shared helper. Host strings are not reachability checks.
@@ -63,20 +63,20 @@ values are still parsed when ADDRESS_CONFIG is imported.
 
 | Name / setting | Owner and default | Effect / invalid or fallback behavior | Source |
 | --- | --- | --- | --- |
-| `PDSCHEDULE_PROFILE_DIR` | Profile root: source checkout `profile/`, installed application working-directory `profile/` | Non-empty trimmed path is expanded/resolved; a relative override is relative to process CWD. Models are not supplied. Set before startup; Gateway explicit model-file flags select individual files. | [paths.py](../pdschedule/paths.py), [profile guide](../profile/README.md) |
-| `SCHEDULER_MODEL_PATH` | Controller assigns `/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` | Startup tokenizer warmup path; import overwrites an inherited value. Missing tokenizer may fall back to character-count estimation, not a successful calibration. Request model path is separate. | [Controller config](../config/controller.py), [tokenizer](../utils/tokenizer_registry.py) |
+| `PDSCHEDULE_PROFILE_DIR` | Profile root: source checkout `profile/`, installed application working-directory `profile/` | Non-empty trimmed path is expanded/resolved; a relative override is relative to process CWD. Models are not supplied. Set before startup; Gateway explicit model-file flags select individual files. | [paths.py](../../pdschedule/paths.py), [profile guide](../../profile/README.md) |
+| `SCHEDULER_MODEL_PATH` | Controller assigns `/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` | Startup tokenizer warmup path; import overwrites an inherited value. Missing tokenizer may fall back to character-count estimation, not a successful calibration. Request model path is separate. | [Controller config](../../config/controller.py), [tokenizer](../../utils/tokenizer_registry.py) |
 | `SCHEDULER_TOKENIZER_MAP` | Controller assigns a `llama3-70b` mapping to `/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct` | Import overwrites an inherited mapping. Existing local request-model directories take precedence in tokenizer resolution. | Same sources |
-| `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` | Controller assigns `1` / `1` | These assignments affect that process, not other terminals. Prepare model/tokenizer files locally. | [Controller config](../config/controller.py) |
-| `MY_GPU_TYPE` | Gateway nominal capacity: `NVIDIA RTX5090` | String label, not GPU autodetection. | [Instance state](../store/gateway/instance.py), [Gateway store](../store/gateway/manager.py) |
+| `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` | Controller assigns `1` / `1` | These assignments affect that process, not other terminals. Prepare model/tokenizer files locally. | [Controller config](../../config/controller.py) |
+| `MY_GPU_TYPE` | Gateway nominal capacity: `NVIDIA RTX5090` | String label, not GPU autodetection. | [Instance state](../../store/gateway/instance.py), [Gateway store](../../store/gateway/manager.py) |
 | `MY_FLOPS` | Gateway nominal P capacity: `17.9` | Parsed float; invalid text raises. Relative capacity input, not measured inference throughput. | Same sources |
 | `MY_MEM_BANDWIDTH` | Gateway nominal D capacity: `800.0` | Parsed float; invalid text raises. Not an inter-Gateway network bandwidth measurement. | Same sources |
-| `MY_MAX_PROMPT_THROUGHPUT` | Gateway P reference throughput: `37829.0` tokens/s | Parsed float; used to normalize reported prompt throughput. No automatic profiling or Pool-size aggregation. | Same sources, [Pool updates](../core/handlers/controller/update.py) |
-| `MY_MAX_DECODE_REQ_NUM` | Gateway D request capacity: `128` | Parsed integer; invalid text raises. Pool reporting uses at least 1. | [Gateway store](../store/gateway/manager.py) |
-| `OPENAI_API_KEY` | Forwarding helper: unset | Default downstream `Authorization: Bearer <value>`; unset currently produces `Bearer None`. Explicit extra headers override it where the caller supplies them. This is not application ingress authentication and does not guarantee client-header propagation through every hop. | [forward.py](../proxy/forward.py) |
-| `FLEXPD_GATEWAY_LOG_DIR` | Source root `gateway_logs/` | Custom relative path resolves against the module's project root, not CWD. Absolute per-Gateway paths are recommended. Directory/write failures log warnings. | [observability](../utils/gateway_observability.py) |
+| `MY_MAX_PROMPT_THROUGHPUT` | Gateway P reference throughput: `37829.0` tokens/s | Parsed float; used to normalize reported prompt throughput. No automatic profiling or Pool-size aggregation. | Same sources, [Pool updates](../../core/handlers/controller/update.py) |
+| `MY_MAX_DECODE_REQ_NUM` | Gateway D request capacity: `128` | Parsed integer; invalid text raises. Pool reporting uses at least 1. | [Gateway store](../../store/gateway/manager.py) |
+| `OPENAI_API_KEY` | Forwarding helper: unset | Default downstream `Authorization: Bearer <value>`; unset currently produces `Bearer None`. Explicit extra headers override it where the caller supplies them. This is not application ingress authentication and does not guarantee client-header propagation through every hop. | [forward.py](../../proxy/forward.py) |
+| `FLEXPD_GATEWAY_LOG_DIR` | Source root `gateway_logs/` | Custom relative path resolves against the module's project root, not CWD. Absolute per-Gateway paths are recommended. Directory/write failures log warnings. | [observability](../../utils/gateway_observability.py) |
 | `FLEXPD_RESOURCE_LOG_INTERVAL_SEC` | Resource log interval: `1` second | Parsed float, clamped to ≥0; malformed text raises. Controls log emission, not heartbeat sampling. | Same source |
 | `FLEXPD_RESOURCE_ZERO_PAUSE_SEC` | Idle resource-log pause: `30` seconds | Parsed float, clamped to ≥0; malformed text raises. Not a liveness timeout. | Same source |
-| `FLEXPD_INSTANCE_NETWORK_SAMPLE_SEC` | Instance cached network sample: `1` second | Parsed float, clamped to ≥0.1; malformed text is caught by the enclosing metric-update error handler. Not the whole Instance reporting interval. | [Instance reporting](../coord/instance/up_store.py) |
+| `FLEXPD_INSTANCE_NETWORK_SAMPLE_SEC` | Instance cached network sample: `1` second | Parsed float, clamped to ≥0.1; malformed text is caught by the enclosing metric-update error handler. Not the whole Instance reporting interval. | [Instance reporting](../../coord/instance/up_store.py) |
 
 Gateway capacity defaults are read before actual Instance resource reports.
 Later heartbeats change load, not the registered hardware-capacity fields. Use
@@ -88,11 +88,11 @@ traces independently use a path relative to `core/handlers/controller/proxy.py`;
 they coincide in a source checkout but need not coincide after wheel installation.
 Gateway's default log root is also module-relative after installation.
 `PDSCHEDULE_PROFILE_DIR` changes neither log root. See
-[installation path notes](installation.md#namespaces-and-resources).
+[installation path notes](../installation.md#namespaces-and-resources).
 
 ### Network-estimate inputs
 
-These affect [PCIe metric collection](../utils/pcie_metric.py), not NIXL's actual
+These affect [PCIe metric collection](../../utils/pcie_metric.py), not NIXL's actual
 transport configuration. Invalid integer/float text falls back to the listed
 value; sample count is clamped to ≥1 and sample interval to ≥0.
 
@@ -106,26 +106,26 @@ value; sample count is clamped to ≥1 and sample interval to ≥0.
 
 NVML/default estimates use Mbps. Same-IP P/D Pools are treated as same-machine
 links. Link records are cost estimates, not proof of measured per-pair NIXL TCP
-bandwidth. See [multi-Pool resource semantics](multi_pool.md#5-inspect-resources-and-switch-the-global-policy).
+bandwidth. See [multi-Pool resource semantics](../multi_pool.md#5-inspect-resources-and-switch-the-global-policy).
 
 ## 3. Service CLI
 
-The [installed console commands](installation.md#installed-service-commands)
+The [installed console commands](../installation.md#installed-service-commands)
 accept the same arguments as the source files linked below. `--help` shows the
 actual parser. No command here creates models, Redis, or vLLM processes for you.
 
 | Entry | Option | Default / constraint |
 | --- | --- | --- |
-| [Controller](../entrypoints/controller.py) | `--host`, `--port` | Shared address defaults above. Host required; port default 5000. Interactive CLI required; no `--no-cli`, model-path, or scheduler-policy startup flag. |
-| [P Gateway](../entrypoints/gatewayP.py) | `--host`, `--port`, `--controller` | P defaults above; host and Controller address required. Controller value is `host:port`, not an HTTP URL. |
-| [D Gateway](../entrypoints/gatewayD.py) | `--host`, `--port`, `--controller` | D defaults above; same requirement. |
+| [Controller](../../entrypoints/controller.py) | `--host`, `--port` | Shared address defaults above. Host required; port default 5000. Interactive CLI required; no `--no-cli`, model-path, or scheduler-policy startup flag. |
+| [P Gateway](../../entrypoints/gatewayP.py) | `--host`, `--port`, `--controller` | P defaults above; host and Controller address required. Controller value is `host:port`, not an HTTP URL. |
+| [D Gateway](../../entrypoints/gatewayD.py) | `--host`, `--port`, `--controller` | D defaults above; same requirement. |
 | P Gateway | `--prefill` / `-p` | One or more local P Proxy addresses when supplied; defaults to the environment member list. |
 | P Gateway | `--decode` / `-d` | One or more D **Gateway** addresses when supplied; default `[]`, not `FLEXPD_DECODE_INSTANCES`. Normal Controller PD forwarding uses the selected Task's D Gateway; the diagnostic analysis handler uses the first configured Decode target. |
 | D Gateway | `--decode` / `-d` | One or more local D **Proxy** addresses when supplied; defaults to its environment member list. |
 | P Gateway | `--prefill-scheduler-strategy` | `slo_aware_prefill`; choices `slo_aware_prefill`, `jsq`, `round_robin`. |
 | D Gateway | `--decode-scheduler-strategy` | `slo_aware_decode`; choices `round_robin`, `lowest_generation_throughput`, `slo_aware_decode`. |
 | Both Gateways | `--no-cli` | False; supplied flag disables their interactive CLI. No remote HTTP policy-switch endpoint. |
-| [P Instance](../entrypoints/instanceP.py), [D Instance](../entrypoints/instanceD.py) | `--host`, `--port`, `--vllm_port`, `--gateway` | Host/parent defaults above; ports default `None`. Main rejects missing/empty/zero required options. The vLLM flag uses an **underscore**. |
+| [P Instance](../../entrypoints/instanceP.py), [D Instance](../../entrypoints/instanceD.py) | `--host`, `--port`, `--vllm_port`, `--gateway` | Host/parent defaults above; ports default `None`. Main rejects missing/empty/zero required options. The vLLM flag uses an **underscore**. |
 | Both Instances | `--gpu-indices` | Parsed environment default `[0]`; comma-separated unique non-negative NVML indices. Does not allocate the engine's GPUs. |
 | Both Gateways and Instances | `--connector-name` | `nixl`; choices `nixl`, `lmcache`. |
 | Both Gateways and Instances | `--connector-version` | String `1`; string equality is required for compatibility. This is descriptor compatibility metadata, not the installed vLLM/NIXL/LMCache package version. |
@@ -133,9 +133,9 @@ actual parser. No command here creates models, Redis, or vLLM processes for you.
 
 ### Predictor loading and warmup
 
-Sources: [P config](../config/gatewayP.py), [D config](../config/gatewayD.py),
-[P lifecycle](../core/lifespans/gatewayP.py), [D lifecycle](../core/lifespans/gatewayD.py).
-Detailed commands and failure handling belong to [SLO operation](slo.md).
+Sources: [P config](../../config/gatewayP.py), [D config](../../config/gatewayD.py),
+[P lifecycle](../../core/lifespans/gatewayP.py), [D lifecycle](../../core/lifespans/gatewayD.py).
+Detailed commands and failure handling belong to [SLO operation](../slo.md).
 
 | P option / D option | Default and behavior |
 | --- | --- |
@@ -157,14 +157,14 @@ persisted file is expected. Readiness is established by predictor logs, not by
 Controller: `show pool_id`, `show scheduler`, `switch scheduler -m <name>`, `quit`.
 Global choices are `demand_aware` (default), `least_load`, and `round_robin`.
 Gateways: `show scheduler`, `switch scheduler -m <role-policy>`, `quit` when CLI
-is enabled. See [Controller CLI](../core/consoles/controller.py) and
-[Gateway CLI](../core/consoles/gateway.py). Changes apply to that running process,
+is enabled. See [Controller CLI](../../core/consoles/controller.py) and
+[Gateway CLI](../../core/consoles/gateway.py). Changes apply to that running process,
 not future launches. Policy switching does not clear calibrated-profile caches.
 
 Additional source-only diagnostic commands are
-[network_status.py](../entrypoints/network_status.py) (`--ip` or `--interface`,
+[network_status.py](../../entrypoints/network_status.py) (`--ip` or `--interface`,
 `--interval` default 1 second, `--top-n` 5, `--count` 0 for continuous display) and
-[network_transfer_analyzer.py](../entrypoints/network_transfer_analyzer.py).
+[network_transfer_analyzer.py](../../entrypoints/network_transfer_analyzer.py).
 The latter has a machine-specific default Gateway: pass `--prefill-gateway`
 explicitly, and observe the analysis-interface limitation below. Neither is an
 application readiness check or an additional installed service entrypoint.
@@ -181,8 +181,8 @@ their inner JSON fields or errors.
 
 ### Controller
 
-Source: [router](../core/routers/controller.py), [inference](../core/handlers/controller/proxy.py),
-[registration and network handlers](../core/handlers/controller/update.py).
+Source: [router](../../core/routers/controller.py), [inference](../../core/handlers/controller/proxy.py),
+[registration and network handlers](../../core/handlers/controller/update.py).
 
 | Method and path | Input | Result / important boundary |
 | --- | --- | --- |
@@ -204,10 +204,10 @@ that advertised addresses or capacity values are correct.
 
 ### Prefill and Decode Gateways
 
-Sources: [P router](../core/routers/gatewayP.py), [D router](../core/routers/gatewayD.py),
-[P Instance handlers](../core/handlers/gateway/prefill/update.py),
-[D Instance handlers](../core/handlers/gateway/decode/update.py),
-[Connector handlers](../core/handlers/gateway/connector.py).
+Sources: [P router](../../core/routers/gatewayP.py), [D router](../../core/routers/gatewayD.py),
+[P Instance handlers](../../core/handlers/gateway/prefill/update.py),
+[D Instance handlers](../../core/handlers/gateway/decode/update.py),
+[Connector handlers](../../core/handlers/gateway/connector.py).
 
 | Method and path | Input | Result / important boundary |
 | --- | --- | --- |
@@ -225,12 +225,12 @@ Sources: [P router](../core/routers/gatewayP.py), [D router](../core/routers/gat
 Session objects contain `session_id`, `connector`, `prefill_endpoint`,
 `decode_endpoint`, `context`, `state`, `created_at`, `updated_at`. They live in
 memory and are lost on process restart; closing retains a closed record.
-See [session models](../connectors/models.py) and [manager](../connectors/manager.py).
+See [session models](../../connectors/models.py) and [manager](../../connectors/manager.py).
 
 ### Instance Proxies and optional Client UI
 
-Sources: [Instance router](../core/routers/instance.py), [forwarding](../core/handlers/instance/proxy.py),
-[metadata](../core/handlers/instance/metadata.py), [identity](../core/handlers/instance/connector.py).
+Sources: [Instance router](../../core/routers/instance.py), [forwarding](../../core/handlers/instance/proxy.py),
+[metadata](../../core/handlers/instance/metadata.py), [identity](../../core/handlers/instance/connector.py).
 
 | Method and path | Input | Result / important boundary |
 | --- | --- | --- |
@@ -239,7 +239,7 @@ Sources: [Instance router](../core/routers/instance.py), [forwarding](../core/ha
 | `PUT /metadata?key=...` | UTF-8-decodable raw body; no JSON schema | Volatile process-local byte storage; text acknowledgement. Current logging decodes the body as UTF-8. Does not register an Instance or establish NIXL pairing. |
 | `GET /metadata?key=...`, `DELETE /metadata?key=...` | Key query; omitted key becomes empty string | Stored bytes / text acknowledgement, or 404. Content type is declared JSON but acknowledgements and missing-key bodies are plain text; do not blindly JSON-decode them. |
 
-[Client UI](../examples/clientUI/client.py) listens on `127.0.0.1:5050` and has
+[Client UI](../../examples/clientUI/client.py) listens on `127.0.0.1:5050` and has
 `GET /`, `POST /api/send_command`, `GET /api/get_history`, and
 `POST /api/clear_history`. These are browser-helper interfaces, not Controller
 routes; history is in memory. Its command-mode field allowlist is narrower than
@@ -252,7 +252,7 @@ There is no general `/healthz`, `/debug/status`, application `/metrics`, old
 
 ## 5. Client request fields and forwarding limits
 
-Source: [request construction and serialization](../core/schemas/request.py).
+Source: [request construction and serialization](../../core/schemas/request.py).
 The internal envelope is not the public client body.
 
 | Field | Current Controller interpretation |
@@ -261,11 +261,11 @@ The internal envelope is not the public client body.
 | `messages` | Chat input must be a list. Selects the **last user message**, or concatenates role/content text if there is no user message; forwarding rebuilds one user message, not the complete original conversation. |
 | `prompt` | Completion input: string, or first item of a non-empty list. Not multi-prompt batch forwarding. |
 | `max_tokens` | Default 1000; integer conversion; 0/empty-like values fall back to 1000. Not a full positivity/context validation layer. |
-| `stream` | Default false; parsed by [boolean helper](../utils/parse_str_flag.py). Prefer JSON booleans. |
+| `stream` | Default false; parsed by [boolean helper](../../utils/parse_str_flag.py). Prefer JSON booleans. |
 | `temperature` | Default 1.0; parse failures or values ≤0 become 1.0. Passing 0 does not request greedy decoding through this parser. |
 | `top_p` | Default 1.0; invalid values/outside `(0,1]` become 1.0. |
 | `Enable_Affinity`, `user_id`, `session_id` | Affinity defaults off; requires enabled flag and both non-empty identities. Single-P/D routing takes precedence; cached routes are checked for current Connector compatibility. |
-| Client source IP | Constructs PD enablement, TTFT/TPOT/E2E budgets, and internal context. See the exact [SLO mapping](slo.md#slo-source-and-units). Extra client SLO/PD fields are not overrides. |
+| Client source IP | Constructs PD enablement, TTFT/TPOT/E2E budgets, and internal context. See the exact [SLO mapping](../slo.md#slo-source-and-units). Extra client SLO/PD fields are not overrides. |
 
 Fields such as tools, multimodal content, penalties, or stream options are not a
 general pass-through contract. Prompt token counting can fall back to character
@@ -278,32 +278,32 @@ Forwarders can return a `StreamingResponse` before a downstream error occurs.
 Some helpers forward a 4xx body as bytes instead of propagating its HTTP status;
 an upstream client can see HTTP 200 with an error body or an interrupted stream.
 Inspect `error` / `choices`, SSE termination, and service logs rather than status
-alone. See [forwarding implementation](../proxy/forward.py) and the
-[deployment troubleshooting](quickstart.md#13-常见问题).
+alone. See [forwarding implementation](../../proxy/forward.py) and the
+[deployment troubleshooting](../quickstart_v1.md#13-troubleshooting).
 
 ## 6. Connector descriptor boundary
 
 | Adapter | Gateway metadata | Instance metadata | Compatibility |
 | --- | --- | --- | --- |
-| [NIXL](../connectors/adapters/nixl.py) | `{}` allowed. Non-empty metadata must include all three Instance fields. | `side_channel_host` (non-empty), `side_channel_port` (positive integer), `tp_size` (positive integer). | Name/version must match; TP equality is not required by this Adapter. Actual model/layout/parallel compatibility still depends on the engines. |
-| [LMCache](../connectors/adapters/lmcache.py) | Non-empty `backend`, `namespace`, `config_fingerprint`. | Same three non-empty identity fields. | Name/version and all three fields must match within the Pool and between paired endpoints. Metadata labels are operator declarations, not a live backend-content probe. |
+| [NIXL](../../connectors/adapters/nixl.py) | `{}` allowed. Non-empty metadata must include all three Instance fields. | `side_channel_host` (non-empty), `side_channel_port` (positive integer), `tp_size` (positive integer). | Name/version must match; TP equality is not required by this Adapter. Actual model/layout/parallel compatibility still depends on the engines. |
+| [LMCache](../../connectors/adapters/lmcache.py) | Non-empty `backend`, `namespace`, `config_fingerprint`. | Same three non-empty identity fields. | Name/version and all three fields must match within the Pool and between paired endpoints. Metadata labels are operator declarations, not a live backend-content probe. |
 
 All Instances within a Pool use its Connector family/version. Cross-Pool
 heterogeneity is allowed, but a PD request cannot bridge NIXL to LMCache. Adapter
 names are not vLLM class names: `--connector-name nixl` does not start/configure
 `NixlConnector` in a serving engine. Version `1` is not a NIXL software version.
 
-Root [lmcache.yaml](../lmcache.yaml) is deployment-specific: it contains a fixed
+Root [lmcache.yaml](../../lmcache.yaml) is deployment-specific: it contains a fixed
 Redis endpoint, `cachegen`, chunk size 32, and disabled local CPU / Decode-cache
 saving. Declaring compatible metadata neither applies that YAML to vLLM nor
 proves cache reuse/Redis writes. NIXL deployment does not need Redis or LMCache.
 
 ## 7. Refresh, liveness, and where to troubleshoot
 
-Sources: [Pool store](../store/controller/pool_manager.py), [link store](../store/controller/network.py),
-[resource snapshots](../scheduler/controller/resource_state.py),
-[Controller lifecycle](../core/lifespans/controller.py),
-[Instance lifecycle](../core/lifespans/instance.py), and the Gateway/Instance reporting modules linked above.
+Sources: [Pool store](../../store/controller/pool_manager.py), [link store](../../store/controller/network.py),
+[resource snapshots](../../scheduler/controller/resource_state.py),
+[Controller lifecycle](../../core/lifespans/controller.py),
+[Instance lifecycle](../../core/lifespans/instance.py), and the Gateway/Instance reporting modules linked above.
 
 Successful Pool-registration/update/unregister and network-update handlers refresh
 Controller resources immediately; 1-second reconciliation filters expired Pools
@@ -322,11 +322,11 @@ restart Controller → Gateways → Instances as described in the guides.
 
 | Topic | Maintained operational reference | Relevant checks |
 | --- | --- | --- |
-| Python/serving environment, imports, models, ports | [Environment](environment.md#6-常见环境问题), [installation](installation.md#installation-troubleshooting) | [package tests](../test/test_package_installation.py) |
-| Single-Pool registration, forwarding, NIXL errors | [Deployment](quickstart.md#13-常见问题) | [runtime registration tests](../test/test_runtime_instance_registration.py), [Connector tests](../test/test_connector_protocol.py) |
-| Missing/stale Pools/Instances, policy and link observations | [Multi-Pool](multi_pool.md#8-troubleshooting-multi-pool-operation) | [Controller component tests](../test/test_controller_scheduler_components.py), [single-Gateway tests](../test/test_single_gateway_routing.py) |
-| Predictor load, shared profile keys, SLO fallback/measurement | [SLO operation](slo.md#9-troubleshooting-slo-operation), [Controller profiles](../profile/controller/README.md) | [Gateway strategy tests](../test/test_gateway_scheduler_strategy.py), [observability tests](../test/test_gateway_observability.py) |
+| Python/serving environment, imports, models, ports | [Environment](../../env/README.md#6-environment-troubleshooting), [installation](../installation.md#installation-troubleshooting) | [package tests](../../test/test_package_installation.py) |
+| Single-Pool registration, forwarding, NIXL errors | [Deployment](../quickstart_v1.md#13-troubleshooting) | [runtime registration tests](../../test/test_runtime_instance_registration.py), [Connector tests](../../test/test_connector_protocol.py) |
+| Missing/stale Pools/Instances, policy and link observations | [Multi-Pool](../multi_pool.md#8-troubleshooting-multi-pool-operation) | [Controller component tests](../../test/test_controller_scheduler_components.py), [single-Gateway tests](../../test/test_single_gateway_routing.py) |
+| Predictor load, shared profile keys, SLO fallback/measurement | [SLO operation](../slo.md#9-troubleshooting-slo-operation), [Controller profiles](../../profile/controller/README.md) | [Gateway strategy tests](../../test/test_gateway_scheduler_strategy.py), [observability tests](../../test/test_gateway_observability.py) |
 
-The [public CPU suite](../test/README.md) checks application contracts, not live
+The [public CPU suite](../../test/README.md) checks application contracts, not live
 vLLM, backend cache hits, GPU performance, or actual KV movement. Those require
 the real request and engine-metric checks in the deployment guides.

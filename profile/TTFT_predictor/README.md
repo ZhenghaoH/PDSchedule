@@ -1,34 +1,33 @@
 # TTFT Predictor
 
-本目录只发布测量、拟合、预测和本地持久化代码，不附带任何实验机器的已拟合模型。
-`artifacts/` 中的生成物及 profile 下的 pickle/joblib 文件由 Git 忽略。
+This directory provides measurement, fitting, prediction and local persistence
+code, not fitted experiment models. Generated `artifacts/` and profile pickle/joblib
+files are ignored by Git. See [SLO operation](../../doc/slo.md) for real NIXL
+calibration, validation and Gateway loading using `pdschedule.profiling`.
 
-完整的真实 NIXL 多池校准、验证命令及 Gateway 启用步骤见
-[SLO 使用流程](../../docs/slo.md)。该流程使用 `pdschedule.profiling` 导入，
-并显式指定真实 vLLM API 端口；下文保留原有 profile 目录下的调用方式。
+## Files and inputs
 
-## 文件与输入
+- [prefill_regressor.py](prefill_regressor.py): collect warmup samples, fit and persist a linear model.
+- [prefill_predictor.py](prefill_predictor.py): async prediction, detailed warmup and local load/save.
+- [request_generator.py](request_generator.py): construct requests with a tokenizer and measure TTFT.
+- [prefill_prediction_server.py](prefill_prediction_server.py): HTTP prediction service.
+- [validate_prefill_predictor.py](validate_prefill_predictor.py): check predictions against real requests.
 
-- [prefill_regressor.py](prefill_regressor.py)：采集 warmup 样本，拟合线性回归器，保存和加载本地状态。
-- [prefill_predictor.py](prefill_predictor.py)：异步预测、详细 warmup 和本地模型加载/保存入口。
-- [request_generator.py](request_generator.py)：按 tokenizer 构造请求并测量 TTFT。
-- [prefill_prediction_server.py](prefill_prediction_server.py)：提供 HTTP 预测服务。
-- [validate_prefill_predictor.py](validate_prefill_predictor.py)：在真实部署中核对预测结果。
-
-当前拟合形式为：
+The current model is:
 
 ```text
 total_tokens = max(0, batch_size) * max(0, prompt_length)
 TTFT_seconds = tokens_coefficient * total_tokens + intercept_seconds
 ```
 
-回归器对总 token 数做标准化后拟合，再还原系数。详细 warmup 会采集真实请求；
-批次聚类与测量过滤由回归器实现。参数和结果只适用于相应模型、GPU、TP/PP、
-vLLM 配置和测量路径，不能直接当作其他部署的校准值。
+The regressor normalizes total tokens before fitting and restores coefficients.
+Detailed warmup sends real requests; batching and filtering are implemented in
+the regressor. Results apply to the measured model, GPU, TP/PP, vLLM settings and
+measurement path, not automatically to another deployment.
 
-## 冷启动预测
+## Cold-start prediction
 
-从项目根目录进入 `profile/` 后使用：
+From the repository root, enter `profile/` and run:
 
 ```python
 import asyncio
@@ -37,12 +36,12 @@ from TTFT_predictor.prefill_predictor import predict_ttft
 print(asyncio.run(predict_ttft(batch_size=1, prompt_length=128)))
 ```
 
-返回值单位为秒。没有本地模型时，代码使用内置合成样本初始化或粗略估计。
-这仅用于冷启动/功能检查，不代表已在当前硬件测量或具有实测精度。
+The return value is in seconds. Without a local model, built-in synthetic samples
+or a rough estimate support functional checks, not measured hardware accuracy.
 
-## 在本地测量、拟合和保存
+## Measure, fit and save locally
 
-准备兼容环境、真实 vLLM 服务与本地 tokenizer 后，在 `profile/` 下执行：
+Prepare a compatible environment, real vLLM service and local tokenizer; run in `profile/`:
 
 ```python
 import asyncio
@@ -62,23 +61,19 @@ asyncio.run(perform_detailed_warmup(
 ))
 ```
 
-替换模型标识与 tokenizer 路径，检查目标服务、批大小和 prompt 长度范围。
-warmup 会产生真实推理请求。输出文件只保存在本地；不传 `model_file` 时不会保存。
-有足够有效样本并完成拟合后，检查日志/系数和验证脚本结果，不能只依据函数返回判断校准成功。
+Replace the model and tokenizer paths and check the service, batch size and prompt
+length range. Warmup sends real requests. The file is local and is not saved when
+`model_file` is omitted. Check sample validity, coefficients, logs and validation
+results; a function return alone does not prove calibration.
 
-## 加载与 Gateway 集成
+## Loading and Gateway integration
 
-`load_ttft_model(path)` 在文件缺失时返回 `False`，`save_ttft_model(path)` 用于保存
-本地已拟合状态。只加载自己生成或已核验的可信 pickle；不从请求中接受任意模型文件。
+`load_ttft_model(path)` returns `False` for a missing file; `save_ttft_model(path)`
+saves locally fitted state. Load only trusted pickle files. With warmup enabled,
+P Gateway first loads its local file and otherwise attempts real warmup. If the
+target or calibration is unavailable, inspect readiness and policy fallback.
+Controller uses [separate local profiles](../controller/README.md).
 
-P Gateway 在启用 TTFT warmup 后先尝试加载本地文件；未命中时按配置目标进行真实
-warmup。目标不可用或 warmup 未完成时，应检查 predictor readiness 和所选策略的
-fallback，而不是假设已有实测预测器。
-
-Controller 使用独立的本地 profile 路径；Gateway 模型不会自动分发给 Controller。
-参见 [Controller 本地模型说明](../controller/README.md)。
-
-注意：`--no-ttft-warmup` 同时跳过加载和拟合；仅传 `--ttft-model-file` 不会在该模式下加载。
-`--ttft-warmup` 先尝试加载，再在失败时进行真实 warmup；评估前应核对
-`[TTFT Predictor] Using persisted model: ...` 的实际文件路径。
-模型替换需重启 Gateway 以清除进程内预测及缓存，不假设自动热加载。
+`--no-ttft-warmup` skips both loading and fitting, even if `--ttft-model-file` is
+specified. With warmup enabled check the path in `[TTFT Predictor] Using persisted
+model: ...`. Restart Gateway after replacing a model; there is no automatic reload.

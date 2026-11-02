@@ -95,6 +95,11 @@ def test_wheel_and_sdist_scope_and_metadata(artifacts):
     with tarfile.open(sdist) as archive:
         source_names = {name.partition("/")[2] for name in archive.getnames()}
     assert {"pyproject.toml", "requirements.txt", "templates/requests.html"} <= source_names
+    assert {"doc/installation.md", "doc/quickstart_v1.md", "env/README.md"} <= source_names
+    assert {name for name in source_names if name.startswith("doc/")} <= {
+        "doc/", "doc/installation.md", "doc/quickstart_v1.md"
+    }
+    assert not any(name.startswith("docs/") for name in source_names)
     for members in (names, source_names):
         assert not any(name.startswith(("plan/", "simulator/", "test/")) for name in members)
         assert not any(name.endswith((".pkl", ".pickle", ".joblib", ".sh", ".ps1", ".cmd", ".pyc", ".log", ".sqlite3")) for name in members)

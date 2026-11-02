@@ -4,6 +4,15 @@ The public regression suite checks scheduling, Connector compatibility, registra
 forwarding errors, metrics, and profiling logic without GPUs or running inference services.
 It does not establish real KV transfer, cache reuse, performance gains, or GPU compatibility.
 
+## Browser entrypoints and manual services
+
+| Component | Default example address | Purpose |
+| --- | --- | --- |
+| Controller request page | `http://127.0.0.1:5000/requests` | Request observation after Controller starts. |
+| Optional browser client | `http://127.0.0.1:5050/` | Manually send requests to a ready Controller; see [client](../examples/clientUI/README.md). |
+
+These are manually started services, not automated tests. The [full NIXL path](../doc/quickstart_v1.md) includes service startup, a real request, transfer checks and shutdown. Stop only services created for your own run and clean up only its dedicated temporary artifacts.
+
 ## 1. Prepare a CPU test environment
 
 Use **Python 3.12**, matching the documented application baseline. The NumPy 1.26.4
@@ -37,7 +46,7 @@ the tests that need them.
 Installing these requirements does not install Torch, vLLM, NIXL, LMCache, or Redis.
 It also does not download model weights or tokenizers. The research tools included
 in the dependency file are not required for this suite. For a GPU serving
-environment, follow [the environment guide](../docs/environment.md) instead of
+environment, follow [the environment guide](../env/README.md) instead of
 replacing an existing CUDA-compatible package stack.
 
 ## 2. Default entrypoint and scope
@@ -137,7 +146,7 @@ library's profile/cProfile modules, not full runtime or GPU behavior.
 
 Build tools must be installed before running these checks. Use a short temporary
 path on Windows if the checkout and installed package paths approach the legacy
-path-length limit. See [the installation guide](../docs/installation.md) for a
+path-length limit. See [the installation guide](../doc/installation.md) for a
 complete dependency installation and the six service commands.
 
 ## 6. What requires a separate serving environment
@@ -148,7 +157,7 @@ complete dependency installation and the six service commands.
 - Streaming/non-streaming requests through a complete deployed Controller/Gateway/Instance chain.
 - The manual affinity TTFT benchmark or paper workload measurements.
 
-Use [the real NIXL deployment guide](../docs/quickstart.md) for service startup,
+Use [the real NIXL deployment guide](../doc/quickstart_v1.md) for service startup,
 registration, requests, transfer metrics, and shutdown. Connector validation logs
 prove configuration compatibility, not physical KV delivery. A CPU test pass must
 not be described as a successful GPU deployment.

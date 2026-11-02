@@ -6,7 +6,7 @@ calibration, Gateway SLO policies, and optional competing Instances within each
 Pool. No fitted model is supplied by the repository or downloaded by these steps.
 
 Exact startup defaults, environment exceptions, and HTTP surfaces are listed in
-the [configuration/interface index](configuration-and-interfaces.md).
+the [configuration/interface index](developer-handbook/configuration-and-interfaces.md).
 
 ## 1. Know which layer makes each decision
 
@@ -607,5 +607,5 @@ before Gateways when shutting down or restarting the application layer.
 | Client TTFT/TPOT disagrees with Controller traces | Compare the same request and timing boundary. Controller streaming uses non-empty chunks; non-stream uses full-response time. First content/SSE events are not guaranteed individual tokens, and P deadlines start at P Gateway arrival. | Measurements are labeled with the same start/end events and units; no cross-boundary comparison is presented as a prediction error or guarantee. |
 
 Use [multi-Pool troubleshooting](multi_pool.md#8-troubleshooting-multi-pool-operation)
-for registration/state problems and [deployment troubleshooting](quickstart.md#13-常见问题)
+for registration/state problems and [deployment troubleshooting](quickstart_v1.md#13-troubleshooting)
 for NIXL transfer errors. SLO checks do not replace real KV-transfer evidence.

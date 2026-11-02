@@ -1,13 +1,13 @@
 # NIXL multi-Pool deployment
 
-This guide extends the [single-Pool deployment](quickstart.md) to **two Prefill
+This guide extends the [single-Pool deployment](quickstart_v1.md) to **two Prefill
 Pools and two Decode Pools** on one machine. It runs real vLLM services, not
-simulated Instances. Prepare the [NIXL environment](environment.md) first.
+simulated Instances. Prepare the [NIXL environment](../env/README.md) first.
 Use a dedicated `pdschedule-nixl` container with at least **four physical GPUs**,
 each with enough memory for one TP=1 model and its KV cache.
 
 Look up exact defaults and payload fields in the
-[configuration/interface index](configuration-and-interfaces.md); troubleshooting
+[configuration/interface index](developer-handbook/configuration-and-interfaces.md); troubleshooting
 for this topology stays at the end of this guide.
 
 Stop the single-Pool example before reusing its ports and GPUs. All commands run
@@ -456,7 +456,7 @@ there is no documented per-request flag that overrides this mapping.
 | Gateway logs mix multiple Pools or appear empty | Set a different absolute `FLEXPD_GATEWAY_LOG_DIR` before each Gateway starts. Look at the console for write failures and `record_state=logging_paused` for idle resource groups. This pause affects resource-log emission, not liveness. | Records in the correct directory identify actual local candidates/decisions; heartbeat and inference checks also pass. |
 | Demand-aware timing still says `fallback` after fitting | Controller has a separate model root/cache. Check the [profile placement and key-collision rules](slo.md#4-install-controller-profiles-separately); a Gateway's loaded model is not automatically available to Controller. | Cost logs show the intended `profile` source after the correct application restart. |
 
-For engine/forwarding failures use [single-Pool troubleshooting](quickstart.md#13-常见问题).
+For engine/forwarding failures use [single-Pool troubleshooting](quickstart_v1.md#13-troubleshooting).
 For actual transfer, read metrics on the Decode **engine selected by that request**;
 do not query only 8003 when the request used D-B/8004. Snapshot/network counts
 and Connector compatibility logs are not data-plane measurements.

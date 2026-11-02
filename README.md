@@ -31,9 +31,10 @@
   <a href="#key-features">Features</a> •
   <a href="#architecture">Architecture</a> •
   <a href="#frontend-urls">Frontend URLs</a> •
-  <a href="docs/environment.md">Environment</a> •
+  <a href="env/README.md">Environment</a> •
   <a href="#quick-start">Quick Start</a> •
-  <a href="docs/multi_pool.md">Multi-Pool &amp; SLO</a> •
+  <a href="doc/multi_pool.md">Multi-Pool &amp; SLO</a> •
+  <a href="doc/developer-handbook/README.md">Developer Handbook</a> •
   <a href="#api-usage">API</a> •
   <a href="#documentation">Docs</a>
 </p>
@@ -155,9 +156,9 @@ The NIXL deployment guide uses the following environment:
 | Example model      | Local DeepSeek-R1-Distill-Qwen-7B weights and tokenizer                             |
 | Example GPU layout | Two GPUs, one TP=1 instance per phase; sufficient memory for the model and KV cache |
 
-Use [`docs/environment.md`](docs/environment.md) for container creation, dependency installation, model checks, and port checks. `requirements.txt` includes application, test, build, and research dependencies. PyTorch, vLLM, NIXL, and CUDA libraries belong to the serving environment and should not be replaced by an unrelated application dependency installation.
+Use [`env/README.md`](env/README.md) for container creation, dependency installation, model checks, and port checks. `requirements.txt` includes application, test, build, and research dependencies. PyTorch, vLLM, NIXL, and CUDA libraries belong to the serving environment and should not be replaced by an unrelated application dependency installation.
 
-For editable installation, wheel/sdist builds, installed service commands, and deployment-owned profile paths, see [`docs/installation.md`](docs/installation.md). The existing source-checkout startup commands below remain supported.
+For editable installation, wheel/sdist builds, installed service commands, and deployment-owned profile paths, see [`doc/installation.md`](doc/installation.md). The existing source-checkout startup commands below remain supported.
 
 Redis and LMCache are not needed for this NIXL example. The paper's multi-pool evaluation uses a different setup.
 
@@ -167,7 +168,7 @@ Redis and LMCache are not needed for this NIXL example. The paper's multi-pool e
 
 PDSchedule provides a complete NIXL-based deployment with real vLLM services. Each long-running process runs in a separate terminal; no local-only Shell launcher is required.
 
-Start with the 1P/1D flow below to check the transfer path. For global policy selection, follow the [four-GPU 2P/2D deployment](docs/multi_pool.md), then [calibrate predictors and enable SLO policies](docs/slo.md). The SLO guide also provides an eight-GPU, two-Instances-per-Pool extension for local placement decisions.
+Start with the 1P/1D flow below to check the transfer path. For global policy selection, follow the [four-GPU 2P/2D deployment](doc/multi_pool.md), then [calibrate predictors and enable SLO policies](doc/slo.md). The SLO guide also provides an eight-GPU, two-Instances-per-Pool extension for local placement decisions.
 
 The host and container paths are:
 
@@ -177,7 +178,7 @@ Container repository: /workspace/llm-stack/PDSchedule
 Model directory:      /workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
 ```
 
-Prepare the host, model files, and dependencies using the [environment guide](docs/environment.md). Create the container once on the host:
+Prepare the host, model files, and dependencies using the [environment guide](env/README.md). Create the container once on the host:
 
 ```bash
 docker pull vllm/vllm-openai:v0.13.0
@@ -452,7 +453,7 @@ for line in text.splitlines():
 PY
 ```
 
-The transferred-byte sum and transfer count should increase, without an increase in failed transfers. Connector identity and the Decode validation log establish compatibility; they do not by themselves establish data transfer. See the [deployment guide](docs/quickstart.md) for troubleshooting and shutdown.
+The transferred-byte sum and transfer count should increase, without an increase in failed transfers. Connector identity and the Decode validation log establish compatibility; they do not by themselves establish data transfer. See the [deployment guide](doc/quickstart_v1.md) for troubleshooting and shutdown.
 
 </details>
 
@@ -557,12 +558,18 @@ See [`test/README.md`](test/README.md) for environment creation, per-module chec
 
 | Document                                                                        | Description                                                                                           |
 | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| [`docs/environment.md`](docs/environment.md)                                   | Container setup, version constraints, minimal dependencies, GPU/model checks, and port preparation.   |
-| [`docs/quickstart.md`](docs/quickstart.md)                                     | Complete NIXL 1P/1D topology, all seven service commands, requests, transfer checks, and shutdown.    |
-| [`docs/multi_pool.md`](docs/multi_pool.md) | Four-GPU 2P/2D deployment, all thirteen service commands, global policy switching, and transfer checks. |
-| [`docs/slo.md`](docs/slo.md) | Real predictor calibration/validation, Controller profiles, SLO policy operation, and optional two-Instance Pools. |
-| [`docs/configuration-and-interfaces.md`](docs/configuration-and-interfaces.md) | Exact configuration defaults and precedence, service CLI, HTTP contracts, Connector metadata, and troubleshooting links. |
-| [`doc/项目代码结构说明.md`](doc/项目代码结构说明.md)                           | Repository structure, runtime flow, and extension points for schedulers and Connectors.               |
+| [Developer handbook](doc/developer-handbook/README.md) | Architecture, module ownership, runtime flows, interfaces and validation. |
+| [Architecture](doc/architecture/README.md) | Package, observability and resource-state boundaries. |
+| [Resource state and metrics](doc/resource_state_metrics.md) | Measured, predicted and configured metrics, aggregation and scheduling use. |
+| [Runtime compatibility](doc/runtime_compatibility_v1.md) | Serving combinations, compatibility and evidence boundaries. |
+| [NIXL integration](doc/integrations/nixl.md) / [LMCache integration](doc/integrations/lmcache.md) | Connector configuration and data-plane validation. |
+| [Component guides](scheduler/README.md) | Controller, P/D Gateway and scheduling documentation. |
+| [`env/README.md`](env/README.md)                                   | Container setup, version constraints, project dependencies, GPU/model checks, and port preparation.   |
+| [`doc/quickstart_v1.md`](doc/quickstart_v1.md)                                     | Complete NIXL 1P/1D topology, all seven service commands, requests, transfer checks, and shutdown.    |
+| [`doc/multi_pool.md`](doc/multi_pool.md) | Four-GPU 2P/2D deployment, all thirteen service commands, global policy switching, and transfer checks. |
+| [`doc/slo.md`](doc/slo.md) | Real predictor calibration/validation, Controller profiles, SLO policy operation, and optional two-Instance Pools. |
+| [`doc/developer-handbook/configuration-and-interfaces.md`](doc/developer-handbook/configuration-and-interfaces.md) | Exact configuration defaults and precedence, service CLI, HTTP contracts, Connector metadata, and troubleshooting links. |
+| [`doc/developer-handbook/package-and-module-map.md`](doc/developer-handbook/package-and-module-map.md)                           | Repository structure, runtime flow, and extension points for schedulers and Connectors.               |
 | [`examples/nixl_tcp_fallback/README.md`](examples/nixl_tcp_fallback/README.md) | TCP transport guidance and the distinction between upstream Connector checks and the PDSchedule path. |
 | [`profile/README.md`](profile/README.md)                                       | Profiling tools and deployment-local predictor artifacts.                                             |
 | [`profile/TTFT_predictor/README.md`](profile/TTFT_predictor/README.md)         | TTFT measurement, fitting, prediction, and local calibration.                                         |
@@ -570,4 +577,4 @@ See [`test/README.md`](test/README.md) for environment creation, per-module chec
 | [`profile/controller/README.md`](profile/controller/README.md)                 | Optional Controller calibration files and missing-profile behavior.                                   |
 | [`LICENSE`](LICENSE)                                                           | Apache License 2.0. Author information remains a placeholder.                                         |
 | [`test/README.md`](test/README.md) | Public CPU regression setup, collection scope, focused commands, and external-service boundaries. |
-| [`docs/installation.md`](docs/installation.md) | Editable and wheel installation, console entrypoints, package resources, and writable profile locations. |
+| [`doc/installation.md`](doc/installation.md) | Editable and wheel installation, console entrypoints, package resources, and writable profile locations. |

@@ -1,10 +1,10 @@
 include README.md LICENSE pyproject.toml requirements.txt
-include docs/installation.md docs/environment.md docs/quickstart.md
 prune plan
 prune simulator
 prune DistServe启动脚本
 prune test
 prune doc
+include doc/installation.md doc/quickstart_v1.md env/README.md
 prune build
 prune dist
 prune .git

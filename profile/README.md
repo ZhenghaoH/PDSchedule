@@ -23,6 +23,9 @@ installed entrypoints; fitted models are never written into site-packages by def
 
 Cold-start estimates and synthetic initialization samples are not calibrated
 hardware measurements. Refit and validate in the actual deployment environment.
+Previously fitted pickle/joblib models are not guaranteed to load or predict
+correctly after changing the Python dependency stack; validate or refit them in
+the target environment without deleting or publishing existing model files.
 Do not load untrusted pickle files. Locally generated models are not release
 assets and should not be force-added to Git.
 

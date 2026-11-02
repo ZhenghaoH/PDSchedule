@@ -1,10 +1,12 @@
 # NIXL end-to-end quick start: 1P/1D
 
-This guide applies to PDSchedule 0.1.0, vLLM 0.13.0 and NIXL. Its `v1`
+This guide applies to PDSchedule 0.1.0, vLLM `0.23.1rc1.dev256+gcec2ec117.cu128`
+and NIXL 1.3.0. This development stack requires validation on the deployment host. Its `v1`
 filename does not imply a separate runtime profile or LMCache MP protocol.
 
 Complete [environment setup](../env/README.md) first, then open seven service
-terminals in the same `pdschedule-nixl` container. Run all Python commands from
+terminals in the same prepared container. The example name is `pdschedule-nixl`;
+substitute your container name (for example `new_env`). Run all Python commands from
 `/workspace/llm-stack/PDSchedule`. See [configuration and interfaces](developer-handbook/configuration-and-interfaces.md),
 [multi-Pool deployment](multi_pool.md), and [SLO operation](slo.md).
 
@@ -53,7 +55,7 @@ python3 -m vllm.entrypoints.openai.api_server \
   --enforce-eager --attention-backend TRITON_ATTN \
   --no-enable-prefix-caching --disable-hybrid-kv-cache-manager \
   --kv-cache-metrics \
-  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
+  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
 ```
 
 ## 3. Terminal 2: Decode vLLM
@@ -76,11 +78,11 @@ python3 -m vllm.entrypoints.openai.api_server \
   --enforce-eager --attention-backend TRITON_ATTN \
   --no-enable-prefix-caching --disable-hybrid-kv-cache-manager \
   --kv-cache-metrics \
-  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
+  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
 ```
 
-`kv_both` allows NIXL to handle send and receive; PDSchedule's entrypoints and
-request context assign the P/D roles. The engines use matching model, dtype,
+Use `kv_producer` for Prefill and `kv_consumer` for Decode; `kv_both` is
+deprecated by the fixed upstream revision. The engines use matching model, dtype,
 attention backend and TP. `fail` prevents silent recomputation when KV loading
 fails. Eager execution and disabled prefix caching aid transfer observation;
 they are not performance tuning recommendations.
@@ -289,7 +291,7 @@ A text response without P/D selection logs does not validate the path.
 
 ### Check actual NIXL transfer metrics
 
-Read Decode vLLM metrics before and after the request:
+Read Decode vLLM metrics before and after the request. Missing samples cause this check to fail; they are not proof of transfer:
 
 ```bash
 python3 - <<'PY'
@@ -302,9 +304,16 @@ prefixes = (
 )
 with opener.open("http://127.0.0.1:8003/metrics", timeout=10) as response:
     text = response.read().decode("utf-8")
+found = set()
 for line in text.splitlines():
     if line.startswith(prefixes):
-        print(line)
+        name = line.partition("{")[0].split()[0]
+        if name in prefixes:
+            found.add(name)
+            print(line)
+missing = set(prefixes) - found
+if missing:
+    raise SystemExit(f"Missing NIXL metrics: {sorted(missing)}")
 PY
 ```
 
@@ -398,4 +407,4 @@ This NIXL guide does not require Redis. For LMCache, compare all Pool/Instance
 configuration, and check backend reads/writes/hits. The repository's YAML has a
 fixed Redis address and is not a universal version-independent setup. See
 [LMCache integration](integrations/lmcache.md). For NIXL engine details see the
-[vLLM 0.13.0 guide](https://docs.vllm.ai/en/v0.13.0/features/nixl_connector_usage/).
+[NIXL implementation at the fixed vLLM commit](https://github.com/vllm-project/vllm/tree/cec2ec11760f9f3beabd4c90451936078bf91533/vllm/distributed/kv_transfer/kv_connector/v1/nixl).

@@ -72,6 +72,23 @@ def make_request(request_id, token_length=10):
     )
 
 
+class PublicTemplateRoutesTest(unittest.TestCase):
+    def test_controller_and_client_render_html_with_current_starlette(self):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from core.handlers.controller.req_display import show_requests
+        from examples.clientUI.client import app as client_app
+
+        controller_app = FastAPI()
+        controller_app.add_api_route("/requests", show_requests, methods=["GET"])
+        for app, path in ((controller_app, "/requests"), (client_app, "/")):
+            with self.subTest(path=path), TestClient(app) as client:
+                response = client.get(path)
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("text/html", response.headers["content-type"])
+                self.assertIn("<html", response.text.lower())
+
+
 class GatewayStoreStrategyTest(unittest.TestCase):
     def setUp(self):
         self.store = make_store(["p1", "p2"], ["d1"])

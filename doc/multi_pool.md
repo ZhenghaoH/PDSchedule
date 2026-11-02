@@ -3,7 +3,8 @@
 This guide extends the [single-Pool deployment](quickstart_v1.md) to **two Prefill
 Pools and two Decode Pools** on one machine. It runs real vLLM services, not
 simulated Instances. Prepare the [NIXL environment](../env/README.md) first.
-Use a dedicated `pdschedule-nixl` container with at least **four physical GPUs**,
+Use a prepared, dedicated container (called `pdschedule-nixl` below; substitute
+your actual name, such as `new_env`) with at least **four physical GPUs**,
 each with enough memory for one TP=1 model and its KV cache.
 
 Look up exact defaults and payload fields in the
@@ -61,7 +62,7 @@ python3 -m vllm.entrypoints.openai.api_server \
   --gpu-memory-utilization 0.8 --max-model-len 4096 \
   --max-num-batched-tokens 4096 --enforce-eager --attention-backend TRITON_ATTN \
   --no-enable-prefix-caching --disable-hybrid-kv-cache-manager --kv-cache-metrics \
-  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
+  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
 ```
 
 ### Terminal 2: P-B engine
@@ -79,7 +80,7 @@ python3 -m vllm.entrypoints.openai.api_server \
   --gpu-memory-utilization 0.8 --max-model-len 4096 \
   --max-num-batched-tokens 4096 --enforce-eager --attention-backend TRITON_ATTN \
   --no-enable-prefix-caching --disable-hybrid-kv-cache-manager --kv-cache-metrics \
-  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
+  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
 ```
 
 ### Terminal 3: D-A engine
@@ -97,7 +98,7 @@ python3 -m vllm.entrypoints.openai.api_server \
   --gpu-memory-utilization 0.8 --max-model-len 4096 \
   --max-num-batched-tokens 4096 --enforce-eager --attention-backend TRITON_ATTN \
   --no-enable-prefix-caching --disable-hybrid-kv-cache-manager --kv-cache-metrics \
-  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
+  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
 ```
 
 ### Terminal 4: D-B engine
@@ -115,7 +116,7 @@ python3 -m vllm.entrypoints.openai.api_server \
   --gpu-memory-utilization 0.8 --max-model-len 4096 \
   --max-num-batched-tokens 4096 --enforce-eager --attention-backend TRITON_ATTN \
   --no-enable-prefix-caching --disable-hybrid-kv-cache-manager --kv-cache-metrics \
-  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
+  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
 ```
 
 In a check terminal, wait for all four model endpoints:
@@ -391,7 +392,7 @@ registration and the current round-robin cursor. Each Instance address must
 belong to the selected Pool, not a manually preselected remote Instance.
 
 Read metrics immediately before and after the four requests, then allow for the
-vLLM statistics refresh interval and read again:
+vLLM statistics refresh interval and read again. Missing samples cause this check to fail and cannot prove transfer:
 
 ```bash
 python3 - <<'PY'
@@ -406,9 +407,16 @@ for port in (8003, 8004):
     with opener.open(f"http://127.0.0.1:{port}/metrics", timeout=10) as response:
         text = response.read().decode("utf-8")
     print(f"Decode vLLM {port}")
+    found = set()
     for line in text.splitlines():
         if line.startswith(prefixes):
-            print(line)
+            name = line.partition("{")[0].split()[0]
+            if name in prefixes:
+                found.add(name)
+                print(line)
+    missing = set(prefixes) - found
+    if missing:
+        raise SystemExit(f"port {port}: missing NIXL metrics: {sorted(missing)}")
 PY
 ```
 

@@ -22,7 +22,7 @@ Setting environment variables alone does not add missing UCX transport support.
 
 ## Validation boundaries
 
-The [vLLM NIXL guide](https://docs.vllm.ai/en/v0.13.0/features/nixl_connector_usage/)
+The [vLLM NIXL source at the fixed revision](https://github.com/vllm-project/vllm/tree/cec2ec11760f9f3beabd4c90451936078bf91533/vllm/distributed/kv_transfer/kv_connector/v1/nixl)
 can help check the underlying Connector separately; its toy proxy does not run
 PDSchedule services. Validate the Controller PD request and Decode vLLM transfer
 metrics using the [quick start](../../doc/quickstart_v1.md#10-send-a-real-request-through-controller).

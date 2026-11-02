@@ -10,7 +10,7 @@ Controller filters Pool descriptors, Gateways select Instances and coordinate a 
 
 ## Environment and compatibility
 
-The [environment guide](../../env/README.md) gives the example Python, vLLM, Torch, CUDA and NIXL versions. Real engine, UCX and device compatibility depend on the deployed build. The documented example is TP=1 on each engine; descriptor compatibility alone does not check model/layout or transport.
+The target is Python 3.12, vLLM `0.23.1rc1.dev256+gcec2ec117.cu128`, Torch `2.11.0+cu128` and NIXL/NIXL CUDA 12 `1.3.0`; see the [environment guide](../../env/README.md). The vLLM version is a development build, and these versions do not prove a particular build or data-plane run. Real engine, UCX and device compatibility depend on deployment. The documented example is TP=1 on each engine; descriptor compatibility alone does not check model/layout or transport.
 
 ## Configuration
 
@@ -18,11 +18,11 @@ Gateway and Instance use `--connector-name nixl --connector-version 1`. Gateway 
 
 ## Deployment and request flow
 
-Follow all seven service commands and their order in the [NIXL quick start](../quickstart_v1.md), including engine-side `VLLM_NIXL_SIDE_CHANNEL_HOST`, `VLLM_NIXL_SIDE_CHANNEL_PORT`, UCX and `--kv-transfer-config`. P engine returns transfer parameters; the D engine uses them for the request. Do not send an internally constructed Task as a substitute for the Controller request.
+Follow all seven service commands and their order in the [NIXL quick start](../quickstart_v1.md), including engine-side `VLLM_NIXL_SIDE_CHANNEL_HOST`, `VLLM_NIXL_SIDE_CHANNEL_PORT`, UCX and `--kv-transfer-config`. Use `kv_producer` for Prefill and `kv_consumer` for Decode; `kv_both` is deprecated at the fixed revision. `NixlConnector` is the pull Connector alias. The Prefill response includes `remote_request_id`, remote engine, block, host/port and TP fields; PDSchedule forwards the returned transfer dictionary without reconstructing it. The upstream scheduler requires `remote_request_id` when using remote blocks. The `X-Request-Id` request header supports correlation, while the engine-generated `remote_request_id` in the transfer payload identifies the remote KV request; do not substitute one for the other. See the [fixed scheduler source](https://github.com/vllm-project/vllm/blob/cec2ec11760f9f3beabd4c90451936078bf91533/vllm/distributed/kv_transfer/kv_connector/v1/nixl/pull_scheduler.py). Do not send an internally constructed Task as a substitute for the Controller request.
 
 ## Validation
 
-Check the matching model and `/v1/models`, registrations, `/connectors` and session/selection logs. Then send a real request and compare NIXL successful transfer count and byte counters before and after. An HTTP 200, matching metadata or a CPU test is not proof of actual transfer. The [quick start](../quickstart_v1.md) supplies exact commands and evidence.
+Check the matching model and `/v1/models`, registrations, `/connectors` and session/selection logs. The [fixed metrics source](https://github.com/vllm-project/vllm/blob/cec2ec11760f9f3beabd4c90451936078bf91533/vllm/distributed/kv_transfer/kv_connector/v1/nixl/stats.py) defines the NIXL bytes histogram and failed-transfer counter. Send a real request and compare the byte sum, count and failures before and after; missing samples are not a successful check. An HTTP 200, matching metadata or a CPU test is not proof of actual transfer. The [quick start](../quickstart_v1.md) supplies exact commands and evidence.
 
 ## Troubleshooting and limitations
 

@@ -504,22 +504,22 @@ assignment block, then run the common full engine command below it:
 
 ```bash
 # Extra P-A engine terminal
-export CUDA_VISIBLE_DEVICES=4 ENGINE_PORT=8005 VLLM_NIXL_SIDE_CHANNEL_PORT=5561
+export CUDA_VISIBLE_DEVICES=4 KV_ROLE=kv_producer ENGINE_PORT=8005 VLLM_NIXL_SIDE_CHANNEL_PORT=5561
 ```
 
 ```bash
 # Extra P-B engine terminal
-export CUDA_VISIBLE_DEVICES=5 ENGINE_PORT=8006 VLLM_NIXL_SIDE_CHANNEL_PORT=5562
+export CUDA_VISIBLE_DEVICES=5 KV_ROLE=kv_producer ENGINE_PORT=8006 VLLM_NIXL_SIDE_CHANNEL_PORT=5562
 ```
 
 ```bash
 # Extra D-A engine terminal
-export CUDA_VISIBLE_DEVICES=6 ENGINE_PORT=8007 VLLM_NIXL_SIDE_CHANNEL_PORT=5563
+export CUDA_VISIBLE_DEVICES=6 KV_ROLE=kv_consumer ENGINE_PORT=8007 VLLM_NIXL_SIDE_CHANNEL_PORT=5563
 ```
 
 ```bash
 # Extra D-B engine terminal
-export CUDA_VISIBLE_DEVICES=7 ENGINE_PORT=8008 VLLM_NIXL_SIDE_CHANNEL_PORT=5564
+export CUDA_VISIBLE_DEVICES=7 KV_ROLE=kv_consumer ENGINE_PORT=8008 VLLM_NIXL_SIDE_CHANNEL_PORT=5564
 ```
 
 ```bash
@@ -534,7 +534,7 @@ python3 -m vllm.entrypoints.openai.api_server \
   --gpu-memory-utilization 0.8 --max-model-len 4096 --max-num-batched-tokens 4096 \
   --enforce-eager --attention-backend TRITON_ATTN \
   --no-enable-prefix-caching --disable-hybrid-kv-cache-manager --kv-cache-metrics \
-  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
+  --kv-transfer-config "{\"kv_connector\":\"NixlConnector\",\"kv_role\":\"${KV_ROLE:?Choose one engine assignment first}\",\"kv_load_failure_policy\":\"fail\",\"kv_connector_extra_config\":{\"backends\":[\"UCX\"]}}"
 ```
 
 Check `/v1/models` on ports 8005–8008 as in the multi-Pool guide, then start each

@@ -509,7 +509,7 @@ async def generate_stream_response(
 @app.get('/')
 def index(request: Request):
     """主页 - 显示Web UI"""
-    return templates.TemplateResponse("index.html", {"request": request})
+    return templates.TemplateResponse(request=request, name="index.html", context={})
 
 
 @app.post('/api/send_command')

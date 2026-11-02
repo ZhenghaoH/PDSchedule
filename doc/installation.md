@@ -4,6 +4,9 @@ PDSchedule 0.1.0 supports a Python **3.12** application installation. This packa
 does not install Torch, vLLM, NIXL, LMCache, model weights, or fitted predictors.
 Prepare a compatible GPU runtime using [the environment guide](../env/README.md)
 before running real inference services. A package version is not a GitHub Release.
+The target serving stack is a development vLLM build with CUDA 12.8 and NIXL
+1.3.0; its exact build and data plane must be validated in the serving environment.
+CPU dependency installation does not install that stack.
 
 ## Source checkout and editable installation
 

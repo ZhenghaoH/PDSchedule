@@ -282,6 +282,31 @@ class DemandAwareProfileTest(unittest.TestCase):
 
 
 class SchedulerMetadataTest(unittest.TestCase):
+    def test_nixl_transfer_metadata_survives_internal_round_trip(self):
+        # Shape returned by NixlPullConnector at vLLM cec2ec117; real transfer
+        # still requires the target serving environment and a GPU data plane.
+        request = make_request()
+        manager = get_connector_manager()
+        prefill = manager.build_prefill_payload(request)
+        self.assertTrue(prefill["kv_transfer_params"]["do_remote_decode"])
+        self.assertFalse(prefill["kv_transfer_params"]["do_remote_prefill"])
+        transfer = {
+            "do_remote_prefill": True,
+            "do_remote_decode": False,
+            "remote_block_ids": [[11, 12]],
+            "remote_engine_id": "prefill-engine",
+            "remote_request_id": "prefill-request-id",
+            "remote_host": "10.0.0.1",
+            "remote_port": 5557,
+            "tp_size": 2,
+            "remote_num_tokens": 32,
+        }
+        manager.bind_prefill_result(request, {"kv_transfer_params": transfer})
+        recovered = BaseRequest.recover_request(
+            request.to_payload(), endpoint="chat/completions"
+        )
+        self.assertEqual(manager.build_decode_payload(recovered)["kv_transfer_params"], transfer)
+
     def test_default_metadata_is_not_shared(self):
         first = make_request()
         second = make_request()

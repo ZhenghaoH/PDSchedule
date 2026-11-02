@@ -148,10 +148,10 @@ The NIXL deployment guide uses the following environment:
 | ------------------ | ----------------------------------------------------------------------------------- |
 | Platform           | NVIDIA CUDA on Linux x86_64                                                         |
 | Python             | 3.12                                                                                |
-| vLLM               | 0.13.0                                                                              |
-| PyTorch            | 2.9.0, matching the vLLM dependency constraint                                      |
-| Container CUDA     | 12.9.1 in the official vLLM 0.13.0 image build                                      |
-| NIXL               | `nixl==0.7.1` and `nixl-cu12==0.7.1`                                            |
+| vLLM               | `0.23.1rc1.dev256+gcec2ec117.cu128` (development build)                           |
+| PyTorch            | `2.11.0+cu128`                                                                      |
+| CUDA               | PyTorch CUDA 12.8 build; host driver and system toolkit are separate                |
+| NIXL               | `nixl==1.3.0` and `nixl-cu12==1.3.0`                                               |
 | KV transport       | UCX backend with `tcp,cuda_copy`                                                  |
 | Example model      | Local DeepSeek-R1-Distill-Qwen-7B weights and tokenizer                             |
 | Example GPU layout | Two GPUs, one TP=1 instance per phase; sufficient memory for the model and KV cache |
@@ -178,17 +178,11 @@ Container repository: /workspace/llm-stack/PDSchedule
 Model directory:      /workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-7B
 ```
 
-Prepare the host, model files, and dependencies using the [environment guide](env/README.md). Create the container once on the host:
-
-```bash
-docker pull vllm/vllm-openai:v0.13.0
-docker run --name pdschedule-nixl --gpus all -it \
-  --network host --ipc=host --shm-size=16g \
-  -v /llm-stack:/workspace/llm-stack \
-  -w /workspace/llm-stack/PDSchedule \
-  --entrypoint /bin/bash \
-  vllm/vllm-openai:v0.13.0
-```
+Prepare a compatible serving environment, model files and dependencies using
+the [environment guide](env/README.md). The commands below use an already
+prepared container named `pdschedule-nixl`; replace that name with your own
+(for example `new_env`). This development build is not provided by the older
+vLLM release image, and no public image for this exact build is assumed.
 
 For each additional service terminal, enter the same container with:
 
@@ -221,7 +215,7 @@ python3 -m vllm.entrypoints.openai.api_server \
   --enforce-eager --attention-backend TRITON_ATTN \
   --no-enable-prefix-caching --disable-hybrid-kv-cache-manager \
   --kv-cache-metrics \
-  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
+  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_producer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
 ```
 
 #### 2. Terminal 2: start the decode vLLM
@@ -244,10 +238,14 @@ python3 -m vllm.entrypoints.openai.api_server \
   --enforce-eager --attention-backend TRITON_ATTN \
   --no-enable-prefix-caching --disable-hybrid-kv-cache-manager \
   --kv-cache-metrics \
-  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_both","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
+  --kv-transfer-config '{"kv_connector":"NixlConnector","kv_role":"kv_consumer","kv_load_failure_policy":"fail","kv_connector_extra_config":{"backends":["UCX"]}}'
 ```
 
-The `kv_both` engine capability is distinct from the P/D role of each PDSchedule Instance Proxy. The request context determines which phase each instance performs. This example uses identical model, dtype, TP, and attention settings on both sides. `kv_load_failure_policy=fail` prevents silent recomputation after a KV load failure.
+The engine roles are `kv_producer` for Prefill and `kv_consumer` for Decode;
+the fixed upstream revision deprecates `kv_both`. This example uses identical
+model, dtype, TP and attention settings on both sides. `kv_load_failure_policy=fail`
+prevents silent recomputation after a KV load failure. Verify this exact development
+stack and actual KV transfers on the deployment host.
 
 #### 3. Wait for both model endpoints
 
@@ -434,7 +432,7 @@ PD分离:  True
 [Decode-Connector] validation succeeded request_id=... connector=nixl prefill_instance=127.0.0.1:7001 decode_instance=127.0.0.1:7003 session_id=...
 ```
 
-Read the following metrics before and after a request, allowing for the vLLM statistics refresh interval:
+Read the following metrics before and after a request, allowing for the vLLM statistics refresh interval. Missing samples are an explicit failure of this check, not zero or proof of a successful transfer:
 
 ```bash
 python3 - <<'PY'
@@ -447,9 +445,16 @@ prefixes = (
 )
 with opener.open("http://127.0.0.1:8003/metrics", timeout=10) as response:
     text = response.read().decode("utf-8")
+found = set()
 for line in text.splitlines():
     if line.startswith(prefixes):
-        print(line)
+        name = line.partition("{")[0].split()[0]
+        if name in prefixes:
+            found.add(name)
+            print(line)
+missing = set(prefixes) - found
+if missing:
+    raise SystemExit(f"Missing NIXL metrics: {sorted(missing)}")
 PY
 ```
 

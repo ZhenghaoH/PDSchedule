@@ -10,7 +10,7 @@ Source entrypoints and installed console commands accept the same service option
 
 | Combination | Current boundary | Evidence required |
 | --- | --- | --- |
-| vLLM 0.13.0 + NIXL 0.7.1 / CUDA 12 serving example | Documented 1P/1D and multi-Pool command sequences | Readiness, compatible descriptors and actual transfer counters; see [quick start](quickstart_v1.md). |
+| vLLM `0.23.1rc1.dev256+gcec2ec117.cu128` + Torch `2.11.0+cu128` + NIXL `1.3.0` | Target development stack; host build and data plane not verified here | Readiness, compatible descriptors and actual transfer counters; see [quick start](quickstart_v1.md). |
 | vLLM + LMCache shared backend | Adapter checks identity; serving integration and version compatibility must be prepared independently | Real backend write/load/hit and correct output; see [LMCache](integrations/lmcache.md). |
 | Other CUDA, vLLM, NIXL, LMCache, multi-host or TP combinations | Depend on actual libraries, devices, model layout and network | Validate that exact stack; no blanket compatibility claim. |
 

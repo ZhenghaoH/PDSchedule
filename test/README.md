@@ -75,8 +75,8 @@ Neither the ignored root simulator nor `plan/` audit copies are default test inp
 | `test_runtime_instance_registration.py` | Dynamic registration, Connector identity, reservations, heartbeat fields, and address configuration. |
 | `test_single_gateway_routing.py` | Single-P/D fast path, transitions to multi-Pool selection, metadata, and local profile fallback. |
 
-The current suite collects **117 tests** across these ten modules. A complete run
-should finish with `117 passed`; a skipped or deselected subset is not the same
+The current suite collects **119 tests** across these ten modules. A complete run
+should finish with `119 passed`; a skipped or deselected subset is not the same
 result. Test counts can change when coverage changes.
 
 ## 3. Focused checks
@@ -114,7 +114,7 @@ python -m pytest -q -m loopback
 python -m pytest -q -m "not loopback"
 ```
 
-The subset without this test has 116 cases; report the deselection rather than
+The subset without this test has 118 cases; report the deselection rather than
 claiming full-suite coverage. Windows asyncio also uses internal loopback sockets
 when constructing an event loop. A sandbox that blocks these sockets can stall
 async tests even before an HTTP request is sent. Use an environment that permits

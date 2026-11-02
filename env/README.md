@@ -10,15 +10,17 @@ This guide prepares the single-host [NIXL 1P/1D quick start](../doc/quickstart_v
 | GPU | Two visible NVIDIA GPUs; Prefill physical GPU 0 and Decode physical GPU 1 |
 | Model | Local `DeepSeek-R1-Distill-Qwen-7B`; identical model and tokenizer at both engines |
 | Parallelism | TP=1 per engine, one GPU each |
-| Python / vLLM | Python 3.12 / vLLM 0.13.0 |
-| PyTorch / container CUDA | Torch 2.9.0 under vLLM 0.13.0 constraints / official image build CUDA 12.9.1 |
-| NIXL | `nixl==0.7.1` and `nixl-cu12==0.7.1` |
+| Python / vLLM | Python 3.12 / `0.23.1rc1.dev256+gcec2ec117.cu128` (development build) |
+| PyTorch / CUDA build | `2.11.0+cu128` / CUDA 12.8; driver and system toolkit are separate |
+| NIXL | `nixl==1.3.0` and `nixl-cu12==1.3.0` |
 | KV transport | UCX backend, `UCX_TLS=tcp,cuda_copy` |
 | API ports | Controller 5000; Gateways 8081/8082; Instances 7001/7003; vLLM 8001/8003 |
 
 The example uses context length 4096 and float16. Each GPU must fit weights, runtime overhead and KV cache. Select a smaller compatible model or increase TP and update GPU allocation, NIXL metadata and topology if memory is insufficient. Two GPUs do not guarantee that every model fits.
 
-The host driver must support the container CUDA version. The CUDA Version in `nvidia-smi` describes driver support, not the CUDA version used by Python's Torch. A separately built CUDA 12.8 / Torch 2.9.1 image has different dependencies and must be validated separately. References: [vLLM CUDA constraints](https://github.com/vllm-project/vllm/blob/v0.13.0/requirements/cuda.txt), [vLLM Dockerfile](https://github.com/vllm-project/vllm/blob/v0.13.0/docker/Dockerfile), [connector requirements](https://github.com/vllm-project/vllm/blob/v0.13.0/requirements/kv_connectors.txt), [NIXL CUDA 12 package](https://pypi.org/project/nixl-cu12/0.7.1/).
+The host driver must support the serving stack. The CUDA Version shown by `nvidia-smi` describes driver capability, not the CUDA version compiled into Torch; `nvcc --version`, the base image and `torch.version.cuda` also describe different things. The supplied vLLM version is a development build, not an official `0.23.1` release. Its version string identifies upstream commit `cec2ec11760f9f3beabd4c90451936078bf91533`, but does not establish that a local source tree is clean or that its extensions match.
+
+References: [fixed vLLM requirements](https://github.com/vllm-project/vllm/blob/cec2ec11760f9f3beabd4c90451936078bf91533/requirements/common.txt), [CUDA requirements](https://github.com/vllm-project/vllm/blob/cec2ec11760f9f3beabd4c90451936078bf91533/requirements/cuda.txt) and [CUDA installation/build guidance](https://github.com/vllm-project/vllm/blob/cec2ec11760f9f3beabd4c90451936078bf91533/docs/getting_started/installation/gpu.cuda.inc.md).
 
 ## 2. Prepare the host, workspace and container
 
@@ -37,42 +39,76 @@ cd /llm-stack
 git clone --branch PDSchedule https://github.com/ZhenghaoH/PDSchedule.git
 ```
 
-Create the container using the official vLLM image:
+Use an already prepared Linux NVIDIA container with this exact development stack, model mount and reachable network. The examples refer to a container named `pdschedule-nixl`; substitute your actual container name, such as `new_env`. Neither that name nor a particular image digest is a publicly supplied image. Enter an existing running container:
 
 ```bash
-docker pull vllm/vllm-openai:v0.13.0
-docker run --name pdschedule-nixl --gpus all -it \
-  --network host --ipc=host --shm-size=16g \
-  -v /llm-stack:/workspace/llm-stack \
-  -w /workspace/llm-stack/PDSchedule \
-  --entrypoint /bin/bash \
-  vllm/vllm-openai:v0.13.0
-```
-
-The API entrypoint is overridden with Bash to run separate services. Do not also start the image's default port-8000 service. Host networking does not need `-p`; with `--ipc=host`, the host shared-memory namespace is used and `--shm-size` is not an independent container allocation. If the container already exists, start and enter it:
-
-```bash
-docker start pdschedule-nixl
 docker exec -it pdschedule-nixl /bin/bash
 ```
 
-Open a separate host terminal and execute `docker exec` for each service. All seven services share the container, model mount, packages and loopback network. The repository's root `Dockerfile` is a base system image, not the complete vLLM image above.
+Open a separate host terminal for each service. Ensure the repository and models are mounted at the documented paths, the GPUs are visible, and loopback/host networking and shared memory are suitable for your deployment. The repository's root `Dockerfile` is not a complete vLLM serving image.
+
+If preparing the development source separately, identify the exact upstream revision:
+
+```bash
+git clone https://github.com/vllm-project/vllm.git
+cd vllm
+git checkout --detach cec2ec11760f9f3beabd4c90451936078bf91533
+git rev-parse HEAD
+git status --short
+```
+
+This checkout alone does not provide compatible compiled extensions or recreate the supplied build. Use the fixed revision's upstream CUDA source-build guidance and a compatible CUDA 12.8/PyTorch 2.11 toolchain, or obtain an independently verified matching wheel/image. The upstream CUDA requirements at this commit also contain CUDA 13-specific extras; the exact CUDA 12.8 build inputs and adaptations are not established by the version string and must be verified for the actual build. Build parameters, wheel availability and image digest are not established here. Do not assume an automatically selected prebuilt wheel matches this commit and CUDA variant; verify the installed version, extensions and source state. Do not rebuild or replace an existing working container merely to follow this guide.
 
 ## 3. Install NIXL and project dependencies
 
 [`requirements.txt`](../requirements.txt) includes application, CPU test, build and research dependencies and is also used for package metadata. See [installation](../doc/installation.md). CPU tests use Python 3.12 and do not need a GPU, Torch, vLLM, NIXL, LMCache or Redis; NumPy 1.26.4 is not a Python 3.13 baseline. A CPU test environment is not a serving image.
 
-Inside the serving container, pin Torch and both NIXL packages while installing the project dependencies:
+First verify that the prepared serving environment already contains the exact
+vLLM/Torch/NIXL stack. Run this read-only check in the serving container before
+installing application dependencies:
+
+```bash
+python3 - <<'PY'
+from importlib.metadata import version
+import sys
+import torch
+expected = {
+    "vllm": "0.23.1rc1.dev256+gcec2ec117.cu128",
+    "torch": "2.11.0+cu128",
+    "nixl": "1.3.0",
+    "nixl-cu12": "1.3.0",
+}
+print("Python:", sys.version.split()[0], "Torch CUDA:", torch.version.cuda)
+assert sys.version_info[:2] == (3, 12), "Expected Python 3.12"
+assert torch.version.cuda == "12.8", "Expected a CUDA 12.8 Torch build"
+for package, required in expected.items():
+    actual = version(package)
+    print(package + ":", actual)
+    assert actual == required, (package, actual, required)
+PY
+```
+
+An application requirements installation must not silently replace that stack.
+Preview dependency resolution and review the proposed changes:
+
+```bash
+cd /workspace/llm-stack/PDSchedule
+python3 -m pip install --dry-run \
+  'vllm==0.23.1rc1.dev256+gcec2ec117.cu128' 'torch==2.11.0+cu128' \
+  'nixl==1.3.0' 'nixl-cu12==1.3.0' -r requirements.txt
+```
+
+Only if the preview succeeds and preserves the serving stack, install and check:
 
 ```bash
 cd /workspace/llm-stack/PDSchedule
 python3 -m pip install \
-  'torch==2.9.0' 'nixl==0.7.1' 'nixl-cu12==0.7.1' \
-  -r requirements.txt
+  'vllm==0.23.1rc1.dev256+gcec2ec117.cu128' 'torch==2.11.0+cu128' \
+  'nixl==1.3.0' 'nixl-cu12==1.3.0' -r requirements.txt
 python3 -m pip check
 ```
 
-`nixl` is a metapackage; pin `nixl-cu12` as well to avoid resolving a different CUDA implementation. Gateway imports NumPy, scikit-learn and transformers even with predictor warmup disabled. `prometheus-client` parses Instance metrics and `nvidia-ml-py` supplies `pynvml`. Preserve the compatible Torch/vLLM/CUDA stack and run `pip check` after installing. Package metadata is in `pyproject.toml`; the version comes from `pdschedule.__version__`.
+The dry run can fail if the exact development wheel is not available from configured indexes; stop and prepare the matching stack rather than resolving a different version. `nixl` is a metapackage; `nixl-cu12` provides the CUDA 12 backend. Preserve other backends already present unless independently justified; do not uninstall a CUDA 13 backend merely because it is installed. FastAPI, transformers, aiohttp and setuptools constraints intersect the fixed vLLM revision. Gateway imports NumPy, scikit-learn and transformers even with warmup disabled. `requirements.txt` includes CPU tests and research tools; they do not themselves install Torch, vLLM or NIXL.
 
 Check the installed versions and GPUs:
 
@@ -85,23 +121,29 @@ import nixl
 import fastapi, uvicorn, aiohttp, requests, jinja2, yaml, psutil, sklearn
 from prometheus_client.parser import text_string_to_metric_families
 print("Python:", sys.version.split()[0])
-for package in ("vllm", "torch", "nixl", "nixl-cu12", "transformers"):
-    print(package + ":", version(package))
+expected = {"vllm": "0.23.1rc1.dev256+gcec2ec117.cu128",
+            "torch": "2.11.0+cu128", "nixl": "1.3.0", "nixl-cu12": "1.3.0"}
+for package, required in expected.items():
+    actual = version(package)
+    print(package + ":", actual)
+    assert actual == required, (package, actual, required)
+print("transformers:", version("transformers"))
 print("Torch CUDA:", torch.version.cuda)
 print("CUDA available:", torch.cuda.is_available())
 print("Visible GPUs:", torch.cuda.device_count())
+assert torch.version.cuda == "12.8", "Expected a CUDA 12.8 Torch build"
 assert torch.cuda.is_available(), "Container cannot access CUDA"
 assert torch.cuda.device_count() >= 2, "This topology needs two visible GPUs"
 PY
 ```
 
-Expect vLLM 0.13.0, Torch 2.9.0 (possibly with a CUDA suffix), both NIXL packages at 0.7.1, `CUDA available: True`, and at least two visible GPUs. Resolve CUDA/UCX shared-library errors before proceeding; package installation alone does not establish backend readiness.
+Expect the exact supplied development version, Torch `2.11.0+cu128`, both NIXL packages at `1.3.0`, Torch CUDA `12.8`, `CUDA available: True`, and at least two visible GPUs. Resolve CUDA/UCX shared-library errors before proceeding; package installation alone does not establish backend readiness.
 
 Check the Connector import and engine options:
 
 ```bash
 python3 - <<'PY'
-from vllm.distributed.kv_transfer.kv_connector.v1.nixl_connector import NixlConnector
+from vllm.distributed.kv_transfer.kv_connector.v1.nixl import NixlConnector
 print("NixlConnector import: OK")
 PY
 python3 -m vllm.entrypoints.openai.api_server --help

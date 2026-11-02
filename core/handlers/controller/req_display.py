@@ -166,9 +166,9 @@ async def show_requests(request: Request) -> HTMLResponse:
     requests_data = generate_requests_data()
 
     return templates.TemplateResponse(
-        "requests.html",
-        {
-            "request": request,
+        request=request,
+        name="requests.html",
+        context={
             "requests_data": requests_data
-        }
+        },
     )

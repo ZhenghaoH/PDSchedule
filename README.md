@@ -3,11 +3,11 @@
 </p>
 
 <p align="center">
-  <b>On-demand prefill-decode scheduling across wide-area networks</b>
+  <b>On-demand disaggregated LLM inference scheduling across wide-area networks</b>
 </p>
 
 <p align="center">
-  <i>Built on vLLM. Designed for joint compute-network resource pairing and SLO-aware execution scheduling.</i>
+  <i>Built on vLLM. Designed for joint compute-network steering and SLO-aware scheduling in P-D disaggregation .</i>
 </p>
 
 <p align="center">

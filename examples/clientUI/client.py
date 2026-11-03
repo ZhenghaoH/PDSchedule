@@ -12,6 +12,8 @@ import json
 import logging
 import shlex
 import time
+import argparse
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional, AsyncGenerator, Tuple
@@ -808,10 +810,23 @@ async def api_clear_history(request: Request):
 # ----------------- 启动服务 -----------------
 
 def main():
+    parser = argparse.ArgumentParser(description="PDSchedule browser request client.")
+    parser.add_argument(
+        "--host",
+        default=os.getenv("PDSCHEDULE_CLIENT_HOST", "127.0.0.1"),
+        help="Local web UI bind address.",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=int(os.getenv("PDSCHEDULE_CLIENT_PORT", "5050")),
+        help="Local web UI port.",
+    )
+    args = parser.parse_args()
     print("=== API 客户端 Web UI ===")
-    print("访问地址: http://127.0.0.1:5050")
+    print(f"访问地址: http://{args.host}:{args.port}")
     print("按 Ctrl+C 停止服务器")
-    config = uvicorn.Config(app, host="127.0.0.1", port=5050, log_level="info")
+    config = uvicorn.Config(app, host=args.host, port=args.port, log_level="info")
     server = uvicorn.Server(config)
     server.run()
 

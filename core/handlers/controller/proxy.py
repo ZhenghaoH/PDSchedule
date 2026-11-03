@@ -14,6 +14,7 @@ from proxy.forward import forward_request
 from connectors.manager import get_connector_manager
 
 from utils import timing
+from pdschedule.paths import controller_log_file
 
 from store.controller import PoolManager
 global_storage = PoolManager()
@@ -21,7 +22,9 @@ global_storage = PoolManager()
 
 LOG_SEPARATOR = "+" * 80
 LOG_ITEM_SEPARATOR = "-" * 80
-GLOBAL_SCHEDULE_LOG_PATH = Path(__file__).resolve().parents[3] / "global_schedule.log"
+GLOBAL_SCHEDULE_LOG_PATH = controller_log_file(
+    Path(__file__).resolve().parents[3] / "global_schedule.log"
+)
 
 
 def _format_ms(value: Optional[float]) -> str:

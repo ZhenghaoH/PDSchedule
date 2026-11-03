@@ -7,7 +7,7 @@ name = "pdschedule"
 dynamic = ["version", "dependencies"]
 description = "Joint compute-network and SLO-aware scheduling for prefill-decode disaggregated LLM inference."
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12,<3.14"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 authors = [{name = "xxx"}]

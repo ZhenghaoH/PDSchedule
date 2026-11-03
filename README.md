@@ -21,7 +21,7 @@
   <a href="https://github.com/ai-dynamo/nixl">
     <img src="https://img.shields.io/badge/KV%20transfer-NIXL-00B894?style=flat-square" alt="NIXL KV transfer" />
   </a>
-  <img src="https://img.shields.io/badge/Python-3.12-blue?logo=python&logoColor=white" alt="Python 3.12" />
+  <img src="https://img.shields.io/badge/Python-3.12%20%7C%203.13-blue?logo=python&logoColor=white" alt="Python 3.12 and 3.13" />
   <img src="https://img.shields.io/badge/FastAPI-Backend-009688?logo=fastapi&logoColor=white" alt="FastAPI backend" />
   <img src="https://img.shields.io/badge/Docker-Deployment-2496ED?logo=docker&logoColor=white" alt="Docker deployment" />
 </p>
@@ -32,6 +32,7 @@
   <a href="#architecture">Architecture</a> •
   <a href="#frontend-urls">Frontend URLs</a> •
   <a href="env/README.md">Environment</a> •
+  <a href="doc/local_windows_p313.md">Local Windows / Python 3.13</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="doc/multi_pool.md">Multi-Pool &amp; SLO</a> •
   <a href="doc/developer-handbook/README.md">Developer Handbook</a> •
@@ -158,6 +159,8 @@ The NIXL deployment guide uses the following environment:
 
 Use [`env/README.md`](env/README.md) for container creation, dependency installation, model checks, and port checks. `requirements.txt` includes application, test, build, and research dependencies. PyTorch, vLLM, NIXL, and CUDA libraries belong to the serving environment and should not be replaced by an unrelated application dependency installation.
 
+The package supports Python 3.12 and 3.13. The documented GPU/NIXL serving stack remains on Python 3.12; the Windows Python 3.13 runbook operates the CPU control plane and offline tools without an inference backend.
+
 For editable installation, wheel/sdist builds, installed service commands, and deployment-owned profile paths, see [`doc/installation.md`](doc/installation.md). The existing source-checkout startup commands below remain supported.
 
 Redis and LMCache are not needed for this NIXL example. The paper's multi-pool evaluation uses a different setup.
@@ -167,6 +170,8 @@ Redis and LMCache are not needed for this NIXL example. The paper's multi-pool e
 ## Quick Start
 
 PDSchedule provides a complete NIXL-based deployment with real vLLM services. Each long-running process runs in a separate terminal; no local-only Shell launcher is required.
+
+For a Windows local control plane without GPU inference, use the [Python 3.13 runbook](doc/local_windows_p313.md). It does not run a model request or transfer KV data.
 
 Start with the 1P/1D flow below to check the transfer path. For global policy selection, follow the [four-GPU 2P/2D deployment](doc/multi_pool.md), then [calibrate predictors and enable SLO policies](doc/slo.md). The SLO guide also provides an eight-GPU, two-Instances-per-Pool extension for local placement decisions.
 
@@ -570,6 +575,7 @@ See [`test/README.md`](test/README.md) for environment creation, per-module chec
 | [NIXL integration](doc/integrations/nixl.md) / [LMCache integration](doc/integrations/lmcache.md) | Connector configuration and data-plane validation. |
 | [Component guides](scheduler/README.md) | Controller, P/D Gateway and scheduling documentation. |
 | [`env/README.md`](env/README.md)                                   | Container setup, version constraints, project dependencies, GPU/model checks, and port preparation.   |
+| [`doc/local_windows_p313.md`](doc/local_windows_p313.md) | Isolated Windows/Conda Python 3.13 control-plane runtime and offline tools; no inference backend. |
 | [`doc/quickstart_v1.md`](doc/quickstart_v1.md)                                     | Complete NIXL 1P/1D topology, all seven service commands, requests, transfer checks, and shutdown.    |
 | [`doc/multi_pool.md`](doc/multi_pool.md) | Four-GPU 2P/2D deployment, all thirteen service commands, global policy switching, and transfer checks. |
 | [`doc/slo.md`](doc/slo.md) | Real predictor calibration/validation, Controller profiles, SLO policy operation, and optional two-Instance Pools. |

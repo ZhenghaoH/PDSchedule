@@ -15,8 +15,10 @@ These are manually started services, not automated tests. The [full NIXL path](.
 
 ## 1. Prepare a CPU test environment
 
-Use **Python 3.12**, matching the documented application baseline. The NumPy 1.26.4
-constraint is not a Python 3.13 installation target. Run commands from the repository root.
+The public CPU suite supports Python 3.12 and 3.13. Python 3.12 retains the
+NumPy 1.26.4 baseline; Python 3.13 resolves the NumPy 2 and compatible scientific
+package markers in `requirements.txt`. The full GPU/vLLM serving guide remains on
+Python 3.12. Run commands from the repository root.
 
 Linux/macOS, with Python 3.12 selected:
 
@@ -28,7 +30,7 @@ python -m pip check
 python -m pytest -q
 ```
 
-Windows PowerShell, with `python` pointing to Python 3.12:
+Windows PowerShell, with `python` pointing to Python 3.12 or 3.13:
 
 ```powershell
 python -m venv .venv
@@ -48,6 +50,9 @@ It also does not download model weights or tokenizers. The research tools includ
 in the dependency file are not required for this suite. For a GPU serving
 environment, follow [the environment guide](../env/README.md) instead of
 replacing an existing CUDA-compatible package stack.
+
+For the existing Windows Conda `pdschedule` environment and an isolated local
+control plane, follow the [Python 3.13 runbook](../doc/local_windows_p313.md).
 
 ## 2. Default entrypoint and scope
 
@@ -75,8 +80,8 @@ Neither the ignored root simulator nor `plan/` audit copies are default test inp
 | `test_runtime_instance_registration.py` | Dynamic registration, Connector identity, reservations, heartbeat fields, and address configuration. |
 | `test_single_gateway_routing.py` | Single-P/D fast path, transitions to multi-Pool selection, metadata, and local profile fallback. |
 
-The current suite collects **119 tests** across these ten modules. A complete run
-should finish with `119 passed`; a skipped or deselected subset is not the same
+The current suite collects **130 tests** across these ten modules. A complete run
+should finish with `130 passed`; a skipped or deselected subset is not the same
 result. Test counts can change when coverage changes.
 
 ## 3. Focused checks

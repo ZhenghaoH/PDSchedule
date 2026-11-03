@@ -46,7 +46,7 @@ def test_metadata_has_one_runtime_dependency_and_version_source():
     config = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert config["project"]["name"] == "pdschedule"
     assert config["project"]["authors"] == [{"name": "xxx"}]
-    assert config["project"]["requires-python"] == ">=3.12,<3.13"
+    assert config["project"]["requires-python"] == ">=3.12,<3.14"
     dynamic = config["tool"]["setuptools"]["dynamic"]
     assert dynamic["version"]["attr"] == "pdschedule.__version__"
     assert dynamic["dependencies"]["file"] == ["requirements.txt"]

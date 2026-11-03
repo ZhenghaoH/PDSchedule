@@ -94,8 +94,9 @@ class SLOAwarePrefillStrategy(PrefillStrategy):
 
     name = "slo_aware_prefill"
 
-    def __init__(self, storage):
+    def __init__(self, storage, allow_http_prediction: bool = True):
         super().__init__(storage)
+        self.allow_http_prediction = allow_http_prediction
         self._prediction_cache: Dict[int, float] = {}
         self.pso_particles = 30
         self.pso_iterations = 20
@@ -139,6 +140,11 @@ class SLOAwarePrefillStrategy(PrefillStrategy):
                     "[SLOAwarePrefillStrategy] In-process TTFT predictor failed: %s",
                     exc,
                 )
+
+        if not self.allow_http_prediction:
+            estimate = 0.0002 * total_tokens
+            self._prediction_cache[total_tokens] = estimate
+            return estimate
 
         try:
             async with session.post(

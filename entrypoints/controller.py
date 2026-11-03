@@ -57,6 +57,11 @@ def parse_args():
         default=DEFAULT_HOST,
         help="The IP address for the Scheduler server to listen on",
     )
+    parser.add_argument(
+        "--no-cli",
+        action="store_true",
+        help="Run only the HTTP service for managed/background deployments.",
+    )
     return parser.parse_args()
 
 
@@ -83,6 +88,10 @@ def main():
     # server_config = uvicorn.Config(app, host=args.host, port=args.port, log_level="info", loop="uvloop")  # ubuntu
     server_config = uvicorn.Config(app, host=args.host, port=args.port, log_level="info")  # windows
     server = uvicorn.Server(server_config)
+
+    if args.no_cli:
+        server.run()
+        return
 
     # 启动 uvicorn server 到后台线程
     server_thread = threading.Thread(target=server.run, daemon=True)

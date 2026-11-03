@@ -14,11 +14,13 @@ are deliberately omitted. Follow [single-Pool deployment](../quickstart_v1.md),
 - This is **not** a universal CLI > environment > config rule. Malformed imported
   environment values can fail before CLI overrides are parsed. Changing a shell
   variable after a service starts does not reconfigure that process.
-- Controller [config](../../config/controller.py) unconditionally assigns
+- Controller [config](../../config/controller.py) assigns
   `SCHEDULER_MODEL_PATH`, `SCHEDULER_TOKENIZER_MAP`, `HF_HUB_OFFLINE`, and
-  `TRANSFORMERS_OFFLINE` on import. Pre-setting these shell variables does not
-  override those assignments. A local absolute model path in the request is
-  resolved directly by [TokenizerRegistry](../../utils/tokenizer_registry.py).
+  `TRANSFORMERS_OFFLINE` on import. Set `PDSCHEDULE_MODEL_PATH`,
+  `PDSCHEDULE_MODEL_NAME`, `PDSCHEDULE_TOKENIZER_PATH`, or
+  `PDSCHEDULE_TOKENIZER_MAP` before startup to provide local overrides. The
+  Controller still forces offline Hugging Face access. A local absolute model
+  path in a request is resolved directly by [TokenizerRegistry](../../utils/tokenizer_registry.py).
 - No application `.env` loader or runtime configuration in `pyproject.toml` is
   provided. The latter describes package installation. NIXL/vLLM options and
   LMCache YAML belong to their serving processes, not this argument parser.
@@ -80,8 +82,12 @@ process.
 | Name / setting | Owner and default | Effect / invalid or fallback behavior | Source |
 | --- | --- | --- | --- |
 | `PDSCHEDULE_PROFILE_DIR` | Profile root: source checkout `profile/`, installed application working-directory `profile/` | Non-empty trimmed path is expanded/resolved; a relative override is relative to process CWD. Models are not supplied. Set before startup; Gateway explicit model-file flags select individual files. | [paths.py](../../pdschedule/paths.py), [profile guide](../../profile/README.md) |
-| `SCHEDULER_MODEL_PATH` | Controller assigns `/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` | Startup tokenizer warmup path; import overwrites an inherited value. Missing tokenizer may fall back to character-count estimation, not a successful calibration. Request model path is separate. | [Controller config](../../config/controller.py), [tokenizer](../../utils/tokenizer_registry.py) |
-| `SCHEDULER_TOKENIZER_MAP` | Controller assigns a `llama3-70b` mapping to `/workspace/llm-stack/models/LLM-Research/Meta-Llama-3-70B-Instruct` | Import overwrites an inherited mapping. Existing local request-model directories take precedence in tokenizer resolution. | Same sources |
+| `PDSCHEDULE_MODEL_PATH` | Controller default remains `/workspace/llm-stack/models/deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B` | Optional local path used for startup tokenizer warmup. It does not point to or download model weights. | [Controller config](../../config/controller.py) |
+| `PDSCHEDULE_MODEL_NAME` | `DeepSeek-R1-Distill-Qwen-1.5B` | Optional key used with `PDSCHEDULE_TOKENIZER_PATH`. | Same source |
+| `PDSCHEDULE_TOKENIZER_PATH` | Unset | Optional local tokenizer directory mapped to `PDSCHEDULE_MODEL_NAME`. Loading remains offline. | Same source, [tokenizer](../../utils/tokenizer_registry.py) |
+| `PDSCHEDULE_TOKENIZER_MAP` | Existing `llama3-70b` Linux mapping | Optional JSON object merged with the default tokenizer map; use explicit local directory paths. | Same sources |
+| `PDSCHEDULE_CONTROLLER_LOG_DIR` | Existing source/runtime-root `global_schedule.log` paths | Optional absolute directory for both Controller SLO and demand-aware schedule logs. | [Controller proxy](../../core/handlers/controller/proxy.py), [demand-aware](../../scheduler/controller/strategies/demand_aware.py) |
+| `PDSCHEDULE_CLIENT_HOST` / `PDSCHEDULE_CLIENT_PORT` | `127.0.0.1` / `5050` | Browser Client bind settings; CLI `--host` and `--port` take precedence. | [Client](../../examples/clientUI/client.py) |
 | `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` | Controller assigns `1` / `1` | These assignments affect that process, not other terminals. Prepare model/tokenizer files locally. | [Controller config](../../config/controller.py) |
 | `MY_GPU_TYPE` | Gateway nominal capacity: `NVIDIA RTX5090` | String label, not GPU autodetection. | [Instance state](../../store/gateway/instance.py), [Gateway store](../../store/gateway/manager.py) |
 | `MY_FLOPS` | Gateway nominal P capacity: `17.9` | Parsed float; invalid text raises. Relative capacity input, not measured inference throughput. | Same sources |

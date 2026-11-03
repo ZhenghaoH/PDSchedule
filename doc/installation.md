@@ -1,6 +1,6 @@
 # Python installation and distribution
 
-PDSchedule 0.1.0 supports a Python **3.12** application installation. This package
+PDSchedule 0.1.0 supports Python **3.12 and 3.13** application installations. This package
 does not install Torch, vLLM, NIXL, LMCache, model weights, or fitted predictors.
 Prepare a compatible GPU runtime using [the environment guide](../env/README.md)
 before running real inference services. A package version is not a GitHub Release.
@@ -11,7 +11,7 @@ CPU dependency installation does not install that stack.
 ## Source checkout and editable installation
 
 The existing Python startup commands continue to work from the repository root.
-For development, create a Python 3.12 virtual environment and run:
+For development, create a Python 3.12 or 3.13 virtual environment and run:
 
 ```bash
 python -m pip install -r requirements.txt
@@ -22,7 +22,11 @@ python -m pytest -q
 
 Project dependency constraints have one source: `requirements.txt`. It includes
 application, test, build, and research tools and is read into package metadata at
-build time, so installing the package also installs these dependencies.
+build time, so installing the package also installs these dependencies. Its
+environment markers retain NumPy 1.26/SciPy 1.16/scikit-learn 1.7/Matplotlib 3.10
+for Python 3.12 and use the compatible NumPy 2 and newer scientific packages on
+Python 3.13. The Python 3.13 profile is for local CPU control-plane use. The
+documented CUDA/vLLM/NIXL serving environment remains Python 3.12.
 
 In an existing GPU environment, first install application dependencies with the
 runtime constraints from the environment guide. Then use `pip install -e .
@@ -85,7 +89,9 @@ python -m entrypoints.instanceD --help
 Use the addresses, registration metadata, GPU assignments, and readiness checks
 from [the real NIXL guide](quickstart_v1.md). Installation does not remove the
 Controller's interactive CLI requirement or change its source-address PD/SLO mapping.
-The optional browser Client retains its current loopback address and port 5050.
+The optional browser Client defaults to loopback port 5050 and accepts `--host`
+and `--port`. The [Windows/Python 3.13 runbook](local_windows_p313.md) provides
+isolated PowerShell setup, service lifecycle tools and offline input-driven utilities.
 
 ## Namespaces and resources
 

@@ -61,7 +61,7 @@ This checkout alone does not provide compatible compiled extensions or recreate 
 
 ## 3. Install NIXL and project dependencies
 
-[`requirements.txt`](../requirements.txt) includes application, CPU test, build and research dependencies and is also used for package metadata. See [installation](../doc/installation.md). CPU tests use Python 3.12 and do not need a GPU, Torch, vLLM, NIXL, LMCache or Redis; NumPy 1.26.4 is not a Python 3.13 baseline. A CPU test environment is not a serving image.
+[`requirements.txt`](../requirements.txt) includes application, CPU test, build and research dependencies and is also used for package metadata. See [installation](../doc/installation.md). CPU tests support Python 3.12 and 3.13 and do not need a GPU, Torch, vLLM, NIXL, LMCache or Redis. Python 3.12 resolves NumPy 1.26.4; Python 3.13 resolves NumPy 2 and compatible scientific packages. The Windows/Python 3.13 local runtime is a control plane, not a serving image.
 
 First verify that the prepared serving environment already contains the exact
 vLLM/Torch/NIXL stack. Run this read-only check in the serving container before

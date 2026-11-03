@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
-from pdschedule.paths import profile_root, runtime_root
+from pdschedule.paths import controller_log_file, profile_root, runtime_root
 
 from store.controller.network import Network
 from store.controller.pool_base import DecodePool, PrefillPool
@@ -23,7 +23,7 @@ from scheduler.controller.strategy import (
 
 
 PROJECT_ROOT = runtime_root()
-GLOBAL_SCHEDULE_LOG_PATH = PROJECT_ROOT / "global_schedule.log"
+GLOBAL_SCHEDULE_LOG_PATH = controller_log_file(PROJECT_ROOT / "global_schedule.log")
 PROFILE_ROOT = profile_root() / "controller"
 
 

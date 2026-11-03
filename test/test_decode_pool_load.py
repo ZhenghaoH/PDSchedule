@@ -20,18 +20,21 @@ class DecodePoolLoadTest(unittest.TestCase):
         self.manager._instance_table = {
             "decode-1": Instance(
                 instance_ip="decode-1",
+                role="decode",
                 running_reqs=2,
                 waiting_reqs=3,
                 online=True,
             ),
             "decode-2": Instance(
                 instance_ip="decode-2",
+                role="decode",
                 running_reqs=4,
                 waiting_reqs=5,
                 online=True,
             ),
             "decode-offline": Instance(
                 instance_ip="decode-offline",
+                role="decode",
                 running_reqs=100,
                 waiting_reqs=100,
                 online=False,

@@ -335,14 +335,22 @@ Do not interpret a successful global selection as an SLO guarantee.
 
 Successful Pool registration, load updates, link updates, and unregister handlers
 immediately refresh the Controller snapshot. A separate 1-second reconciliation
-loop removes expired state. This does **not** make samples instantaneous. The
-current Gateway lifespan modules capture a **0.03-second sleep interval at import**;
-the later startup assignment of the configured `10` seconds does not rebind that
-module-local value. Actual reporting cadence also includes sampling/request time;
-it is neither a guaranteed 30 ms update nor the configured 10 seconds. Instance
-sampling is separate. Pool activity expires after 3000 seconds, link activity
-after 60 seconds. Graceful Gateway exit unregisters its Pool; a killed process
-is not immediately removed.
+loop removes expired Controller state. Gateway reporting reads its configured
+10-second interval at startup. If Controller forgets a Pool, the Gateway detects
+the 404/409 on its next update, re-registers with the same address, and immediately
+reports compute load. Prefill also refreshes network state; repeated reports fill
+in links when a counterpart registers later. Management requests use 2-second
+connect and 3-second read timeouts with bounded retry backoff. Actual reporting
+cadence includes request processing and HTTP time.
+
+Instance Proxies sleep 20 ms between metric collection/report cycles by default;
+the actual arrival interval also includes sampling and HTTP time. Gateway local
+scheduling expires a registered Instance after 30 seconds without a valid metric
+heartbeat, with a 1-second scan and freshness checks at selection and dispatch.
+The Controller's Pool and link timeouts remain 3000 and 60 seconds. A Gateway
+heartbeat reports Proxy management state, not vLLM health. Expiry removes an
+Instance from future local dispatch but does not replay requests already sent.
+Graceful Gateway exit unregisters its Pool.
 
 All Gateways here share an IP. The existing network updater treats them as
 same-machine links and reports a PCIe-derived estimate; it is **not a measured
@@ -459,8 +467,8 @@ there is no documented per-request flag that overrides this mapping.
 | `demand_aware` has no compatible pair with a network, or `network` drops below 4 | Check P Gateway network-update errors and current Pool IDs. Link records expire after 60 seconds; `/network/register` alone is only an acknowledgement, not a link refresh. Inspect `/network/update` reporting and current source estimates. | The active snapshot again shows four link records and requests have compatible candidates. Do not inject invented bandwidth just to increase the count. |
 | `least_load` or `demand_aware` repeatedly chooses one pair | Compare the logged actual load/capacity/candidate costs. Equal idle loads or the cost objective can legitimately produce the same winner. Disable affinity for policy observations. | The choice is explained by current inputs; do not require round-robin-like alternation from another policy. |
 | Round robin does not visit all four pairs | Confirm stable 2P/2D registration, compatible descriptors, affinity off, and no other request sender advancing the cursor. Use the four sequential requests in Section 6. | Four distinct compatible Gateway pairs occur during that isolated observation interval. |
-| A killed Instance remains a candidate, or traffic selects a dead endpoint | Current Instance selection uses an online flag without an age TTL. Stop traffic; restart the matching Proxy so it can report/register, or perform the documented graceful shutdown/restart of the affected application services. | Resource/schedule records show only the intended online, reachable Instances. A stale last-updated timestamp is not automatic removal. |
-| Controller restarted but existing Gateways do not recover | Gateway heartbeats clearing an unknown Pool ID do not fully re-register the Pool. Stop traffic and use Controller → Gateways → Instances startup order; stop children first before a planned restart. Instance updates do attempt re-registration on 404, but that does not rebuild Controller Pool state. | Fresh Gateway Pool IDs, successful Instance updates, and the expected snapshot topology are all present. |
+| A killed Instance remains a candidate, or traffic selects a dead endpoint | A Proxy with no valid metric heartbeat is excluded at the 30-second TTL (plus up to the 1-second scan interval). Confirm its `/instance/update` traffic and Gateway expiry logs. | Resource/schedule records no longer list the expired Instance. The TTL tests Proxy reporting, not vLLM engine health. Requests already sent are not replayed. |
+| Controller restarted but existing Gateways do not recover | Check Gateway logs for the old Pool ID's 404/409 and the new registration. Gateways retry with a 1/2/4/8/10-second capped backoff; Prefill also retries network updates until both ends are registered. | New valid Pool IDs, refreshed compute loads and links, and the expected snapshot topology are present. Controller Pool timeout remains 3000 seconds. |
 | Gateway logs mix multiple Pools or appear empty | Set a different absolute `FLEXPD_GATEWAY_LOG_DIR` before each Gateway starts. Look at the console for write failures and `record_state=logging_paused` for idle resource groups. This pause affects resource-log emission, not liveness. | Records in the correct directory identify actual local candidates/decisions; heartbeat and inference checks also pass. |
 | Demand-aware timing still says `fallback` after fitting | Controller has a separate model root/cache. Check the [profile placement and key-collision rules](slo.md#4-install-controller-profiles-separately); a Gateway's loaded model is not automatically available to Controller. | Cost logs show the intended `profile` source after the correct application restart. |
 

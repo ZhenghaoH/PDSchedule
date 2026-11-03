@@ -91,7 +91,7 @@ def fetch_prometheus_metrics(host: str):
     """获取所有vLLM指标, 输入host为vLLM IP地址带端口"""
     url = f"http://{host}/metrics"
     try:
-        response = requests.get(url)
+        response = requests.get(url, timeout=2)
         response.raise_for_status()
 
         metrics_data = {}

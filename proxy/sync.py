@@ -1272,6 +1272,25 @@ class RequestBatcher:
 
         # 1. 启动所有请求的转发任务
         try:
+            if not storage.is_instance_schedulable(instance, "prefill"):
+                for request in reqs:
+                    self.scheduler_mgr.on_request_finished(request)
+                    rid_key = _rid_key(request.Request_ID)
+                    async with self.lock:
+                        batch_entry = self.batch_manager.get(rid_key)
+                        if batch_entry is not None:
+                            batch_entry["result"] = {
+                                "success": False,
+                                "error": "Selected prefill instance is no longer active",
+                                "status_code": 503,
+                                "instance": instance,
+                            }
+                            batch_entry["event"].set()
+                        self.inflight_prefill_reqs.pop(rid_key, None)
+                        self.inflight_prefill_sent_time.pop(rid_key, None)
+                        self.inflight_prefill_meta.pop(rid_key, None)
+                return
+
             for r in reqs:
                 t = asyncio.create_task(self._forward_wrapper(instance, r))
                 tasks.append(t)

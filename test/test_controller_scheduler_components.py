@@ -1,7 +1,9 @@
 import ast
+import asyncio
 import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from scheduler.controller.manager import StrategyManager
@@ -18,6 +20,8 @@ from scheduler.controller.strategies.least_load import LeastLoadStrategy
 from scheduler.controller.strategies.round_robin import RoundRobinStrategy
 from store.controller.network import Network
 from store.controller.pool_base import DecodePool, PoolType, PrefillPool
+from store.controller.pool_manager import PoolManager
+from core.handlers.controller import update as controller_update
 
 
 def make_context():
@@ -287,6 +291,154 @@ class ResourceUpdateNotificationTest(unittest.TestCase):
                     and node.func.id == "_refresh_scheduler_resources"
                 ]
                 self.assertEqual(len(calls), 1)
+
+
+def make_pool_manager():
+    manager = object.__new__(PoolManager)
+    manager._pools = {PoolType.PREFILL.value: {}, PoolType.DECODE.value: {}}
+    manager._ip_index = {}
+    manager.db_lock = threading.RLock()
+    return manager
+
+
+class BoundPoolManagementTest(unittest.TestCase):
+    def setUp(self):
+        self.pool_manager = make_pool_manager()
+        self.network_manager = SimpleNamespace(
+            remove_connections_for_pool=lambda pool_id, pool_type: 0
+        )
+
+    def request(self, body):
+        class Request:
+            async def json(self):
+                return body
+
+        request = Request()
+        request.app = SimpleNamespace(
+            state=SimpleNamespace(
+                pool_manager=self.pool_manager,
+                network_manager=self.network_manager,
+                global_scheduler=None,
+            )
+        )
+        return request
+
+    def test_duplicate_registration_refreshes_all_prefill_capacity_and_connector_fields(self):
+        first_connector = {"name": "nixl", "version": "1", "metadata": {"key": "old"}}
+        second_connector = {"name": "nixl", "version": "2", "metadata": {"key": "new"}}
+        first_id = self.pool_manager.register_Pool(
+            PoolType.PREFILL,
+            "10.0.0.1",
+            8081,
+            capacity=10.0,
+            max_prompt_throughput=100.0,
+            connector=first_connector,
+            gpu_type="GPU-A",
+        )
+
+        second_id = self.pool_manager.register_Pool(
+            PoolType.PREFILL,
+            "10.0.0.1",
+            8081,
+            capacity=20.0,
+            max_prompt_throughput=200.0,
+            connector=second_connector,
+            gpu_type="GPU-B",
+        )
+
+        pool = self.pool_manager.get_pool_by_id(PoolType.PREFILL, first_id)
+        self.assertEqual(second_id, first_id)
+        self.assertEqual(pool.flops, 20.0)
+        self.assertEqual(pool.max_prompt_throughput, 200.0)
+        self.assertEqual(pool.GPU_type, "GPU-B")
+        self.assertEqual(pool.connector, second_connector)
+
+    def test_reused_pool_id_rejects_wrong_address_for_updates_and_unregisters(self):
+        old_id = self.pool_manager.register_Pool(
+            PoolType.PREFILL, "10.0.0.1", 8081, 1.0, max_prompt_throughput=100.0
+        )
+        self.assertEqual(
+            self.pool_manager.unregister_bound_pool(
+                PoolType.PREFILL, old_id, "10.0.0.1", 8081
+            ),
+            "unregistered",
+        )
+        reused_id = self.pool_manager.register_Pool(
+            PoolType.PREFILL, "10.0.0.2", 8082, 2.0, max_prompt_throughput=100.0
+        )
+        self.assertEqual(reused_id, old_id)
+
+        wrong_update = asyncio.run(
+            controller_update.update_prefill_pool_status(
+                self.request(
+                    {
+                        "pool_id": old_id,
+                        "proxy_ip_address": "10.0.0.1",
+                        "proxy_port": 8081,
+                        "current_load": 50.0,
+                    }
+                )
+            )
+        )
+        wrong_unregister = asyncio.run(
+            controller_update.unregister_prefill_pool(
+                self.request(
+                    {
+                        "pool_id": old_id,
+                        "proxy_ip_address": "10.0.0.1",
+                        "proxy_port": 8081,
+                    }
+                )
+            )
+        )
+        legacy_update = asyncio.run(
+            controller_update.update_prefill_pool_status(
+                self.request({"pool_id": old_id, "current_load": 50.0})
+            )
+        )
+
+        pool = self.pool_manager.get_pool_by_id(PoolType.PREFILL, reused_id)
+        self.assertEqual(wrong_update.status_code, 409)
+        self.assertEqual(wrong_unregister.status_code, 409)
+        self.assertEqual(legacy_update.status_code, 422)
+        self.assertEqual(pool.proxy_ip_address, "10.0.0.2")
+        self.assertEqual(pool.current_load, 0.0)
+
+    def test_bound_update_normalizes_load_and_bound_unregister_removes_pool(self):
+        pool_id = self.pool_manager.register_Pool(
+            PoolType.PREFILL, "10.0.0.2", 8082, 2.0, max_prompt_throughput=100.0
+        )
+        update = asyncio.run(
+            controller_update.update_prefill_pool_status(
+                self.request(
+                    {
+                        "pool_id": pool_id,
+                        "proxy_ip_address": "10.0.0.2",
+                        "proxy_port": 8082,
+                        "current_load": 25.0,
+                    }
+                )
+            )
+        )
+        self.assertEqual(update, {"status": "success"})
+        self.assertEqual(
+            self.pool_manager.get_pool_by_id(PoolType.PREFILL, pool_id).current_load,
+            0.25,
+        )
+
+        removed = asyncio.run(
+            controller_update.unregister_prefill_pool(
+                self.request(
+                    {
+                        "pool_id": pool_id,
+                        "proxy_ip_address": "10.0.0.2",
+                        "proxy_port": 8082,
+                    }
+                )
+            )
+        )
+        self.assertEqual(removed, {"status": "success"})
+        self.assertIsNone(self.pool_manager.get_pool_by_id(PoolType.PREFILL, pool_id))
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ import json
 import uvicorn
 from fastapi import FastAPI
 import logging
+import math
 import os
 import sys
 from pathlib import Path
@@ -34,6 +35,16 @@ def parse_gpu_indices(value: str):
     if not indices or any(index < 0 for index in indices) or len(indices) != len(set(indices)):
         raise argparse.ArgumentTypeError("GPU indices must be unique non-negative integers")
     return indices
+
+
+def positive_seconds(value):
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("value must be a positive number of seconds") from exc
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("value must be a positive number of seconds")
+    return seconds
 
 
 def setup_logger():
@@ -87,6 +98,10 @@ def parse_args():
     )
     parser.add_argument("--connector-version", default="1")
     parser.add_argument("--connector-metadata", type=json.loads, default={})
+    parser.add_argument("--metric-interval-sec", type=positive_seconds, default=LOOP_TASK_TIME)
+    parser.add_argument("--management-connect-timeout-sec", type=positive_seconds, default=MANAGEMENT_CONNECT_TIMEOUT_SEC)
+    parser.add_argument("--management-read-timeout-sec", type=positive_seconds, default=MANAGEMENT_READ_TIMEOUT_SEC)
+    parser.add_argument("--registration-retry-max-interval-sec", type=positive_seconds, default=REGISTRATION_RETRY_MAX_INTERVAL_SEC)
     parser.add_argument(
         "--gpu-indices",
         type=parse_gpu_indices,
@@ -126,7 +141,10 @@ def main():
 
     storage.rank = RANK
     storage.USE_MOCK = USE_MOCK
-    storage.LOOP_TASK_TIME = LOOP_TASK_TIME
+    storage.LOOP_TASK_TIME = args.metric_interval_sec
+    storage.MANAGEMENT_CONNECT_TIMEOUT_SEC = args.management_connect_timeout_sec
+    storage.MANAGEMENT_READ_TIMEOUT_SEC = args.management_read_timeout_sec
+    storage.REGISTRATION_RETRY_MAX_INTERVAL_SEC = args.registration_retry_max_interval_sec
 
     # 创建FastAPI应用
     app = FastAPI(

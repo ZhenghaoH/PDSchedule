@@ -1,6 +1,6 @@
 from dataclasses import dataclass, asdict, field
 from re import L
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 import time
 import os
 
@@ -38,6 +38,7 @@ class Instance:
     gpu_devices: List[Dict[str, Any]] = field(default_factory=list)
     network_metric: Dict[str, Any] = field(default_factory=dict)
     online: bool = False
+    last_heartbeat_monotonic: Optional[float] = field(default_factory=time.monotonic)
     role: str = ""
     connector: Dict[str, Any] = field(default_factory=dict)
     vllm_port: int = 0

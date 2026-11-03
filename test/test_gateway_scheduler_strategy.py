@@ -93,9 +93,9 @@ class GatewayStoreStrategyTest(unittest.TestCase):
     def setUp(self):
         self.store = make_store(["p1", "p2"], ["d1"])
         self.store._instance_table = {
-            "p1": Instance("p1", prompt_throughput=8.0, online=True),
-            "p2": Instance("p2", prompt_throughput=3.0, online=True),
-            "d1": Instance("d1", online=True),
+            "p1": Instance("p1", role="prefill", prompt_throughput=8.0, online=True),
+            "p2": Instance("p2", role="prefill", prompt_throughput=3.0, online=True),
+            "d1": Instance("d1", role="decode", online=True),
         }
 
     def test_prefill_round_robin_is_real_and_thread_safe(self):
@@ -137,8 +137,8 @@ class PrefillSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.store = make_store(["p2", "p1"])
         self.store._instance_table = {
-            "p1": Instance("p1", prompt_throughput=3.0, online=True),
-            "p2": Instance("p2", prompt_throughput=3.0, online=True),
+            "p1": Instance("p1", role="prefill", prompt_throughput=3.0, online=True),
+            "p2": Instance("p2", role="prefill", prompt_throughput=3.0, online=True),
         }
         self.scheduler = SchedulerManager(storage=self.store)
 
@@ -291,8 +291,8 @@ class DecodeSchedulerManagerTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         store = make_store(decodes=["d2", "d1"])
         store._instance_table = {
-            "d1": Instance("d1", generate_throughput=5.0, online=True),
-            "d2": Instance("d2", generate_throughput=10.0, online=True),
+            "d1": Instance("d1", role="decode", generate_throughput=5.0, online=True),
+            "d2": Instance("d2", role="decode", generate_throughput=10.0, online=True),
         }
         self.store = store
         self.scheduler = DecodeSchedulerManager(storage=store)

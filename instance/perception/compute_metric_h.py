@@ -145,10 +145,12 @@ class ThroughputMonitor:
         self._thread.start()
         print(f"🚀 [Monitor] Started for {self.host} | Sampling: {self.interval}s | Window: {self.window_size}s")
 
-    def stop(self):
+    def stop(self, join_timeout: float = 5.0):
         self._running = False
         if self._thread:
-            self._thread.join()
+            self._thread.join(timeout=max(0.0, float(join_timeout)))
+            if self._thread.is_alive():
+                print("⚠️ [Monitor] Stop timed out; monitor thread is still finishing.")
         print("🛑 [Monitor] Stopped")
 
     def _monitor_loop(self):

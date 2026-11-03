@@ -14,6 +14,32 @@ from instance.perception.compute_metric_h import ThroughputMonitor
 from utils.network_metric import get_interface_metrics
 
 
+def _management_timeout(storage):
+    return (
+        float(getattr(storage, "MANAGEMENT_CONNECT_TIMEOUT_SEC", 2.0)),
+        float(getattr(storage, "MANAGEMENT_READ_TIMEOUT_SEC", 3.0)),
+    )
+
+
+def _failure_status(response, operation: str) -> str:
+    status = int(response.status_code)
+    if 400 <= status < 500:
+        logging.error(
+            "[Instance] Gateway rejected %s with HTTP %s: %s",
+            operation,
+            status,
+            getattr(response, "text", ""),
+        )
+        return "configuration_error"
+    logging.warning(
+        "[Instance] Gateway %s temporarily failed with HTTP %s: %s",
+        operation,
+        status,
+        getattr(response, "text", ""),
+    )
+    return "temporary_failure"
+
+
 def instance_register():
     storage = InstanceStore()
     target_url = f"http://{storage.gateway}/instance/register"
@@ -25,13 +51,15 @@ def instance_register():
         "gpu_indices": storage.gpu_indices,
     }
     try:
-        response = requests.post(target_url, json=payload)
+        response = requests.post(
+            target_url, json=payload, timeout=_management_timeout(storage)
+        )
         if response.status_code == 200:
-            return True
-        logging.warning("[Instance] 注册失败: %s - %s", response.status_code, response.text)
+            return "success"
+        return _failure_status(response, "registration")
     except Exception as exc:
-        logging.warning("[Instance] 注册错误: %s", exc)
-    return False
+        logging.warning("[Instance] Gateway registration temporarily unavailable: %s", exc)
+        return "temporary_failure"
 
 
 def _get_metric_sample_value(metrics: dict, names: List[str], default: float = 0.0) -> float:
@@ -170,13 +198,21 @@ def metric_update(monitor: Optional[ThroughputMonitor] = None):
             "gpu_devices": gpu_devices,
             "network_metric": network_metric,
         }
-        resp = requests.post(target_url, json=payload)
+        resp = requests.post(
+            target_url, json=payload, timeout=_management_timeout(storage)
+        )
+        if resp.status_code == 200:
+            return "success"
         if resp.status_code == 404:
-            instance_register()
-        if resp.status_code != 200:
-            logging.warning(f"[Instance] 心跳异常: {resp.status_code}")
+            logging.warning(
+                "[Instance] Gateway registration was lost for %s; registration will be retried.",
+                storage.report_label(),
+            )
+            return "registration_lost"
+        return _failure_status(resp, "metric update")
     except Exception as e:
-        logging.error(f"[Instance] 心跳错误: {e}")
+        logging.warning("[Instance] Gateway metric update temporarily unavailable: %s", e)
+        return "temporary_failure"
 
 
 def instance_unregister():
@@ -187,8 +223,12 @@ def instance_unregister():
         payload = {
             "report_label": storage.report_label(),
         }
-        resp = requests.post(target_url, json=payload)
+        resp = requests.post(
+            target_url, json=payload, timeout=_management_timeout(storage)
+        )
         if resp.status_code != 200:
-            logging.warning(f"[Instance] 注销异常: {resp.status_code}")
+            return _failure_status(resp, "unregister")
+        return "success"
     except Exception as e:
-        logging.warning(f"[Instance] 注销错误: {e}")
+        logging.warning("[Instance] Gateway unregister temporarily unavailable: %s", e)
+        return "temporary_failure"

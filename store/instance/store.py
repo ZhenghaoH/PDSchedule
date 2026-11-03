@@ -37,6 +37,9 @@ class InstanceStore:
                     self.network_metric_sampled_at = 0.0
 
                     self.LOOP_TASK_TIME = 0.02  # 轮询上报任务时间
+                    self.MANAGEMENT_CONNECT_TIMEOUT_SEC = 2.0
+                    self.MANAGEMENT_READ_TIMEOUT_SEC = 3.0
+                    self.REGISTRATION_RETRY_MAX_INTERVAL_SEC = 10.0
 
                     self._initialized = True  # 确保不重复初始化
 

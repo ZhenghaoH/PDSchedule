@@ -2,14 +2,16 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 import threading
-import time
 
 from fastapi import FastAPI
 
 from coord.gateway.up_store import (
-    decode_compute_register,
     decode_compute_unregister,
-    decode_compute_update,
+)
+from coord.gateway.registration import (
+    run_gateway_management_loop,
+    run_instance_expiry_loop,
+    wait_for_first_registration,
 )
 from store.gateway.manager import GatewayStoreManager
 
@@ -45,16 +47,9 @@ def silence_heartbeat_logs():
 
 
 storage = GatewayStoreManager()
-LOOP_TASK_TIME = storage.LOOP_TASK_TIME
 
 stop_event = threading.Event()
 tpot_warmup_task = None
-
-
-def compute_update_loop_task():
-    while not stop_event.is_set():
-        decode_compute_update()
-        time.sleep(LOOP_TASK_TIME)
 
 
 def _parse_host_port(addr: str):
@@ -127,30 +122,57 @@ async def lifespan(api: FastAPI):
     silence_heartbeat_logs()
 
     global stop_event, tpot_warmup_task
-    while not decode_compute_register():
-        time.sleep(LOOP_TASK_TIME)
+    stop_event = threading.Event()
+    registered_event = threading.Event()
+    management_thread = threading.Thread(
+        target=run_gateway_management_loop,
+        args=(
+            "decode",
+            stop_event,
+            registered_event,
+            storage.LOOP_TASK_TIME,
+            storage.REGISTRATION_RETRY_MAX_INTERVAL_SEC,
+            storage,
+        ),
+        name="decode-controller-management",
+        daemon=True,
+    )
+    expiry_thread = threading.Thread(
+        target=run_instance_expiry_loop,
+        args=(stop_event, storage),
+        name="decode-instance-expiry",
+        daemon=True,
+    )
+    management_thread.start()
+    expiry_thread.start()
+    try:
+        if not await wait_for_first_registration(
+            registered_event, stop_event, management_thread
+        ):
+            raise RuntimeError("Decode Gateway stopped before Controller registration")
 
-    update_thread = threading.Thread(target=compute_update_loop_task, daemon=True)
-    update_thread.start()
+        if storage.TPOT_WARMUP_ENABLED:
+            tpot_warmup_task = asyncio.create_task(run_tpot_warmup_task())
+            logging.info("[TPOT Predictor] Background warmup task scheduled.")
 
-    if storage.TPOT_WARMUP_ENABLED:
-        tpot_warmup_task = asyncio.create_task(run_tpot_warmup_task())
-        logging.info("[TPOT Predictor] Background warmup task scheduled.")
+        logging.info("[Gateway] Decode startup complete; listening for requests")
+        yield
+    finally:
+        stop_event.set()
+        await asyncio.to_thread(management_thread.join, 6.0)
+        await asyncio.to_thread(expiry_thread.join, 2.0)
+        if management_thread.is_alive() or expiry_thread.is_alive():
+            logging.warning("[Gateway] Decode management workers did not exit within the shutdown bound")
 
-    logging.info("[Gateway] startup: Decode gateway initialized.")
+        if tpot_warmup_task is not None and not tpot_warmup_task.done():
+            tpot_warmup_task.cancel()
+            try:
+                await tpot_warmup_task
+            except asyncio.CancelledError:
+                logging.info("[TPOT Predictor] Background warmup task stopped.")
+        tpot_warmup_task = None
+        storage.clear_tpot_predictor()
+        storage.clear_tpot_step_predictor()
 
-    yield
-
-    stop_event.set()
-    if tpot_warmup_task is not None and not tpot_warmup_task.done():
-        tpot_warmup_task.cancel()
-        try:
-            await tpot_warmup_task
-        except asyncio.CancelledError:
-            logging.info("[TPOT Predictor] Background warmup task stopped.")
-    tpot_warmup_task = None
-    storage.clear_tpot_predictor()
-    storage.clear_tpot_step_predictor()
-
-    decode_compute_unregister()
-    logging.info("[Gateway] shutdown: Decode gateway stopped.")
+        await asyncio.to_thread(decode_compute_unregister)
+        logging.info("[Gateway] Decode shutdown complete")

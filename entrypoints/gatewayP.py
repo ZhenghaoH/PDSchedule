@@ -10,6 +10,7 @@ import argparse
 import json
 from fastapi import FastAPI
 import logging
+import math
 import os
 import sys
 from pathlib import Path
@@ -38,6 +39,16 @@ def setup_logger():
     )
     # 为 root logger 设置格式
     logging.getLogger().setLevel(logging.INFO)
+
+
+def positive_seconds(value):
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("value must be a positive number of seconds") from exc
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError("value must be a positive number of seconds")
+    return seconds
 
 
 def parse_args():
@@ -95,6 +106,12 @@ def parse_args():
         action="store_true",
         help="Disable the interactive gateway CLI for background deployments.",
     )
+    parser.add_argument("--gateway-heartbeat-interval-sec", type=positive_seconds, default=LOOP_TASK_TIME)
+    parser.add_argument("--instance-heartbeat-ttl-sec", type=positive_seconds, default=INSTANCE_HEARTBEAT_TTL_SEC)
+    parser.add_argument("--instance-expiry-scan-interval-sec", type=positive_seconds, default=INSTANCE_EXPIRY_SCAN_INTERVAL_SEC)
+    parser.add_argument("--management-connect-timeout-sec", type=positive_seconds, default=MANAGEMENT_CONNECT_TIMEOUT_SEC)
+    parser.add_argument("--management-read-timeout-sec", type=positive_seconds, default=MANAGEMENT_READ_TIMEOUT_SEC)
+    parser.add_argument("--registration-retry-max-interval-sec", type=positive_seconds, default=REGISTRATION_RETRY_MAX_INTERVAL_SEC)
     parser.add_argument(
         "--connector-name",
         choices=["nixl", "lmcache"],
@@ -187,7 +204,12 @@ def main():
     storage.SYN_BATCH_SIZE = SYN_BATCH_SIZE
     storage.rank = RANK
     storage.USE_SYN = USE_SYN
-    storage.LOOP_TASK_TIME = LOOP_TASK_TIME
+    storage.LOOP_TASK_TIME = args.gateway_heartbeat_interval_sec
+    storage.INSTANCE_HEARTBEAT_TTL_SEC = args.instance_heartbeat_ttl_sec
+    storage.INSTANCE_EXPIRY_SCAN_INTERVAL_SEC = args.instance_expiry_scan_interval_sec
+    storage.MANAGEMENT_CONNECT_TIMEOUT_SEC = args.management_connect_timeout_sec
+    storage.MANAGEMENT_READ_TIMEOUT_SEC = args.management_read_timeout_sec
+    storage.REGISTRATION_RETRY_MAX_INTERVAL_SEC = args.registration_retry_max_interval_sec
 
     storage.TRIGGER_MODE = TRIGGER_MODE
     storage.PROFILE_MODE = PROFILE_MODE

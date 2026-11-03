@@ -59,6 +59,22 @@ ADDRESS_CONFIG, but no current runtime consumer uses the resulting constants.
 They do not start a metadata/Redis service or rewrite LMCache YAML. Their port
 values are still parsed when ADDRESS_CONFIG is imported.
 
+### Management and liveness
+
+These values are read when a service starts. The matching CLI option overrides
+the environment default; changing either after startup does not reconfigure the
+process.
+
+| Name | Owner / default | Resolution / behavior |
+| --- | --- | --- |
+| `FLEXPD_GATEWAY_HEARTBEAT_INTERVAL_SEC` | Both Gateways: `10` seconds | Normal Pool load and P network report cadence. Actual request timing includes work and HTTP duration. |
+| `FLEXPD_INSTANCE_METRIC_INTERVAL_SEC` | P/D Instance: `0.02` seconds | Sleep after each metrics collection and report. This is not a guaranteed 20 ms arrival period. |
+| `FLEXPD_INSTANCE_HEARTBEAT_TTL_SEC` | Both Gateways: `30` seconds | Monotonic age limit; age at or above the TTL removes an Instance from local scheduling. |
+| `FLEXPD_INSTANCE_EXPIRY_SCAN_INTERVAL_SEC` | Both Gateways: `1` second | Background state-transition scan; selection and dispatch also check freshness directly. |
+| `FLEXPD_MANAGEMENT_CONNECT_TIMEOUT_SEC` | Gateway and Instance admin requests: `2` seconds | Requests uses a separate connect timeout. |
+| `FLEXPD_MANAGEMENT_READ_TIMEOUT_SEC` | Gateway and Instance admin requests: `3` seconds | Read timeout is separate; the two values do not promise a strict five-second total. |
+| `FLEXPD_REGISTRATION_RETRY_MAX_INTERVAL_SEC` | Gateway and Instance registration recovery: `10` seconds | Retries back off from 1, 2, 4, 8 seconds and then use this ceiling. |
+
 ### Profiles, capacity metadata, forwarding, and logs
 
 | Name / setting | Owner and default | Effect / invalid or fallback behavior | Source |
@@ -125,7 +141,11 @@ actual parser. No command here creates models, Redis, or vLLM processes for you.
 | P Gateway | `--prefill-scheduler-strategy` | `slo_aware_prefill`; choices `slo_aware_prefill`, `jsq`, `round_robin`. |
 | D Gateway | `--decode-scheduler-strategy` | `slo_aware_decode`; choices `round_robin`, `lowest_generation_throughput`, `slo_aware_decode`. |
 | Both Gateways | `--no-cli` | False; supplied flag disables their interactive CLI. No remote HTTP policy-switch endpoint. |
+| Both Gateways | `--gateway-heartbeat-interval-sec`, `--instance-heartbeat-ttl-sec`, `--instance-expiry-scan-interval-sec` | Defaults `10`, `30`, `1` seconds; all values must be finite and positive. |
+| Both Gateways | `--management-connect-timeout-sec`, `--management-read-timeout-sec`, `--registration-retry-max-interval-sec` | Defaults `2`, `3`, `10` seconds; applies to management requests and registration recovery. |
 | [P Instance](../../entrypoints/instanceP.py), [D Instance](../../entrypoints/instanceD.py) | `--host`, `--port`, `--vllm_port`, `--gateway` | Host/parent defaults above; ports default `None`. Main rejects missing/empty/zero required options. The vLLM flag uses an **underscore**. |
+| Both Instances | `--metric-interval-sec` | `0.02` seconds default sleep after sampling and reporting. |
+| Both Instances | `--management-connect-timeout-sec`, `--management-read-timeout-sec`, `--registration-retry-max-interval-sec` | Defaults `2`, `3`, `10` seconds; all values must be finite and positive. |
 | Both Instances | `--gpu-indices` | Parsed environment default `[0]`; comma-separated unique non-negative NVML indices. Does not allocate the engine's GPUs. |
 | Both Gateways and Instances | `--connector-name` | `nixl`; choices `nixl`, `lmcache`. |
 | Both Gateways and Instances | `--connector-version` | String `1`; string equality is required for compatibility. This is descriptor compatibility metadata, not the installed vLLM/NIXL/LMCache package version. |
@@ -190,17 +210,20 @@ Source: [router](../../core/routers/controller.py), [inference](../../core/handl
 | `GET /`, `GET /requests` | None | HTML request-history page; not JSON health/status. |
 | `POST /prefill_pool/register` | `proxy_ip_address`, `proxy_port`, `flops`, `connector`; optional `GPU_type`, `max_prompt_throughput` (0) | Returns `status`, assigned `pool_id`, `message`. Missing IP can be derived from TCP source. |
 | `POST /decode_pool/register` | `proxy_ip_address`, `proxy_port`, `mem_bandwidth`, `connector`; optional `GPU_type`, `max_decode_req_num` (128, clamped to ≥1) | Same registration response. Connector descriptor validation occurs before registration. |
-| `POST /prefill_pool/update` | `pool_id`, `current_load` | Here `current_load` is reported prompt throughput, divided by registered `max_prompt_throughput` to obtain Controller load. Returns `{"status":"success"}`. |
-| `POST /decode_pool/update` | `pool_id`, and `running_reqs` or `current_load`; optional `max_decode_req_num` | `running_reqs` takes precedence and is normalized by capacity. Sender's count includes active Instances' running **and waiting** requests. Legacy `current_load` is a normalized ratio. |
-| `POST /prefill_pool/unregister`, `POST /decode_pool/unregister` | `pool_id` | Removes Pool and its links; success object, or 404 for unknown ID. |
+| `POST /prefill_pool/update` | `pool_id`, `proxy_ip_address`, `proxy_port`, `current_load` | Address and ID must match the same registered Pool under one lock. `current_load` is prompt throughput divided by registered `max_prompt_throughput`; 404 means unknown ID, 409 means address binding conflict. |
+| `POST /decode_pool/update` | `pool_id`, `proxy_ip_address`, `proxy_port`, and `running_reqs` or `current_load`; optional `max_decode_req_num` | Same atomic address binding. `running_reqs` takes precedence and is normalized by capacity; it includes active Instances' running **and waiting** requests. 404/409 signal that the Gateway must re-register. |
+| `POST /prefill_pool/unregister`, `POST /decode_pool/unregister` | `pool_id`, `proxy_ip_address`, `proxy_port` | Removes only the matching Pool and its links; 404 means unknown ID and 409 means another address owns that ID. ID-only management requests are rejected. |
 | `POST /network/register` | `gateway_ip`, `gateway_port`, `bandwidth` | Currently verifies the Gateway exists and acknowledges; this handler does not itself create/refresh link records. Pool registration creates links; network updates refresh them. |
 | `POST /network/update` | `gateway_ip`, `gateway_port`, `bandwidth`; optional `rtt` (10), `pcie_bandwidth` (bandwidth), `pcie_rtt` (0.1) | Updates this Gateway's links. Bandwidth is Mbps, RTT ms; same-IP links use PCIe fields. Returns `status`, `updated_gateway`, `bandwidth`, `pcie_bandwidth`. |
 
-Typical management errors include malformed JSON (400), missing/invalid fields
-or descriptors (422), unknown resource (404), and registration/update failure
-(500). This is not an exhaustive validation schema: manually parsed values and
-uncaught type/shape errors can behave differently. An HTTP 200 does not check
-that advertised addresses or capacity values are correct.
+Malformed JSON is 400, missing or invalid fields/descriptors are 422, unknown
+Pools are 404, and a Pool ID bound to a different Gateway address is 409.
+Registration refreshes the full capacity, GPU type, and Connector descriptor
+for a repeated role/address/port tuple. A successful registration response must
+contain a positive integer `pool_id`; Gateway code rejects a 200 response without
+one. Registration restores Pool compute state, while the P Gateway separately
+reports its network state. `/network/register` acknowledgement alone still does
+not prove that a P/D link is usable.
 
 ### Prefill and Decode Gateways
 
@@ -213,7 +236,7 @@ Sources: [P router](../../core/routers/gatewayP.py), [D router](../../core/route
 | --- | --- | --- |
 | `POST /v1/chat/completions`, `POST /v1/completions` | Internal `BaseRequest` envelope with `Request_ID`, `Request_type`, `Prompt`, `Service`, `Task` | Local scheduling and forwarding. A normal client should not build this internal context itself. |
 | `POST /instance/register` | `report_label` (`host:port`), matching `role`, `connector`; optional `vllm_port`, `gpu_indices` | Returns `report_label`, `role`; wrong role/invalid Connector rejected with 400. A newly created Instance is offline until a successful metric update; re-registration preserves existing state. |
-| `POST /instance/update` | `report_label`; runtime fields default to zero/empty if omitted | Updates running/waiting counts, generation throughput, KV/GPU utilization, `gpu_devices`, `network_metric`; P also consumes prompt throughput. Returns empty 200; unknown label 404. A sparse update can erase previous metrics. |
+| `POST /instance/update` | Registered `report_label`, non-negative integer `running_reqs` and `waiting_reqs`; optional numeric resource fields, `gpu_devices`, `network_metric` | The route role must match the registered Instance. Only a valid update activates or refreshes it. Empty 200 on success, 404 for unknown label, 409 for role mismatch, 400 for invalid metrics. |
 | `POST /instance/unregister` | `report_label` | Marks Instance offline and clears live load; empty 200, unknown label 404, missing label 400. Stored identity is retained. |
 | `GET /connectors` | None | `connector`, `mode`, `supported`; configuration only, not engine/registration/cache validation. |
 | `POST /pd/select_instance` | Internal `BaseRequest` envelope | Advisory `instance`, empty `kv_addr`, `connector` (role/descriptor); no active Instance or inconsistent metadata gives 503. It is not a lease or KV-transfer handshake. |
@@ -305,20 +328,27 @@ Sources: [Pool store](../../store/controller/pool_manager.py), [link store](../.
 [Controller lifecycle](../../core/lifespans/controller.py),
 [Instance lifecycle](../../core/lifespans/instance.py), and the Gateway/Instance reporting modules linked above.
 
-Successful Pool-registration/update/unregister and network-update handlers refresh
-Controller resources immediately; 1-second reconciliation filters expired Pools
-(3000 seconds) and links (60 seconds). `/network/register` is only the
-acknowledgement described above. Gateway metric/link loops capture 0.03 seconds
-at import, and Instance metric loops capture 0.02 seconds; later config values
-of 10 seconds do not rebind those module-local values. Sampling, blocking HTTP,
-and processing add time, so these are not guaranteed update cadences.
+Successful Pool registration/update/unregister and network updates refresh
+Controller snapshots; the existing 1-second reconciliation still filters Pools
+after 3000 seconds and links after 60 seconds. These Controller timeouts are
+unchanged.
 
-Instance online selection currently checks the stored `online` flag, not a
-heartbeat-age TTL. Graceful unregister marks it offline; abrupt termination can
-leave an online entry. Instance metric updates retry registration after a 404;
-Gateway Pool updates only clear the stored Pool ID on 404 and do not rebuild the
-full registration automatically. For a reproducible restart, stop traffic and
-restart Controller → Gateways → Instances as described in the guides.
+Gateway lifespans read the configured 10-second reporting interval at startup.
+If a Pool update returns 404 or 409, the Gateway re-registers and immediately
+sends its current compute load; the P Gateway also reports its current network
+metrics. Connection, timeout, and 5xx failures use bounded retry delays. Instance
+metrics sleep for 20 ms by default after each sample/report, but actual arrival
+interval also includes collection and HTTP time.
+
+Gateway Instance eligibility requires registration, online state, and a valid
+heartbeat younger than the 30-second monotonic TTL. A one-second scan marks stale
+Instances offline and clears live load; selector, reservation, preselection, and
+dispatch paths check freshness too. A later valid heartbeat restores the same
+registered Instance. This measures the Proxy reporting path, not the health of
+the vLLM engine; a failed metrics sample can still produce zero-valued fields.
+Expiry does not replay or migrate requests already sent to an Instance. The
+Controller still does not require a Pool to contain an online Instance, so its
+Pool view can temporarily lag local Gateway readiness.
 
 | Topic | Maintained operational reference | Relevant checks |
 | --- | --- | --- |

@@ -283,6 +283,12 @@ async def handle_completion_request(raw_request: Request, endpoint_type: str):
         else:
             request_payload = BaseRequest.to_vllm_payload(request)
 
+        if not storage.is_instance_schedulable(selected_decode, "decode"):
+            raise HTTPException(
+                status_code=503,
+                detail="Selected decode instance is no longer active",
+            )
+
         try:
             generator = forward_request(
                 f"http://{selected_decode}/v1/{endpoint_type}",

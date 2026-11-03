@@ -43,6 +43,11 @@ class GatewayStoreManager:
                     self._data_lock = threading.RLock()  # 数据操作锁
 
                     self._pool_id: Optional[int] = None
+                    self.INSTANCE_HEARTBEAT_TTL_SEC = 30.0
+                    self.INSTANCE_EXPIRY_SCAN_INTERVAL_SEC = 1.0
+                    self.MANAGEMENT_CONNECT_TIMEOUT_SEC = 2.0
+                    self.MANAGEMENT_READ_TIMEOUT_SEC = 3.0
+                    self.REGISTRATION_RETRY_MAX_INTERVAL_SEC = 10.0
                     self._network_register_table: List[str] = []
                     self.connector = {
                         "name": "nixl",
@@ -106,6 +111,14 @@ class GatewayStoreManager:
         """设置pool_id"""
         with self._data_lock:
             self._pool_id = pool_id
+
+    def set_pool_id_if_current(self, expected: Optional[int], pool_id: Optional[int]) -> bool:
+        """Update the Controller-assigned ID only if it has not changed."""
+        with self._data_lock:
+            if self._pool_id != expected:
+                return False
+            self._pool_id = pool_id
+            return True
 
     def get_pool_id(self):
         with self._data_lock:
@@ -222,8 +235,7 @@ class GatewayStoreManager:
         with self._data_lock:
             active_instances = [
                 instance_ip for instance_ip in self._decode_objs
-                if self._instance_table.get(instance_ip)
-                and self._instance_table[instance_ip].online
+                if self._instance_is_schedulable_locked(instance_ip, "decode")
             ]
             if not active_instances:
                 return ""
@@ -236,8 +248,7 @@ class GatewayStoreManager:
         with self._data_lock:
             active_instances = [
                 instance_ip for instance_ip in self._prefill_objs
-                if self._instance_table.get(instance_ip)
-                and self._instance_table[instance_ip].online
+                if self._instance_is_schedulable_locked(instance_ip, "prefill")
             ]
             if not active_instances:
                 return ""
@@ -370,7 +381,13 @@ class GatewayStoreManager:
             if len(existing_instances) == 1:
                 existing_instance = next(iter(existing_instances))
                 if all(request_id in role_reservations[existing_instance] for request_id in request_keys):
-                    return existing_instance
+                    if self._instance_is_schedulable_locked(existing_instance, role):
+                        return existing_instance
+                    reservations = role_reservations.get(existing_instance, {})
+                    for request_id in request_keys:
+                        reservations.pop(request_id, None)
+                    if not reservations:
+                        role_reservations.pop(existing_instance, None)
             if existing_instances:
                 raise ValueError("DistServe request batch contains conflicting reservations")
 
@@ -378,8 +395,7 @@ class GatewayStoreManager:
             candidates = [
                 instance_ip
                 for instance_ip in configured
-                if self._instance_table.get(instance_ip)
-                and self._instance_table[instance_ip].online
+                if self._instance_is_schedulable_locked(instance_ip, role)
             ]
             if not candidates:
                 return ""
@@ -507,23 +523,44 @@ class GatewayStoreManager:
         with self._data_lock:
             return self._decode_objs.copy()
 
-    def _active_instances(self, instances: List[str]) -> List[str]:
+    def _active_instances(self, instances: List[str], role: str) -> List[str]:
         with self._data_lock:
             return [
                 instance_ip for instance_ip in instances
-                if self._instance_table.get(instance_ip)
-                and self._instance_table[instance_ip].online
+                if self._instance_is_schedulable_locked(instance_ip, role)
             ]
+
+    def _instance_is_schedulable_locked(
+        self,
+        instance_ip: str,
+        role: Optional[str] = None,
+        now: Optional[float] = None,
+    ) -> bool:
+        instance = self._instance_table.get(instance_ip)
+        if not instance or not instance.online:
+            return False
+        if role is not None and instance.role != role:
+            return False
+        heartbeat = getattr(instance, "last_heartbeat_monotonic", None)
+        if heartbeat is None:
+            return False
+        current = time.monotonic() if now is None else float(now)
+        ttl = max(0.0, float(getattr(self, "INSTANCE_HEARTBEAT_TTL_SEC", 30.0)))
+        return current - float(heartbeat) < ttl
+
+    def is_instance_schedulable(self, instance_ip: str, role: Optional[str] = None) -> bool:
+        with self._data_lock:
+            return self._instance_is_schedulable_locked(instance_ip, role)
 
     @property
     def active_prefill_objs(self) -> List[str]:
         """获取当前在线的 prefill 实例列表。"""
-        return self._active_instances(self._prefill_objs)
+        return self._active_instances(self._prefill_objs, "prefill")
 
     @property
     def active_decode_objs(self) -> List[str]:
         """获取当前在线的 decode 实例列表。"""
-        return self._active_instances(self._decode_objs)
+        return self._active_instances(self._decode_objs, "decode")
 
     def set_config(self, prefills: Optional[List[str]] = None, decodes: Optional[List[str]] = None):
         """线程安全的配置设置方法"""
@@ -580,7 +617,10 @@ class GatewayStoreManager:
                         "connector instance identity or side-channel port range "
                         f"conflicts with registered instance {existing_ip}"
                     )
-            instance = existing or Instance(instance_ip=instance_ip)
+            instance = existing or Instance(
+                instance_ip=instance_ip,
+                last_heartbeat_monotonic=None,
+            )
             instance.role = role
             instance.connector = descriptor.to_dict()
             instance.vllm_port = int(vllm_port or 0)
@@ -599,6 +639,121 @@ class GatewayStoreManager:
             if instance_ip not in target:
                 target.append(instance_ip)
             return deepcopy(instance)
+
+    def update_instance_heartbeat(
+        self,
+        instance_ip: str,
+        role: str,
+        metrics: Dict[str, Any],
+    ) -> tuple[str, Optional[Instance], bool, bool]:
+        """Validate and atomically merge a heartbeat from a registered proxy.
+
+        Returns (status, instance snapshot, was_schedulable, had_heartbeat).
+        """
+        if not isinstance(metrics, dict):
+            raise ValueError("heartbeat metrics must be an object")
+        missing_metrics = {
+            name for name in ("running_reqs", "waiting_reqs") if name not in metrics
+        }
+        if missing_metrics:
+            raise ValueError(
+                "heartbeat is missing required metrics: "
+                + ", ".join(sorted(missing_metrics))
+            )
+
+        def integer_metric(name: str, default: int = 0) -> int:
+            value = metrics.get(name, default)
+            if isinstance(value, bool):
+                raise ValueError(f"{name} must be a non-negative integer")
+            try:
+                normalized = int(value)
+                exact = float(value) == normalized
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"{name} must be a non-negative integer") from exc
+            if normalized < 0 or not exact:
+                raise ValueError(f"{name} must be a non-negative integer")
+            return normalized
+
+        def float_metric(name: str, default: float = 0.0) -> float:
+            import math
+
+            value = metrics.get(name, default)
+            if isinstance(value, bool):
+                raise ValueError(f"{name} must be a finite number")
+            try:
+                normalized = float(value)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"{name} must be a finite number") from exc
+            if not math.isfinite(normalized):
+                raise ValueError(f"{name} must be a finite number")
+            return normalized
+
+        running_reqs = integer_metric("running_reqs")
+        waiting_reqs = integer_metric("waiting_reqs")
+        normalized_metrics = {
+            "running_reqs": running_reqs,
+            "waiting_reqs": waiting_reqs,
+            "prompt_throughput": float_metric("prompt_throughput"),
+            "generate_throughput": float_metric("generate_throughput"),
+            "kv_cache_usage_percent": float_metric("kv_cache_usage_percent"),
+            "gpu_util_percent": float_metric("gpu_util_percent"),
+            "gpu_memory_util_percent": float_metric("gpu_memory_util_percent"),
+        }
+        gpu_devices = metrics.get("gpu_devices", [])
+        network_metric = metrics.get("network_metric", {})
+        if not isinstance(gpu_devices, list):
+            raise ValueError("gpu_devices must be a list")
+        if not isinstance(network_metric, dict):
+            raise ValueError("network_metric must be an object")
+        if any(not isinstance(item, dict) for item in gpu_devices):
+            raise ValueError("each gpu_devices entry must be an object")
+
+        with self._data_lock:
+            instance = self._instance_table.get(instance_ip)
+            if instance is None:
+                return "not_found", None, False, False
+            if instance.role != role:
+                return "role_conflict", None, False, False
+
+            now_monotonic = time.monotonic()
+            had_heartbeat = getattr(instance, "last_heartbeat_monotonic", None) is not None
+            was_schedulable = self._instance_is_schedulable_locked(
+                instance_ip, role, now=now_monotonic
+            )
+            if instance.online and not was_schedulable:
+                self._mark_instance_offline_locked(instance)
+
+            instance.running_reqs = normalized_metrics["running_reqs"]
+            instance.waiting_reqs = normalized_metrics["waiting_reqs"]
+            instance.prompt_throughput = normalized_metrics["prompt_throughput"]
+            instance.generate_throughput = normalized_metrics["generate_throughput"]
+            instance.kv_cache_usage_percent = normalized_metrics["kv_cache_usage_percent"]
+            instance.gpu_util_percent = normalized_metrics["gpu_util_percent"]
+            instance.gpu_memory_util_percent = normalized_metrics["gpu_memory_util_percent"]
+            instance.gpu_devices = deepcopy(gpu_devices)
+            instance.network_metric = deepcopy(network_metric)
+            if instance.gpu_devices:
+                reported_gpu_indices = []
+                for item in instance.gpu_devices:
+                    if item.get("gpu_index") is None:
+                        continue
+                    try:
+                        gpu_index = int(item["gpu_index"])
+                    except (TypeError, ValueError):
+                        continue
+                    if gpu_index >= 0 and gpu_index not in reported_gpu_indices:
+                        reported_gpu_indices.append(gpu_index)
+                if reported_gpu_indices:
+                    instance.gpu_indices = reported_gpu_indices
+            instance.online = True
+            instance.last_heartbeat_monotonic = now_monotonic
+            instance.last_updated = time.time()
+            self.confirm_distserve_heartbeat(
+                role,
+                instance_ip,
+                running_reqs + waiting_reqs,
+            )
+            return "updated", deepcopy(instance), was_schedulable, had_heartbeat
 
     def get_connector_metadata(self, instance_ip: str) -> Dict[str, Any]:
         with self._data_lock:
@@ -620,27 +775,46 @@ class GatewayStoreManager:
         with self._data_lock:
             return instance_ip in self._instance_table
 
+    def _mark_instance_offline_locked(self, instance: Instance) -> None:
+        instance.online = False
+        instance.running_reqs = 0
+        instance.waiting_reqs = 0
+        instance.prompt_throughput = 0.0
+        instance.generate_throughput = 0.0
+        instance.kv_cache_usage_percent = 0.0
+        instance.gpu_util_percent = 0.0
+        instance.gpu_memory_util_percent = 0.0
+        instance.gpu_devices = []
+        instance.network_metric = {}
+        instance.last_updated = time.time()
+        self._ensure_distserve_state_locked()
+        self._distserve_reservations["prefill"].pop(instance.instance_ip, None)
+        self._distserve_reservations["decode"].pop(instance.instance_ip, None)
+
     def mark_instance_offline(self, instance_ip: str) -> bool:
         with self._data_lock:
-            if instance_ip not in self._instance_table:
+            instance = self._instance_table.get(instance_ip)
+            if instance is None:
                 return False
-
-            instance = self._instance_table[instance_ip]
-            instance.online = False
-            instance.running_reqs = 0
-            instance.waiting_reqs = 0
-            instance.prompt_throughput = 0.0
-            instance.generate_throughput = 0.0
-            instance.kv_cache_usage_percent = 0.0
-            instance.gpu_util_percent = 0.0
-            instance.gpu_memory_util_percent = 0.0
-            instance.gpu_devices = []
-            instance.network_metric = {}
-            instance.last_updated = time.time()
-            self._ensure_distserve_state_locked()
-            self._distserve_reservations["prefill"].pop(instance_ip, None)
-            self._distserve_reservations["decode"].pop(instance_ip, None)
+            self._mark_instance_offline_locked(instance)
             return True
+
+    def expire_stale_instances(self, now: Optional[float] = None) -> List[tuple[str, str, float]]:
+        """Atomically mark expired proxies offline and return their identities."""
+        current = time.monotonic() if now is None else float(now)
+        ttl = max(0.0, float(getattr(self, "INSTANCE_HEARTBEAT_TTL_SEC", 30.0)))
+        expired = []
+        with self._data_lock:
+            for instance_ip, instance in self._instance_table.items():
+                heartbeat = getattr(instance, "last_heartbeat_monotonic", None)
+                if not instance.online:
+                    continue
+                age = float("inf") if heartbeat is None else current - float(heartbeat)
+                if age < ttl:
+                    continue
+                self._mark_instance_offline_locked(instance)
+                expired.append((instance.role, instance_ip, age))
+        return expired
 
 
     def get_compute_params(self):
@@ -656,21 +830,22 @@ class GatewayStoreManager:
         """获取池负载状态, 目前取值所有实例的当前prompt throughput"""
         # import random
         # return round(random.uniform(0.1, 0.8), 2)
-        load = 0
-        for _, instance in self.instance_table.items():
-            prompt_throughput = instance.prompt_throughput
-            load += prompt_throughput
-        return load
+        with self._data_lock:
+            return sum(
+                self._instance_table[instance_ip].prompt_throughput
+                for instance_ip in self._prefill_objs
+                if self._instance_is_schedulable_locked(instance_ip, "prefill")
+            )
 
     def get_decode_load(self):
         """获取 Decode 池当前所有未完成请求总数。"""
-        running_reqs = 0
-        for instance_ip in self.active_decode_objs:
-            instance = self.instance_table.get(instance_ip)
-            if instance:
-                running_reqs += max(0, int(instance.running_reqs))
-                running_reqs += max(0, int(instance.waiting_reqs))
-        return running_reqs
+        with self._data_lock:
+            return sum(
+                max(0, int(self._instance_table[instance_ip].running_reqs))
+                + max(0, int(self._instance_table[instance_ip].waiting_reqs))
+                for instance_ip in self._decode_objs
+                if self._instance_is_schedulable_locked(instance_ip, "decode")
+            )
 
     def get_max_decode_req_num(self):
         """获取 Decode 池级最大 running requests 数。"""
@@ -678,7 +853,7 @@ class GatewayStoreManager:
 
     def get_predicted_availability(self, instance_ip: str) -> float:
         """Get the scheduler's predicted available time for an instance."""
-        with self._lock:
+        with self._data_lock:
             instance = self._instance_table.get(instance_ip)
             if not instance:
                 return 0.0
@@ -686,7 +861,7 @@ class GatewayStoreManager:
 
     def update_predicted_availability(self, instance_ip: str, predicted_time: float):
         """Update the scheduler-owned predicted availability timeline."""
-        with self._lock:
+        with self._data_lock:
             instance = self._instance_table.get(instance_ip)
             if not instance:
                 return False
@@ -696,7 +871,7 @@ class GatewayStoreManager:
 
     def get_real_availability(self, instance_ip: str) -> float:
         """Get the latest observed real available time for an instance."""
-        with self._lock:
+        with self._data_lock:
             instance = self._instance_table.get(instance_ip)
             if not instance:
                 return 0.0
@@ -710,7 +885,7 @@ class GatewayStoreManager:
         If reality is earlier, keep the predicted timeline so planned batches are
         not accidentally marked as free.
         """
-        with self._lock:
+        with self._data_lock:
             instance = self._instance_table.get(instance_ip)
             if not instance:
                 return False

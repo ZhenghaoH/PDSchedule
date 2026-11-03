@@ -3,9 +3,13 @@ import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 import threading
-import time
 
-from coord.gateway.up_store import prefill_compute_register, prefill_compute_update, prefill_compute_unregister, network_update
+from coord.gateway.registration import (
+    run_gateway_management_loop,
+    run_instance_expiry_loop,
+    wait_for_first_registration,
+)
+from coord.gateway.up_store import prefill_compute_unregister
 from store.gateway.manager import GatewayStoreManager
 
 from pdschedule.profiling.TTFT_predictor.prefill_predictor import (
@@ -51,23 +55,10 @@ def silence_heartbeat_logs():
 
 
 storage = GatewayStoreManager()
-LOOP_TASK_TIME = storage.LOOP_TASK_TIME
 
 # 任务停止事件
 stop_event = threading.Event()
 ttft_warmup_task = None
-
-
-def compute_update_loop_task():
-    while not stop_event.is_set():
-        prefill_compute_update()
-        time.sleep(LOOP_TASK_TIME)
-
-
-def network_update_loop_task():
-    while not stop_event.is_set():
-        network_update()
-        time.sleep(LOOP_TASK_TIME)
 
 
 def _parse_host_port(addr: str):
@@ -140,53 +131,74 @@ async def lifespan(api: FastAPI):
     # 配置日志过滤器，屏蔽心跳接口的访问日志
     silence_heartbeat_logs()
 
-    # 初始化阶段，向全局调度器注册
     global stop_event, ttft_warmup_task
-    while not prefill_compute_register():
-        time.sleep(LOOP_TASK_TIME)
-    update_thread1 = threading.Thread(target=compute_update_loop_task, daemon=True)
-    update_thread2 = threading.Thread(target=network_update_loop_task, daemon=True)
-    update_thread1.start()
-    update_thread2.start()
-
-    if storage.TTFT_WARMUP_ENABLED:
-        ttft_warmup_task = asyncio.create_task(run_ttft_warmup_task())
-        logging.info("[TTFT Predictor] Background warmup task scheduled.")
-
-    logging.info("准备启动 RequestBatcher...")
+    stop_event = threading.Event()
+    registered_event = threading.Event()
+    management_thread = threading.Thread(
+        target=run_gateway_management_loop,
+        args=(
+            "prefill",
+            stop_event,
+            registered_event,
+            storage.LOOP_TASK_TIME,
+            storage.REGISTRATION_RETRY_MAX_INTERVAL_SEC,
+            storage,
+        ),
+        name="prefill-controller-management",
+        daemon=True,
+    )
+    expiry_thread = threading.Thread(
+        target=run_instance_expiry_loop,
+        args=(stop_event, storage),
+        name="prefill-instance-expiry",
+        daemon=True,
+    )
+    management_thread.start()
+    expiry_thread.start()
     try:
-        await request_batcher.start()
-        logging.info(f"✅ RequestBatcher 启动成功，当前策略: {request_batcher.scheduler_mgr.strategy}")
-        logging.info(f"   - 分发策略: {request_batcher.dispatch_policy}")
-        logging.info(f"   - 性能分析模式: {'开启' if request_batcher.profile_mode else '关闭'}")
-    except Exception as e:
-        logging.error(f"!!! RequestBatcher 启动失败: {str(e)}")
+        if not await wait_for_first_registration(
+            registered_event, stop_event, management_thread
+        ):
+            raise RuntimeError("Prefill Gateway stopped before Controller registration")
 
-    logging.info("[Gateway] startup: 初始化完成，监听服务中")
+        if storage.TTFT_WARMUP_ENABLED:
+            ttft_warmup_task = asyncio.create_task(run_ttft_warmup_task())
+            logging.info("[TTFT Predictor] Background warmup task scheduled.")
 
-    # 这里 yield 之后是正常服务期
-    yield
-
-    # shutdown 阶段，如果后面有资源要清理，可以写在这里
-    stop_event.set()
-    if ttft_warmup_task is not None and not ttft_warmup_task.done():
-        ttft_warmup_task.cancel()
+        logging.info("Preparing RequestBatcher...")
         try:
-            await ttft_warmup_task
-        except asyncio.CancelledError:
-            logging.info("[TTFT Predictor] Background warmup task stopped.")
-    ttft_warmup_task = None
-    storage.clear_ttft_predictor()
+            await request_batcher.start()
+            logging.info(
+                "RequestBatcher started; strategy=%s dispatch=%s profile=%s",
+                request_batcher.scheduler_mgr.strategy,
+                request_batcher.dispatch_policy,
+                request_batcher.profile_mode,
+            )
+        except Exception as exc:
+            logging.error("RequestBatcher startup failed: %s", exc)
 
-    logging.info("Prefill Proxy 关闭，清理资源...")
+        logging.info("[Gateway] Prefill startup complete; listening for requests")
+        yield
+    finally:
+        stop_event.set()
+        await asyncio.to_thread(management_thread.join, 6.0)
+        await asyncio.to_thread(expiry_thread.join, 2.0)
+        if management_thread.is_alive() or expiry_thread.is_alive():
+            logging.warning("[Gateway] Prefill management workers did not exit within the shutdown bound")
 
-    # 关闭RequestBatcher
-    logging.info("准备关闭 RequestBatcher...")
-    try:
-        await request_batcher.shutdown()
-        logging.info("✅ RequestBatcher 已成功关闭")
-    except Exception as e:
-        logging.error(f"!!! RequestBatcher 关闭失败: {str(e)}")
+        if ttft_warmup_task is not None and not ttft_warmup_task.done():
+            ttft_warmup_task.cancel()
+            try:
+                await ttft_warmup_task
+            except asyncio.CancelledError:
+                logging.info("[TTFT Predictor] Background warmup task stopped.")
+        ttft_warmup_task = None
+        storage.clear_ttft_predictor()
 
-    prefill_compute_unregister()
-    logging.info("[Gateway] shutdown: 结束服务")
+        try:
+            await request_batcher.shutdown()
+        except Exception as exc:
+            logging.error("RequestBatcher shutdown failed: %s", exc)
+
+        await asyncio.to_thread(prefill_compute_unregister)
+        logging.info("[Gateway] Prefill shutdown complete")

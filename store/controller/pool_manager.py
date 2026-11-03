@@ -108,7 +108,8 @@ class PoolManager:
                       capacity: float,
                       max_prompt_throughput: float = None,
                       max_decode_req_num: int = 128,
-                      connector: Optional[Dict] = None) -> int:
+                      connector: Optional[Dict] = None,
+                      gpu_type: str = "") -> int:
         """
         注册或更新资源池
         返回分配的池ID
@@ -130,9 +131,13 @@ class PoolManager:
                 pool_obj.last_updated = current_time
                 if connector is not None:
                     pool_obj.connector = dict(connector)
+                pool_obj.GPU_type = str(gpu_type)
                 
                 if Pool_type == PoolType.PREFILL:
                     pool_obj.flops = capacity
+                    pool_obj.max_prompt_throughput = max(
+                        0.0, float(max_prompt_throughput or 0.0)
+                    )
                     print(f"[Manager] Info: {type_key} Pool {existing_pool_id} flops updated to {capacity}.")
                 elif Pool_type == PoolType.DECODE:
                     pool_obj.mem_bandwidth = capacity
@@ -160,14 +165,14 @@ class PoolManager:
                 new_Pool = PrefillPool(
                     pool_id=new_pool_id, proxy_ip_address=ip, proxy_port=port,
                     last_updated=current_time, flops=capacity, max_prompt_throughput=max_prompt_throughput,
-                    connector=dict(connector or {})
+                    connector=dict(connector or {}), GPU_type=str(gpu_type)
                 )
             elif Pool_type == PoolType.DECODE:
                 new_Pool = DecodePool(
                     pool_id=new_pool_id, proxy_ip_address=ip, proxy_port=port,
                     last_updated=current_time, mem_bandwidth=capacity,
                     max_decode_req_num=max(1, int(max_decode_req_num)),
-                    connector=dict(connector or {})
+                    connector=dict(connector or {}), GPU_type=str(gpu_type)
                 )
             else:
                 return -1
@@ -223,6 +228,83 @@ class PoolManager:
             pool.current_load = normalized_load
             pool.last_updated = time.time()
             return True
+
+    def update_bound_pool_status(
+        self,
+        pool_type: PoolType,
+        pool_id: int,
+        proxy_ip_address: str,
+        proxy_port: int,
+        current_load: Optional[float] = None,
+        running_reqs: Optional[int] = None,
+        max_decode_req_num: Optional[int] = None,
+    ) -> str:
+        """Check a Gateway identity and update it under one Pool lock.
+
+        Results are ``updated``, ``not_found`` or ``binding_conflict``.
+        """
+        with self.db_lock:
+            pool = self._pools[pool_type.value].get(pool_id)
+            if pool is None:
+                return "not_found"
+            if (
+                pool.proxy_ip_address != proxy_ip_address
+                or pool.proxy_port != proxy_port
+            ):
+                return "binding_conflict"
+
+            if pool_type == PoolType.PREFILL:
+                if current_load is None:
+                    return "invalid"
+                capacity = max(0.0, float(getattr(pool, "max_prompt_throughput", 0.0)))
+                pool.current_load = (
+                    max(0.0, float(current_load)) / capacity if capacity > 0 else 0.0
+                )
+            elif running_reqs is not None:
+                safe_running_reqs = max(0, int(running_reqs))
+                safe_max = max(
+                    1,
+                    int(
+                        max_decode_req_num
+                        if max_decode_req_num is not None
+                        else getattr(pool, "max_decode_req_num", 128)
+                    ),
+                )
+                pool.running_reqs = safe_running_reqs
+                pool.max_decode_req_num = safe_max
+                pool.current_load = min(max(safe_running_reqs / safe_max, 0.0), 1.0)
+            elif current_load is not None:
+                pool.current_load = min(max(float(current_load), 0.0), 1.0)
+            else:
+                return "invalid"
+
+            pool.last_updated = time.time()
+            return "updated"
+
+    def unregister_bound_pool(
+        self,
+        pool_type: PoolType,
+        pool_id: int,
+        proxy_ip_address: str,
+        proxy_port: int,
+    ) -> str:
+        """Check a Gateway identity and remove its Pool under one Pool lock."""
+        with self.db_lock:
+            target_storage = self._pools[pool_type.value]
+            pool = target_storage.get(pool_id)
+            if pool is None:
+                return "not_found"
+            if (
+                pool.proxy_ip_address != proxy_ip_address
+                or pool.proxy_port != proxy_port
+            ):
+                return "binding_conflict"
+            target_storage.pop(pool_id)
+            index_key = (pool_type.value, pool.proxy_ip_address, pool.proxy_port)
+            if self._ip_index.get(index_key) == pool_id:
+                self._ip_index.pop(index_key, None)
+            print(f"[Manager] {pool_type.value.capitalize()} Pool {pool_id} unregistered.")
+            return "unregistered"
 
     def unregister_Pool(self, Pool_type: PoolType, pool_id: int) -> bool:
         """注销资源池，只删除对应类型和 ID 的池记录。"""

@@ -170,6 +170,11 @@ async def _handle_pd_request(request: BaseRequest, endpoint_type: str):
         selected_prefill = await _select_prefill_instance(storage, request)
         try:
             _bind_prefill_connector(storage, request, selected_prefill)
+            if not storage.is_instance_schedulable(selected_prefill, "prefill"):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Selected prefill instance is no longer active",
+                )
 
             connector_manager = get_connector_manager()
             prefill_payload = connector_manager.build_prefill_payload(request)
@@ -212,6 +217,12 @@ async def _handle_non_pd_request(request: BaseRequest, endpoint_type: str):
         return StreamingResponse(batch_result["generator"])
 
     selected_prefill = await _select_prefill_instance(storage, request)
+    if not storage.is_instance_schedulable(selected_prefill, "prefill"):
+        request_batcher.scheduler_mgr.on_request_finished(request)
+        raise HTTPException(
+            status_code=503,
+            detail="Selected prefill instance is no longer active",
+        )
     request_payload = BaseRequest.to_vllm_payload(request)
     try:
         forwarded = forward_request(

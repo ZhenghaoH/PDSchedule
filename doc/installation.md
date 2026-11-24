@@ -155,7 +155,7 @@ The full CPU suite includes these checks; see [test/README.md](../test/README.md
 
 ## Ascend 910B deployment example
 
-For a two-node Ascend 910B deployment using vLLM-Ascend and Mooncake P2P, see the [integration guide](integrations/ascend.md) and [example configuration and scripts](../examples/ascend/README.md). Install the required Ascend runtime and backend in the target environment; the full chain using the new registration name has not yet been validated on hardware.
+For a two-node Ascend 910B deployment using vLLM-Ascend and Mooncake P2P, see the [integration guide](integrations/ascend.md) and [example configuration and scripts](../examples/ascend/README.md). Install the required Ascend runtime and backend in the target environment.
 
 ## Installation troubleshooting
 

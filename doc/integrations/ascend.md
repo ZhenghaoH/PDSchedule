@@ -135,17 +135,6 @@ transfer. Check the selected pools and instances and a positive Decode
 transfer byte count for the same request. If component IDs differ, correlate
 them using the logged mapping; do not combine records from different runs.
 
-## Validation status
-
-What has been observed on Ascend hardware so far is a direct vLLM prefill and
-decode transfer, with the decode engine logging transferred bytes, plus NPU MAC
-TX and RoCE packet counters on the sending node. That is backend evidence.
-
-The full Controller-driven chain has not been demonstrated under the
-`mooncake_p2p_ascend` registration name. Until it is, describe the deployment
-as "PDSchedule on Ascend with MooncakeConnectorV1", not as a validated
-PDSchedule-on-Ascend run.
-
 ## Troubleshooting
 
 | Symptom | Check |

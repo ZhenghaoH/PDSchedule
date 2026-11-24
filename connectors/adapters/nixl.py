@@ -21,13 +21,13 @@ class NixlAdapter:
         if metadata:
             for key in ("side_channel_host", "side_channel_port", "tp_size"):
                 if key not in metadata:
-                    raise ValueError(f"nixl connector metadata requires {key}")
+                    raise ValueError(f"{self.name} connector metadata requires {key}")
             if not str(metadata["side_channel_host"]).strip():
-                raise ValueError("nixl side_channel_host is required")
+                raise ValueError(f"{self.name} side_channel_host is required")
             metadata["side_channel_port"] = int(metadata["side_channel_port"])
             metadata["tp_size"] = int(metadata["tp_size"])
             if metadata["side_channel_port"] <= 0 or metadata["tp_size"] <= 0:
-                raise ValueError("nixl side_channel_port and tp_size must be positive")
+                raise ValueError(f"{self.name} side_channel_port and tp_size must be positive")
         return ConnectorDescriptor(self.name, descriptor.version, metadata)
 
     def compatible(self, prefill, decode):
@@ -39,9 +39,9 @@ class NixlAdapter:
         normalized = self.validate_descriptor(descriptor)
         pool = self.validate_descriptor(pool_descriptor)
         if not self.compatible(normalized, pool):
-            raise ValueError("nixl instance connector does not match its pool")
+            raise ValueError(f"{self.name} instance connector does not match its pool")
         if not normalized.metadata:
-            raise ValueError("nixl instances require side-channel connector metadata")
+            raise ValueError(f"{self.name} instances require side-channel connector metadata")
         return normalized
 
     def compatible_endpoints(self, prefill_endpoint, decode_endpoint):
@@ -139,7 +139,7 @@ class NixlAdapter:
         if not isinstance(params, dict) or not params:
             raise HTTPException(
                 status_code=503,
-                detail="Missing NIXL kv_transfer_params before Decode",
+                detail=f"Missing {self.name} kv_transfer_params before Decode",
             )
         payload = BaseRequest.to_vllm_payload(request)
         payload["kv_transfer_params"] = params

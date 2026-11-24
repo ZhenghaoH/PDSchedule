@@ -1,0 +1,2 @@
+# Local deployment values (addresses, paths, container name) stay out of git.
+config.env

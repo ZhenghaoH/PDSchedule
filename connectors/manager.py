@@ -6,6 +6,7 @@ import uuid
 from typing import Any, Dict, Mapping, Optional
 
 from connectors.adapters import LMCacheAdapter, NixlAdapter
+from connectors.adapters.mooncake_p2p_ascend import MooncakeP2PAdapter
 from connectors.models import ConnectorDescriptor, ConnectorSessionState
 from connectors.registry import ConnectorRegistry
 
@@ -13,7 +14,7 @@ from connectors.registry import ConnectorRegistry
 class ConnectorManager:
     def __init__(self, registry: Optional[ConnectorRegistry] = None):
         self.registry = registry or ConnectorRegistry(
-            (NixlAdapter(), LMCacheAdapter())
+            (NixlAdapter(), LMCacheAdapter(), MooncakeP2PAdapter())
         )
         self._sessions: Dict[str, Any] = {}
         self._lock = threading.RLock()

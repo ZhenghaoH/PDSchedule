@@ -108,7 +108,7 @@ def parse_args():
     parser.add_argument("--registration-retry-max-interval-sec", type=positive_seconds, default=REGISTRATION_RETRY_MAX_INTERVAL_SEC)
     parser.add_argument(
         "--connector-name",
-        choices=["nixl", "lmcache"],
+        choices=["nixl", "lmcache", "mooncake_p2p_ascend"],
         default="nixl",
     )
     parser.add_argument("--connector-version", default="1")

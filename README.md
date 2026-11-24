@@ -173,6 +173,8 @@ PDSchedule provides a complete NIXL-based deployment with real vLLM services. Ea
 
 For a Windows local control plane without GPU inference, use the [Python 3.13 runbook](doc/local_windows_p313.md). It does not run a model request or transfer KV data.
 
+For an Ascend 910B two-node Mooncake P2P deployment example, see the [Ascend integration guide](doc/integrations/ascend.md) and [example configuration and scripts](examples/ascend/README.md). The full chain using the new registration name has not yet been validated on hardware.
+
 Start with the 1P/1D flow below to check the transfer path. For global policy selection, follow the [four-GPU 2P/2D deployment](doc/multi_pool.md), then [calibrate predictors and enable SLO policies](doc/slo.md). The SLO guide also provides an eight-GPU, two-Instances-per-Pool extension for local placement decisions.
 
 The host and container paths are:

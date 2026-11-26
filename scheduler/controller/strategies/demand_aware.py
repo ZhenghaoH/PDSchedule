@@ -1,7 +1,6 @@
 import bisect
 import math
 import pickle
-import time
 import warnings
 from collections import deque
 from dataclasses import dataclass
@@ -9,12 +8,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-import numpy as np
 from pdschedule.paths import controller_log_file, profile_root, runtime_root
 
 from store.controller.network import Network
 from store.controller.pool_base import DecodePool, PrefillPool
-from utils.kv_transfer import estimate_qwen25_7b_kv_transfer_bytes, estimate_transfer_time_ms
+from utils.kv_transfer import (
+    estimate_qwen25_7b_kv_transfer_bytes,
+    estimate_transfer_time_ms,
+)
 from scheduler.controller.resource_state import ResourceSnapshot
 from scheduler.controller.strategy import (
     GlobalScheduleContext,
@@ -25,7 +26,6 @@ from scheduler.controller.strategy import (
 PROJECT_ROOT = runtime_root()
 GLOBAL_SCHEDULE_LOG_PATH = controller_log_file(PROJECT_ROOT / "global_schedule.log")
 PROFILE_ROOT = profile_root() / "controller"
-
 
 def _emit_debug_log(text: str) -> None:
     print(text)
@@ -51,6 +51,15 @@ def _format_float(value, digits: int = 4) -> str:
         return f"{float(value):.{digits}f}"
     except Exception:
         return str(value)
+
+
+def _finite_or_none(value) -> Optional[float]:
+    """把缺失或非有限的观测归一成 None，供感知日志标 N/A。"""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
 
 
 def _variance(values: List[float]) -> float:
@@ -128,11 +137,8 @@ class DemandAwareStrategy:
         ability_weight: float = 0.8,
         load_weight: float = 0.2,
     ):
-        self.num_particles = num_particles
-        self.max_iterations = max_iterations
-        self.w_inertia = 0.5
-        self.c1 = 1.4
-        self.c2 = 1.4
+        # num_particles / max_iterations 仅为兼容既有调用方保留，选路不再使用。
+        del num_particles, max_iterations
         self.ability_weight = ability_weight
         self.load_weight = load_weight
         self.prompt_ranker = RequestRanker(window_size=2000)
@@ -168,34 +174,33 @@ class DemandAwareStrategy:
             bandwidth,
         )
 
-    def _network_time_bounds(
+    def _compatible_network_time_bounds_ms(
         self,
         token_length: int,
         compress_factor: float,
-        prefill_pools: List[PrefillPool],
-        decode_pools: List[DecodePool],
+        compatible_ids: Set[Tuple[int, int]],
         network_map: Dict[Tuple[int, int], Network],
     ) -> Tuple[float, float]:
-        times = []
-        for p_node in prefill_pools:
-            for d_node in decode_pools:
-                net = network_map.get((p_node.pool_id, d_node.pool_id))
-                net_time = self._network_time_ms(token_length, compress_factor, net)
-                if math.isfinite(net_time):
-                    times.append(net_time)
-        if not times:
-            return 0.0, 0.0
-        return min(times), max(times)
+        """本轮合法候选池对的基础网络估时 (T_min, T_max)，不含预约等待；无有效估时返回 (inf, inf)。"""
+        times = [
+            self._network_time_ms(token_length, compress_factor, network_map[pair])
+            for pair in compatible_ids
+        ]
+        valid = [net_time for net_time in times if math.isfinite(net_time) and net_time >= 0.0]
+        if not valid:
+            return math.inf, math.inf
+        return min(valid), max(valid)
 
-    def _network_capacity_rank(self, selected_time: float, min_time: float, max_time: float) -> float:
-        if not math.isfinite(selected_time):
-            return 0.01
-        denominator = max_time - min_time
-        if denominator <= 1e-9:
-            normalized = 0.0
-        else:
-            normalized = (selected_time - min_time) / denominator
-        return _clamp(1.0 - normalized, 0.01, 0.99)
+    def _network_match_loss(self, selected_time: float, min_time: float, max_time: float) -> float:
+        """式 (12)：候选网络估时在本次请求内的 min–max 归一化，0 为本次最快，1 为本次最慢。"""
+        if not math.isfinite(selected_time) or selected_time < 0.0:
+            return 1.0
+        if not math.isfinite(min_time) or not math.isfinite(max_time):
+            return 1.0
+        span = max_time - min_time
+        if span <= 0.0:
+            return 0.0
+        return _clamp((selected_time - min_time) / span)
 
     def _network_load(self, net: Optional[Network]) -> float:
         if net is None:
@@ -338,24 +343,28 @@ class DemandAwareStrategy:
         network_map: Dict[Tuple[int, int], Network],
         p_rank_map: Dict[int, float],
         d_rank_map: Dict[int, float],
-        min_net_time_ms: float,
-        max_net_time_ms: float,
+        net_time_bounds_ms: Tuple[float, float],
     ) -> Dict[str, float]:
         net = network_map.get((p_node.pool_id, d_node.pool_id))
         net_time_ms = self._network_time_ms(token_length, compress_factor, net)
-        network_rank = self._network_capacity_rank(net_time_ms, min_net_time_ms, max_net_time_ms)
+        net_min_ms, net_max_ms = net_time_bounds_ms
 
-        p_time_ms, p_time_source = self._estimate_prefill_time_ms(token_length, p_node)
-        d_time_ms, d_time_source = self._estimate_decode_time_ms(max_tokens, token_length, d_node)
-        safe_net_time = max(0.0, net_time_ms if math.isfinite(net_time_ms) else 1e9)
-        e2e_est_ms = max(p_time_ms + safe_net_time + d_time_ms, 1e-9)
-        alpha_p = p_time_ms / e2e_est_ms
-        alpha_n = safe_net_time / e2e_est_ms
-        alpha_d = d_time_ms / e2e_est_ms
+        # 三阶段动态权重：P、网络、D 估时各占端到端估时的比重。
+        prefill_time_ms, prefill_time_source = self._estimate_prefill_time_ms(token_length, p_node)
+        decode_time_ms, decode_time_source = self._estimate_decode_time_ms(
+            max_tokens,
+            token_length,
+            d_node,
+        )
+        safe_net_time_ms = max(0.0, net_time_ms if math.isfinite(net_time_ms) else 1e9)
+        e2e_est_ms = max(prefill_time_ms + safe_net_time_ms + decode_time_ms, 1e-9)
+        alpha_p = prefill_time_ms / e2e_est_ms
+        alpha_n = safe_net_time_ms / e2e_est_ms
+        alpha_d = decode_time_ms / e2e_est_ms
 
         p_loss = _capacity_loss(p_rank_map.get(p_node.pool_id, 0.5), prompt_rank)
         d_loss = _capacity_loss(d_rank_map.get(d_node.pool_id, 0.5), decode_rank)
-        n_loss = _capacity_loss(network_rank, prompt_rank)
+        n_loss = self._network_match_loss(net_time_ms, net_min_ms, net_max_ms)
         ability_loss = alpha_p * p_loss + alpha_n * n_loss + alpha_d * d_loss
 
         p_delta = _clamp(token_length / max(1.0, self._max_prompt_tokens(p_node)[0]))
@@ -396,11 +405,12 @@ class DemandAwareStrategy:
             "alpha_n": alpha_n,
             "alpha_d": alpha_d,
             "network_time_ms": net_time_ms,
-            "network_rank": network_rank,
-            "prefill_time_ms": p_time_ms,
-            "prefill_time_source": p_time_source,
-            "decode_time_ms": d_time_ms,
-            "decode_time_source": d_time_source,
+            "network_time_min_ms": net_min_ms,
+            "network_time_max_ms": net_max_ms,
+            "prefill_time_ms": prefill_time_ms,
+            "prefill_time_source": prefill_time_source,
+            "decode_time_ms": decode_time_ms,
+            "decode_time_source": decode_time_source,
             "prefill_var": prefill_var,
             "decode_var": decode_var,
             "network_var": network_var,
@@ -411,148 +421,67 @@ class DemandAwareStrategy:
             "d_rank": d_rank_map.get(d_node.pool_id, 0.5),
         }
 
-    def _calculate_fitness(
-        self,
-        particle_pos: np.ndarray,
-        token_length: int,
-        max_tokens: int,
-        prompt_rank: float,
-        decode_rank: float,
-        compress_factor: float,
-        prefill_pools: List[PrefillPool],
-        decode_pools: List[DecodePool],
-        network_map: Dict[Tuple[int, int], Network],
-        p_rank_map: Dict[int, float],
-        d_rank_map: Dict[int, float],
-        min_net_time_ms: float,
-        max_net_time_ms: float,
-    ) -> float:
-        p_idx = int(np.floor(particle_pos[0])) % len(prefill_pools)
-        d_idx = int(np.floor(particle_pos[1])) % len(decode_pools)
-        p_node = prefill_pools[p_idx]
-        d_node = decode_pools[d_idx]
-        if (p_node.pool_id, d_node.pool_id) not in network_map:
-            return 1e9
-        return self._adaptive_variance_components(
-            token_length,
-            max_tokens,
-            prompt_rank,
-            decode_rank,
-            compress_factor,
-            p_node,
-            d_node,
-            prefill_pools,
-            decode_pools,
-            network_map,
-            p_rank_map,
-            d_rank_map,
-            min_net_time_ms,
-            max_net_time_ms,
-        )["fitness"]
-
     def _emit_debug_info(
         self,
         request_id: Optional[int],
-        token_length: int,
-        max_tokens: int,
-        max_tokens_fallback: bool,
-        slo_ttft: float,
-        slo_tpot: float,
-        compress_factor: float,
-        prompt_rank: float,
-        decode_rank: float,
-        prefill_pools: List[PrefillPool],
-        decode_pools: List[DecodePool],
-        network_map: Dict[Tuple[int, int], Network],
-        p_rank_map: Dict[int, float],
-        d_rank_map: Dict[int, float],
-        min_net_time_ms: float,
-        max_net_time_ms: float,
-        selected_p: PrefillPool,
-        selected_d: DecodePool,
-        selected_components: Dict[str, float],
+        resources: ResourceSnapshot,
     ) -> None:
+        """只输出快照中的池与链路感知状态，不输出候选分数或预约量。"""
+        captured_at = datetime.fromtimestamp(
+            float(getattr(resources, "captured_at", 0.0) or 0.0)
+        ).isoformat(timespec="seconds")
         lines = [
             "+" * 100,
-            "[DemandAwareStrategy] 全局调度调试信息",
-            "+" * 100,
-            f"日志时间: {datetime.now().isoformat(timespec='seconds')}",
-            f"Request_ID: {request_id if request_id is not None else 'N/A'}",
-            f"prompt_tokens: {token_length}",
-            f"max_tokens: {max_tokens}",
-            f"max_tokens_fallback: {'YES' if max_tokens_fallback else 'NO'}",
-            f"prompt_rank: {_format_float(prompt_rank)}",
-            f"decode_rank: {_format_float(decode_rank)}",
-            f"SLO_TTFT: {slo_ttft} ms",
-            f"SLO_TPOT: {slo_tpot} ms",
-            f"compress_factor: {compress_factor}",
-            "-" * 100,
-            "候选pair分解:",
+            "[DemandAwareStrategy] 调度感知状态",
             (
-                "Pair | p_time_ms | p_time_src | d_time_ms | d_time_src | "
-                "p_rank | d_rank | net_rank | p_loss | d_loss | n_loss | "
-                "alpha_p | alpha_n | alpha_d | ability | load | fitness | "
-                "p_load_after | d_load_after | n_load_after"
+                f"snapshot: v{getattr(resources, 'version', 0)} captured_at={captured_at} "
+                f"pools={len(resources.prefill_pools)}P/"
+                f"{len(resources.decode_pools)}D "
+                f"pairs={len(resources.compatible_pairs)}"
             ),
+            f"request_id: {request_id if request_id is not None else 'N/A'}",
+            "-" * 100,
         ]
 
-        for p_node in prefill_pools:
-            for d_node in decode_pools:
-                if (p_node.pool_id, d_node.pool_id) not in network_map:
-                    continue
-                comp = self._adaptive_variance_components(
-                    token_length,
-                    max_tokens,
-                    prompt_rank,
-                    decode_rank,
-                    compress_factor,
-                    p_node,
-                    d_node,
-                    prefill_pools,
-                    decode_pools,
-                    network_map,
-                    p_rank_map,
-                    d_rank_map,
-                    min_net_time_ms,
-                    max_net_time_ms,
-                )
-                lines.append(
-                    f"P{p_node.pool_id}->D{d_node.pool_id} | "
-                    f"{_format_float(comp['prefill_time_ms'])} | {comp['prefill_time_source']} | "
-                    f"{_format_float(comp['decode_time_ms'])} | {comp['decode_time_source']} | "
-                    f"{_format_float(comp['p_rank'])} | {_format_float(comp['d_rank'])} | "
-                    f"{_format_float(comp['network_rank'])} | "
-                    f"{_format_float(comp['p_loss'])} | {_format_float(comp['d_loss'])} | {_format_float(comp['n_loss'])} | "
-                    f"{_format_float(comp['alpha_p'])} | {_format_float(comp['alpha_n'])} | {_format_float(comp['alpha_d'])} | "
-                    f"{_format_float(comp['ability_loss'])} | {_format_float(comp['load_loss'])} | {_format_float(comp['fitness'])} | "
-                    f"{_format_float(comp['prefill_load_after'])} | {_format_float(comp['decode_load_after'])} | "
-                    f"{_format_float(comp['network_load_after'])}"
-                )
+        for pool in resources.prefill_pools:
+            capacity = _finite_or_none(getattr(pool, "max_prompt_throughput", None))
+            load = _finite_or_none(getattr(pool, "current_load", None))
+            prompt_tps = (
+                load * capacity
+                if load is not None and capacity is not None and capacity > 0.0
+                else None
+            )
+            lines.append(
+                f"P{pool.pool_id} {pool.proxy_ip_address}:{pool.proxy_port} "
+                f"prompt_tps={_format_float(prompt_tps, 1)}"
+            )
 
-        lines.extend(
-            [
-                "-" * 100,
-                "最终选择:",
-                (
-                    f"selected_prefill=P{selected_p.pool_id} "
-                    f"({selected_p.proxy_ip_address}:{selected_p.proxy_port})"
-                ),
-                (
-                    f"selected_decode=D{selected_d.pool_id} "
-                    f"({selected_d.proxy_ip_address}:{selected_d.proxy_port})"
-                ),
-                f"selected_fitness: {_format_float(selected_components['fitness'])}",
-                f"selected_ability_loss: {_format_float(selected_components['ability_loss'])}",
-                f"selected_load_loss: {_format_float(selected_components['load_loss'])}",
-                f"selected_prefill_time_ms: {_format_float(selected_components['prefill_time_ms'])}",
-                f"selected_prefill_time_source: {selected_components['prefill_time_source']}",
-                f"selected_decode_time_ms: {_format_float(selected_components['decode_time_ms'])}",
-                f"selected_decode_time_source: {selected_components['decode_time_source']}",
-                "+" * 100,
-                "",
-            ]
-        )
+        for pool in resources.decode_pools:
+            lines.append(
+                f"D{pool.pool_id} {pool.proxy_ip_address}:{pool.proxy_port} "
+                f"running_reqs={int(getattr(pool, 'running_reqs', 0) or 0)} "
+                f"load={_format_float(_finite_or_none(getattr(pool, 'current_load', None)))} "
+                f"gen_tps=N/A"
+            )
+
+        for prefill, decode in resources.compatible_pairs:
+            network = resources.network_map.get((prefill.pool_id, decode.pool_id))
+            if network is None:
+                lines.append(
+                    f"link P{prefill.pool_id}->D{decode.pool_id} "
+                    "bw=N/A peak=N/A rtt=N/A"
+                )
+                continue
+            lines.append(
+                f"link P{prefill.pool_id}->D{decode.pool_id} "
+                f"bw={_format_float(_finite_or_none(getattr(network, 'bandwidth', None)), 1)}Mbps "
+                f"peak={_format_float(_finite_or_none(getattr(network, 'max_bandwidth', None)), 1)}Mbps "
+                f"rtt={_format_float(_finite_or_none(getattr(network, 'rtt', None)), 2)}ms"
+            )
+
+        lines.extend(["-" * 100, ""])
         _emit_debug_log("\n".join(lines))
+
 
     def schedule(
         self,
@@ -561,25 +490,22 @@ class DemandAwareStrategy:
     ) -> GlobalScheduleDecision:
         token_length = context.token_length
         max_tokens = context.max_tokens
-        slo_ttft = context.slo_ttft
-        slo_tpot = context.slo_tpot
         compress_factor = context.compress_factor
         request_id = context.request_id
-        max_tokens_fallback = context.max_tokens_fallback
         prefill_pools = resources.prefill_pools
         decode_pools = resources.decode_pools
         network_map = resources.network_map
-        num_p = len(prefill_pools)
-        num_d = len(decode_pools)
-        if num_p == 0 or num_d == 0:
+        if not prefill_pools or not decode_pools:
             raise ValueError("Empty pools passed to demand_aware schedule")
-        compatible_ids = {
-            (prefill.pool_id, decode.pool_id)
+        candidates = [
+            (prefill, decode)
             for prefill, decode in resources.compatible_pairs
             if (prefill.pool_id, decode.pool_id) in network_map
-        }
-        if not compatible_ids:
-            raise ValueError("No connector-compatible P/D gateway pair with a network")
+        ]
+        if not candidates:
+            raise ValueError(
+                "No connector-compatible P/D gateway pair with a network"
+            )
 
         safe_token_length = max(1, int(token_length or 0))
         safe_max_tokens = max(1, int(max_tokens or safe_token_length))
@@ -589,116 +515,43 @@ class DemandAwareStrategy:
         decode_rank = self.decode_ranker.get_rank(safe_max_tokens)
         p_rank_map = self._calculate_pool_ranks(prefill_pools)
         d_rank_map = self._calculate_pool_ranks(decode_pools)
-        min_net_time_ms, max_net_time_ms = self._network_time_bounds(
+        compatible_ids = {
+            (prefill.pool_id, decode.pool_id) for prefill, decode in candidates
+        }
+        net_time_bounds_ms = self._compatible_network_time_bounds_ms(
             safe_token_length,
             compress_factor,
-            prefill_pools,
-            decode_pools,
+            compatible_ids,
             network_map,
         )
 
-        positions = np.random.rand(self.num_particles, 2)
-        positions[:, 0] *= num_p
-        positions[:, 1] *= num_d
-        compatible_indices = [
-            (p_index, d_index)
-            for p_index, prefill in enumerate(prefill_pools)
-            for d_index, decode in enumerate(decode_pools)
-            if (prefill.pool_id, decode.pool_id) in compatible_ids
-        ]
-        for index, (p_index, d_index) in enumerate(compatible_indices):
-            if index >= self.num_particles:
-                break
-            positions[index] = (p_index + 0.5, d_index + 0.5)
-        velocities = np.random.rand(self.num_particles, 2) * 0.1
-        p_best_pos = positions.copy()
-        p_best_scores = np.full(self.num_particles, np.inf)
-        g_best_pos = positions[0].copy()
-        g_best_score = np.inf
-
-        for _ in range(self.max_iterations):
-            for i in range(self.num_particles):
-                score = self._calculate_fitness(
-                    positions[i],
-                    safe_token_length,
-                    safe_max_tokens,
-                    prompt_rank,
-                    decode_rank,
-                    compress_factor,
-                    prefill_pools,
-                    decode_pools,
-                    network_map,
-                    p_rank_map,
-                    d_rank_map,
-                    min_net_time_ms,
-                    max_net_time_ms,
-                )
-                p_index = int(np.floor(positions[i][0])) % num_p
-                d_index = int(np.floor(positions[i][1])) % num_d
-                if (
-                    prefill_pools[p_index].pool_id,
-                    decode_pools[d_index].pool_id,
-                ) not in compatible_ids:
-                    score = 1e9
-                if score < p_best_scores[i]:
-                    p_best_scores[i] = score
-                    p_best_pos[i] = positions[i].copy()
-                if score < g_best_score:
-                    g_best_score = score
-                    g_best_pos = positions[i].copy()
-
-            r1 = np.random.rand(self.num_particles, 2)
-            r2 = np.random.rand(self.num_particles, 2)
-            velocities = (
-                self.w_inertia * velocities
-                + self.c1 * r1 * (p_best_pos - positions)
-                + self.c2 * r2 * (g_best_pos - positions)
+        # 全量遍历：每个合法池对只评一次，同分保留先出现的候选。
+        selected_p = None
+        selected_d = None
+        best_fitness = None
+        for prefill, decode in candidates:
+            components = self._adaptive_variance_components(
+                safe_token_length,
+                safe_max_tokens,
+                prompt_rank,
+                decode_rank,
+                compress_factor,
+                prefill,
+                decode,
+                prefill_pools,
+                decode_pools,
+                network_map,
+                p_rank_map,
+                d_rank_map,
+                net_time_bounds_ms,
             )
-            positions += velocities
-            positions[:, 0] = np.clip(positions[:, 0], 0, num_p - 1e-6)
-            positions[:, 1] = np.clip(positions[:, 1], 0, num_d - 1e-6)
+            fitness = components["fitness"]
+            if best_fitness is None or fitness < best_fitness:
+                best_fitness = fitness
+                selected_p = prefill
+                selected_d = decode
 
-        best_p_idx = int(np.floor(g_best_pos[0])) % num_p
-        best_d_idx = int(np.floor(g_best_pos[1])) % num_d
-        selected_p = prefill_pools[best_p_idx]
-        selected_d = decode_pools[best_d_idx]
-        selected_components = self._adaptive_variance_components(
-            safe_token_length,
-            safe_max_tokens,
-            prompt_rank,
-            decode_rank,
-            compress_factor,
-            selected_p,
-            selected_d,
-            prefill_pools,
-            decode_pools,
-            network_map,
-            p_rank_map,
-            d_rank_map,
-            min_net_time_ms,
-            max_net_time_ms,
-        )
-        self._emit_debug_info(
-            request_id,
-            safe_token_length,
-            safe_max_tokens,
-            max_tokens_fallback,
-            slo_ttft,
-            slo_tpot,
-            compress_factor,
-            prompt_rank,
-            decode_rank,
-            prefill_pools,
-            decode_pools,
-            network_map,
-            p_rank_map,
-            d_rank_map,
-            min_net_time_ms,
-            max_net_time_ms,
-            selected_p,
-            selected_d,
-            selected_components,
-        )
+        self._emit_debug_info(request_id, resources)
         return GlobalScheduleDecision(
             prefill_address=selected_p.proxy_ip_address,
             prefill_port=selected_p.proxy_port,

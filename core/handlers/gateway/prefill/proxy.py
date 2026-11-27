@@ -21,12 +21,14 @@ LOG_ITEM_SEPARATOR = "-" * 80
 class _PDStageResponse(StreamingResponse):
     """Send internal timings when the Decode gateway returns headers."""
 
-    def __init__(self, decode_stream, prefill_rpc_ms, stream):
+    def __init__(self, decode_stream, prefill_rpc_ms, stream, prefill_instance):
         super().__init__(iter(()))
         self.decode_stream = decode_stream
         self.stream = stream
         if prefill_rpc_ms is not None:
             self.headers["x-pd-prefill-rpc-ms"] = f"{prefill_rpc_ms:.3f}"
+        if prefill_instance:
+            self.headers["x-pd-prefill-instance"] = prefill_instance
 
     async def stream_response(self, send):
         started = False
@@ -42,7 +44,10 @@ class _PDStageResponse(StreamingResponse):
                 })
                 started = True
 
-        async def on_decode_headers():
+        async def on_decode_headers(headers):
+            decode_instance = headers.get("x-pd-decode-instance")
+            if decode_instance:
+                self.headers["x-pd-decode-instance"] = decode_instance
             if self.stream:
                 elapsed_ms = (time.perf_counter() - decode_started) * 1000.0
                 self.headers["x-pd-decode-to-headers-ms"] = f"{elapsed_ms:.3f}"
@@ -250,7 +255,9 @@ async def _handle_pd_request(request: BaseRequest, endpoint_type: str):
             on_success_headers=on_success_headers,
         )
 
-    return _PDStageResponse(decode_stream, prefill_rpc_ms, request.Prompt.stream)
+    return _PDStageResponse(
+        decode_stream, prefill_rpc_ms, request.Prompt.stream, request.Task.prefill_instance
+    )
 
 
 async def _handle_non_pd_request(request: BaseRequest, endpoint_type: str):
@@ -264,7 +271,9 @@ async def _handle_non_pd_request(request: BaseRequest, endpoint_type: str):
             )
         if not batch_result.get("success", True):
             raise HTTPException(status_code=500, detail="Batch processing failed")
-        return StreamingResponse(batch_result["generator"])
+        instance = batch_result.get("instance")
+        headers = {"x-pd-prefill-instance": instance} if instance else None
+        return StreamingResponse(batch_result["generator"], headers=headers)
 
     selected_prefill = await _select_prefill_instance(storage, request)
     if not storage.is_instance_schedulable(selected_prefill, "prefill"):
@@ -286,7 +295,7 @@ async def _handle_non_pd_request(request: BaseRequest, endpoint_type: str):
         forwarded,
         request,
     )
-    return StreamingResponse(generator)
+    return StreamingResponse(generator, headers={"x-pd-prefill-instance": selected_prefill})
 
 
 async def handle_completion_request(raw_request: Request, request: BaseRequest, endpoint_type: str):

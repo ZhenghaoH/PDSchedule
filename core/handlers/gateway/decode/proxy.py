@@ -274,7 +274,9 @@ async def handle_completion_request(raw_request: Request, endpoint_type: str):
                 raise HTTPException(status_code=500, detail=batch_result["error"])
             if not batch_result.get("success", True):
                 raise HTTPException(status_code=500, detail="Batch processing failed")
-            return StreamingResponse(batch_result["generator"], media_type="application/json")
+            instance = batch_result.get("instance")
+            headers = {"x-pd-decode-instance": instance} if instance else None
+            return StreamingResponse(batch_result["generator"], media_type="application/json", headers=headers)
 
         selected_decode = await _select_decode_instance(storage, request)
         if request.Service.Enable_PD_Disaggregation:
@@ -306,7 +308,7 @@ async def handle_completion_request(raw_request: Request, endpoint_type: str):
         except HTTPException as http_exc:
             storage.remove_decode_active_request(selected_decode, request.Request_ID)
             raise http_exc
-        return StreamingResponse(generator)
+        return StreamingResponse(generator, headers={"x-pd-decode-instance": selected_decode})
     except HTTPException:
         if request is not None:
             decode_observer.record_timing(

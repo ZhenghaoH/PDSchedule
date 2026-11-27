@@ -12,6 +12,19 @@ Run the complete [1P/1D guide](../../doc/quickstart_v1.md); use the [2P/2D guide
 
 At `scheduler-cli>`, use `show pool_id`, `show scheduler`, `switch scheduler -m demand_aware`, `switch scheduler -m least_load`, `switch scheduler -m round_robin`, or `quit`. These affect the current process. Controller currently requires its interactive console.
 
+### Instance load
+
+Run `show load -n 1000` to inspect the latest 1,000 request records in
+Controller arrival order (or all available records if fewer were received).
+The Prefill table counts input tokens; the Decode table counts requested
+output-token budgets, not generated tokens. Per-instance throughput uses the
+same window for all instances, from the first included arrival to the last
+included request's finish. It is unavailable while any included request is
+in flight. Missing instance addresses are shown separately; idle instances
+are not added as zero-load entries. The overall relative standard deviation
+display is the mean of the available Prefill and Decode relative standard
+deviations, not a pooled statistic. History is in memory and resets on restart.
+
 ## Scheduling workflow
 
 Registration/update/unregister events refresh the versioned resource snapshot. The snapshot filters compatible P/D Connector pairs. For a multi-Pool request the manager passes token length, output limit, SLO and the current snapshot to a strategy. No compatible pair means routing cannot proceed. Affinity reuse, when enabled, is validated against the current snapshot.

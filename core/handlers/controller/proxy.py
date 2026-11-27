@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import math
 import time
@@ -9,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Request as FastAPIRequest
 from fastapi.responses import StreamingResponse, JSONResponse
+from starlette.requests import ClientDisconnect
 
 from core.schemas.request import BaseRequest as SchedulerRequest
 from proxy.forward import forward_request
@@ -18,6 +20,9 @@ from utils import timing
 from pdschedule.paths import controller_log_file
 
 from store.controller import PoolManager
+from store.controller.instance_token_stats import (
+    STATUS_CANCELLED, STATUS_COMPLETED, STATUS_FAILED, get_instance_token_stats,
+)
 global_storage = PoolManager()
 
 
@@ -267,7 +272,8 @@ def _handle_client(
     payload: Dict[str, Any],
     client_ip: str,
     scheduler_instance: Any,
-    app
+    app,
+    request_id: int,
 ) -> SchedulerRequest:
     """
     根据 HTTP 请求信息
@@ -276,9 +282,6 @@ def _handle_client(
       - payload: 解析后的 JSON 字典
       - client_ip: 客户端 IP 字符串
     """
-    # 分配 request_id（1~65535 循环）
-    request_id = id_alloc.next_id()
-
     # # 打印调试信息
     # print("+" * 80)
     # print(f"[Scheduler] 收到 HTTP 请求: path={url_path}, client_ip={client_ip},\n"
@@ -318,6 +321,59 @@ def _handle_client(
     return req_obj
 
 
+def _tracked_request(request, payload, client_ip, scheduler):
+    stats = get_instance_token_stats(request.app)
+    request_id = id_alloc.next_id()
+    record = stats.begin(request_id) if stats is not None else None
+    try:
+        req_obj = _handle_client(
+            request.url.path, payload, client_ip, scheduler, request.app, request_id
+        )
+        if stats is not None:
+            stats.set_tokens(
+                record, req_obj.Prompt.token_length, req_obj.Prompt.max_tokens,
+                pd_request=req_obj.Service.Enable_PD_Disaggregation,
+            )
+        return req_obj, stats, record
+    except BaseException as exc:
+        if stats is not None:
+            stats.finish(record, _request_failure_status(exc))
+        raise
+
+
+def _request_failure_status(exc):
+    if isinstance(exc, (asyncio.CancelledError, GeneratorExit, ClientDisconnect)):
+        return STATUS_CANCELLED
+    return STATUS_FAILED
+
+
+def _attribute_instances(stats, record, headers):
+    if stats is not None:
+        stats.attribute(
+            record, prefill_instance=headers.get("x-pd-prefill-instance"),
+            decode_instance=headers.get("x-pd-decode-instance"), saw_headers=True,
+        )
+
+
+class _TrackedLoadResponse(StreamingResponse):
+    def __init__(self, body, stats, record):
+        super().__init__(body, media_type="application/json")
+        self.stats = stats
+        self.record = record
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        except BaseException as exc:
+            if self.stats is not None:
+                self.stats.finish(self.record, _request_failure_status(exc))
+            raise
+        finally:
+            if self.stats is not None:
+                self.stats.finish(self.record, STATUS_CANCELLED)
+            await self.body_iterator.aclose()
+
+
 # ======================= 调度器方法路由 =======================
 async def create_chat_completions(request: FastAPIRequest):
     """
@@ -353,10 +409,16 @@ async def create_chat_completions(request: FastAPIRequest):
     scheduler_instance = request.app.state.global_scheduler
 
     # 构建内部 Request（包含 Prompt/Service/Task 等）
-    req_obj = _handle_client(url_path, payload, client_ip, scheduler_instance, request.app)
+    req_obj, stats, record = _tracked_request(request, payload, client_ip, scheduler_instance)
     try:
         await _prepare_pd_request(req_obj)
+    except asyncio.CancelledError:
+        if stats is not None:
+            stats.finish(record, STATUS_CANCELLED)
+        raise
     except Exception as exc:
+        if stats is not None:
+            stats.finish(record, STATUS_FAILED)
         return JSONResponse(
             status_code=503,
             content={"error": "pd_instance_selection_failed", "detail": str(exc)},
@@ -387,10 +449,16 @@ async def create_chat_completions(request: FastAPIRequest):
         start_time = time.perf_counter()
         chunk_times: List[float] = []
         stage_timings = None
+        status = STATUS_FAILED
+
+        def capture_status(code):
+            nonlocal status
+            status = STATUS_COMPLETED if 200 <= code < 300 else STATUS_FAILED
 
         def capture(headers):
             nonlocal stage_timings
             stage_timings = _capture_stage_timings(headers)
+            _attribute_instances(stats, record, headers)
 
         try:
             async for chunk in forward_request(
@@ -399,17 +467,24 @@ async def create_chat_completions(request: FastAPIRequest):
                 use_chunked=True,
                 extra_headers=extra_headers,
                 on_success_headers=capture,
+                on_status=capture_status,
             ):
                 _observe_stream_chunk(chunk, chunk_times)
                 yield chunk
             _log_stream_slo_trace(req_obj, start_time, chunk_times, stage_timings)
+            if stats is not None:
+                stats.finish(record, status)
+        except BaseException as exc:
+            if stats is not None:
+                stats.finish(record, _request_failure_status(exc))
+            raise
         finally:
             get_connector_manager().close_session(
                 req_obj.Task.connector_session_id
             )
 
     # 用 StreamingResponse 包一层，实现用户侧的流式响应
-    return StreamingResponse(iter_upstream(), media_type="application/json")
+    return _TrackedLoadResponse(iter_upstream(), stats, record)
 
 
 async def create_completions(request: FastAPIRequest):
@@ -445,10 +520,16 @@ async def create_completions(request: FastAPIRequest):
     scheduler_instance = request.app.state.global_scheduler
 
     # 构建内部 Request（包含 Prompt/Service/Task 等）
-    req_obj = _handle_client(url_path, payload, client_ip, scheduler_instance, request.app)
+    req_obj, stats, record = _tracked_request(request, payload, client_ip, scheduler_instance)
     try:
         await _prepare_pd_request(req_obj)
+    except asyncio.CancelledError:
+        if stats is not None:
+            stats.finish(record, STATUS_CANCELLED)
+        raise
     except Exception as exc:
+        if stats is not None:
+            stats.finish(record, STATUS_FAILED)
         return JSONResponse(
             status_code=503,
             content={"error": "pd_instance_selection_failed", "detail": str(exc)},
@@ -480,10 +561,16 @@ async def create_completions(request: FastAPIRequest):
         response_body = b""
         chunk_times: List[float] = []
         stage_timings = None
+        status = STATUS_FAILED
+
+        def capture_status(code):
+            nonlocal status
+            status = STATUS_COMPLETED if 200 <= code < 300 else STATUS_FAILED
 
         def capture(headers):
             nonlocal stage_timings
             stage_timings = _capture_stage_timings(headers)
+            _attribute_instances(stats, record, headers)
 
         try:
             async for content in forward_request(
@@ -492,6 +579,7 @@ async def create_completions(request: FastAPIRequest):
                     use_chunked=req_obj.Prompt.stream,
                     extra_headers=extra_headers,
                     on_success_headers=capture,
+                    on_status=capture_status,
             ):
                 if req_obj.Prompt.stream:
                     _observe_stream_chunk(content, chunk_times)
@@ -504,10 +592,16 @@ async def create_completions(request: FastAPIRequest):
                 _log_non_stream_slo_trace(
                     req_obj, start_time, response_body, stage_timings[0] if stage_timings else None
                 )
+            if stats is not None:
+                stats.finish(record, status)
+        except BaseException as exc:
+            if stats is not None:
+                stats.finish(record, _request_failure_status(exc))
+            raise
         finally:
             get_connector_manager().close_session(
                 req_obj.Task.connector_session_id
             )
 
     # 用 StreamingResponse 包一层，实现用户侧的流式响应
-    return StreamingResponse(iter_upstream(), media_type="application/json")
+    return _TrackedLoadResponse(iter_upstream(), stats, record)

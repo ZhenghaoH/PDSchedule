@@ -2,7 +2,7 @@ import os
 import sys
 from fastapi import FastAPI
 from core.schemas.cmd import BaseCommand
-from core.commands.controller.show import do_show_pool_id
+from core.commands.controller.show import do_show_load, do_show_pool_id
 
 
 if sys.platform == 'win32':
@@ -66,6 +66,7 @@ def do_history():
 def info():
     """展示命令信息"""
     print("  - show pool_id         : 显示推理池ID")
+    print("  - show load -n <N>     : 显示最近 N 条请求的实例级负载统计")
     print("  - show scheduler       : 显示Controller路由模式或全局调度策略")
     print("  - switch scheduler -m <mode>: 切换全局调度策略（可用项见 show scheduler）")
     print("  - history              : 查看历史记录")
@@ -128,6 +129,12 @@ def run_scheduler_cli(app: FastAPI, server: "object") -> None:
         elif cmd == BaseCommand("show", "pool_id"):
             do_show_pool_id()
 
+        elif cmd == BaseCommand("show", "load"):
+            limit = cmd.get("n")
+            if isinstance(limit, bool) or not str(limit).isascii() or not str(limit).isdigit() or int(limit) <= 0:
+                print("[CLI] Usage: show load -n <positive integer>")
+                continue
+            do_show_load(getattr(app.state, "instance_token_stats", None), int(limit))
         elif cmd == BaseCommand("show", "scheduler"):
             scheduler = getattr(app.state, "global_scheduler", None)
             if scheduler is None:

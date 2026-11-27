@@ -76,6 +76,9 @@ async def lifespan(app: FastAPI):
     # ------------------------------------------
     # 初始化亲和性调度运行时状态
     # ------------------------------------------
+    from store.controller.instance_token_stats import InstanceTokenStats
+
+    app.state.instance_token_stats = InstanceTokenStats()
     app.state.affinity_store = {}  # type: ignore
     app.state.affinity_lock = threading.Lock()  # type: ignore
     logging.info("[Scheduler] Affinity store initialized.")

@@ -44,7 +44,7 @@ def _log_forward_request_info(url, data):
     logging.info("\n".join(lines))
 
 
-async def forward_request(url, data, use_chunked=True, extra_headers: Optional[dict] = None, *, on_success_headers=None):
+async def forward_request(url, data, use_chunked=True, extra_headers: Optional[dict] = None, *, on_success_headers=None, on_status=None):
     """
         将请求以 HTTP POST 方式转发到下游（例如 vLLM 实例或 Proxy），并以异步流的形式返回响应内容。
 
@@ -88,6 +88,8 @@ async def forward_request(url, data, use_chunked=True, extra_headers: Optional[d
             # 向下游发送 POST 请求，使用 JSON 体和自定义 headers
             async with session.post(url=url, json=data,
                                     headers=headers) as response:
+                if on_status is not None:
+                    on_status(response.status)
                 if on_success_headers is not None and 200 <= response.status < 300:
                     on_success_headers(response.headers)
                 #  下游返回 2xx 或 4xx 时，视为“正常响应”（4xx 多为参数错误、鉴权失败等）
@@ -195,7 +197,7 @@ async def forward_request_trace(
         try:
             async with session.post(url=url, json=data, headers=headers) as response:
                 if on_success_headers is not None and 200 <= response.status < 300:
-                    await on_success_headers()
+                    await on_success_headers(response.headers)
                 if 200 <= response.status < 300 or 400 <= response.status < 500:
 
                     # 标记是否为首个数据块

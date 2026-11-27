@@ -1383,11 +1383,13 @@ class RequestBatcher:
                 print("+" * 80)
                 print("\n\n\n")
 
+                prefill_started = time.perf_counter()
                 prefill_response = await forward_request_json(
                     url=target_url,
                     data=payload,
                     extra_headers=connector_manager.headers(request),
                 )
+                prefill_rpc_ms = (time.perf_counter() - prefill_started) * 1000.0
                 connector_manager.bind_prefill_result(request, prefill_response)
                 kv_transfer_params = request.Task.connector_context.get(
                     "kv_transfer_params", {}
@@ -1422,6 +1424,7 @@ class RequestBatcher:
                             "success": True,
                             "instance": instance,
                             "prefill_response": prefill_response,
+                            "prefill_rpc_ms": prefill_rpc_ms,
                             "kv_transfer_params": kv_transfer_params,
                         }
                         self.batch_manager[rid_key]["event"].set()

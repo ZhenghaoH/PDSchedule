@@ -1,4 +1,6 @@
 import sys
+import time
+from contextlib import aclosing
 
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -14,6 +16,44 @@ from connectors.manager import get_connector_manager
 request_batcher = RequestBatcher()
 LOG_SEPARATOR = "+" * 80
 LOG_ITEM_SEPARATOR = "-" * 80
+
+
+class _PDStageResponse(StreamingResponse):
+    """Send internal timings when the Decode gateway returns headers."""
+
+    def __init__(self, decode_stream, prefill_rpc_ms, stream):
+        super().__init__(iter(()))
+        self.decode_stream = decode_stream
+        self.stream = stream
+        if prefill_rpc_ms is not None:
+            self.headers["x-pd-prefill-rpc-ms"] = f"{prefill_rpc_ms:.3f}"
+
+    async def stream_response(self, send):
+        started = False
+        decode_started = time.perf_counter()
+
+        async def send_headers():
+            nonlocal started
+            if not started:
+                await send({
+                    "type": "http.response.start",
+                    "status": self.status_code,
+                    "headers": self.raw_headers,
+                })
+                started = True
+
+        async def on_decode_headers():
+            if self.stream:
+                elapsed_ms = (time.perf_counter() - decode_started) * 1000.0
+                self.headers["x-pd-decode-to-headers-ms"] = f"{elapsed_ms:.3f}"
+            await send_headers()
+
+        async with aclosing(self.decode_stream(on_decode_headers)) as body:
+            async for chunk in body:
+                await send_headers()
+                await send({"type": "http.response.body", "body": chunk, "more_body": True})
+        await send_headers()
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
 
 
 def _log_prefill_instance_status(storage: GatewayStoreManager, selected_instance: str) -> None:
@@ -139,6 +179,7 @@ def _bind_prefill_connector(
 
 async def _handle_pd_request(request: BaseRequest, endpoint_type: str):
     storage = GatewayStoreManager()
+    prefill_rpc_ms = None
     if storage.USE_SYN:
         batch_result = await request_batcher.add_connector_prefill_request(request)
         if batch_result.get("error"):
@@ -148,6 +189,7 @@ async def _handle_pd_request(request: BaseRequest, endpoint_type: str):
             )
         if not batch_result.get("success", True):
             raise HTTPException(status_code=500, detail="Connector prefill batch failed")
+        prefill_rpc_ms = batch_result.get("prefill_rpc_ms")
 
         kv_transfer_params = batch_result.get("kv_transfer_params")
         connector_manager = get_connector_manager()
@@ -178,11 +220,13 @@ async def _handle_pd_request(request: BaseRequest, endpoint_type: str):
 
             connector_manager = get_connector_manager()
             prefill_payload = connector_manager.build_prefill_payload(request)
+            prefill_started = time.perf_counter()
             prefill_response = await forward_request_json(
                 f"http://{selected_prefill}/v1/{endpoint_type}",
                 prefill_payload,
                 extra_headers=connector_manager.headers(request),
             )
+            prefill_rpc_ms = (time.perf_counter() - prefill_started) * 1000.0
             connector_manager.bind_prefill_result(request, prefill_response)
         finally:
             request_batcher.scheduler_mgr.on_request_finished(request)
@@ -191,16 +235,22 @@ async def _handle_pd_request(request: BaseRequest, endpoint_type: str):
     if not decode_proxy:
         raise HTTPException(status_code=503, detail="No selected decode gateway")
 
-    decode_generator = forward_request(
-        f"http://{decode_proxy}/v1/{endpoint_type}",
-        BaseRequest.to_decode_payload(request),
-        arrival_time=request.Service.arrival_time,
-        slo_sec=request.Service.SLO_TTFT / 1000.0,
-        request_id=request.Request_ID,
-        stats_callback=request_batcher.monitor_engine.handle_ttft_stats,
-        extra_headers=get_connector_manager().headers(request),
-    )
-    return StreamingResponse(decode_generator)
+    decode_payload = BaseRequest.to_decode_payload(request)
+    decode_headers = get_connector_manager().headers(request)
+
+    def decode_stream(on_success_headers):
+        return forward_request(
+            f"http://{decode_proxy}/v1/{endpoint_type}",
+            decode_payload,
+            arrival_time=request.Service.arrival_time,
+            slo_sec=request.Service.SLO_TTFT / 1000.0,
+            request_id=request.Request_ID,
+            stats_callback=request_batcher.monitor_engine.handle_ttft_stats,
+            extra_headers=decode_headers,
+            on_success_headers=on_success_headers,
+        )
+
+    return _PDStageResponse(decode_stream, prefill_rpc_ms, request.Prompt.stream)
 
 
 async def _handle_non_pd_request(request: BaseRequest, endpoint_type: str):

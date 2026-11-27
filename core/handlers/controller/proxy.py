@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from datetime import datetime
 from pathlib import Path
@@ -89,6 +90,8 @@ def _build_slo_trace_log(
     generated_units: int,
     generated_units_label: str = "生成内容片段数",
     completion_tokens: Optional[int] = None,
+    prefill_rpc_ms: Optional[float] = None,
+    kv_observed_ms: Optional[float] = None,
 ) -> str:
     slo_ttft = getattr(req_obj.Service, "SLO_TTFT", None)
     slo_tpot = getattr(req_obj.Service, "SLO_TPOT", None)
@@ -114,6 +117,8 @@ def _build_slo_trace_log(
         f"SLO_TPOT: {slo_tpot} ms",
         f"SLO_E2E: {slo_e2e} ms",
         LOG_ITEM_SEPARATOR,
+        f"Prefill 时间: {_format_ms(prefill_rpc_ms)}",
+        f"KV 传输观测时间: {_format_ms(kv_observed_ms)}",
         f"实测TTFT: {_format_ms(ttft_ms)}",
         f"实测TPOT: {_format_ms(tpot_ms)}",
         f"实测E2E: {_format_ms(e2e_ms)}",
@@ -130,7 +135,22 @@ def _build_slo_trace_log(
     return "\n".join(lines)
 
 
-def _log_stream_slo_trace(req_obj: SchedulerRequest, start_time: float, chunk_times: List[float]) -> None:
+def _capture_stage_timings(headers) -> tuple[Optional[float], Optional[float], float]:
+    received_at = time.perf_counter()
+
+    def parse(name):
+        try:
+            value = float(headers.get(name, ""))
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) and value >= 0 else None
+
+    return parse("x-pd-prefill-rpc-ms"), parse("x-pd-decode-to-headers-ms"), received_at
+
+
+def _log_stream_slo_trace(
+    req_obj: SchedulerRequest, start_time: float, chunk_times: List[float], stage_timings=None
+) -> None:
     end_time = time.perf_counter()
     ttft_ms: Optional[float] = None
     tpot_ms: Optional[float] = None
@@ -138,6 +158,11 @@ def _log_stream_slo_trace(req_obj: SchedulerRequest, start_time: float, chunk_ti
         ttft_ms = (chunk_times[0] - start_time) * 1000.0
     if len(chunk_times) > 1:
         tpot_ms = ((chunk_times[-1] - chunk_times[0]) / (len(chunk_times) - 1)) * 1000.0
+    prefill_ms, decode_ms, received_at = stage_timings or (None, None, 0.0)
+    kv_ms = (
+        decode_ms + max(0.0, (chunk_times[0] - received_at) * 1000.0)
+        if decode_ms is not None and chunk_times and req_obj.Prompt.stream else None
+    )
 
     log_text = _build_slo_trace_log(
         req_obj,
@@ -148,11 +173,15 @@ def _log_stream_slo_trace(req_obj: SchedulerRequest, start_time: float, chunk_ti
         e2e_ms=(end_time - start_time) * 1000.0,
         generated_units=len(chunk_times),
         generated_units_label="非空响应chunk数",
+        prefill_rpc_ms=prefill_ms,
+        kv_observed_ms=kv_ms,
     )
     _append_global_schedule_log(log_text)
 
 
-def _log_non_stream_slo_trace(req_obj: SchedulerRequest, start_time: float, body: bytes) -> None:
+def _log_non_stream_slo_trace(
+    req_obj: SchedulerRequest, start_time: float, body: bytes, prefill_rpc_ms=None
+) -> None:
     end_time = time.perf_counter()
     e2e_ms = (end_time - start_time) * 1000.0
     completion_tokens = _extract_completion_tokens(body)
@@ -167,6 +196,7 @@ def _log_non_stream_slo_trace(req_obj: SchedulerRequest, start_time: float, body
         e2e_ms=e2e_ms,
         generated_units=completion_tokens or 0,
         completion_tokens=completion_tokens,
+        prefill_rpc_ms=prefill_rpc_ms,
     )
     _append_global_schedule_log(log_text)
 
@@ -356,16 +386,23 @@ async def create_chat_completions(request: FastAPIRequest):
     async def iter_upstream():
         start_time = time.perf_counter()
         chunk_times: List[float] = []
+        stage_timings = None
+
+        def capture(headers):
+            nonlocal stage_timings
+            stage_timings = _capture_stage_timings(headers)
+
         try:
             async for chunk in forward_request(
                 url=downstream_url,
                 data=data_for_downstream,
                 use_chunked=True,
                 extra_headers=extra_headers,
+                on_success_headers=capture,
             ):
                 _observe_stream_chunk(chunk, chunk_times)
                 yield chunk
-            _log_stream_slo_trace(req_obj, start_time, chunk_times)
+            _log_stream_slo_trace(req_obj, start_time, chunk_times, stage_timings)
         finally:
             get_connector_manager().close_session(
                 req_obj.Task.connector_session_id
@@ -441,16 +478,32 @@ async def create_completions(request: FastAPIRequest):
     async def iter_upstream():
         start_time = time.perf_counter()
         response_body = b""
+        chunk_times: List[float] = []
+        stage_timings = None
+
+        def capture(headers):
+            nonlocal stage_timings
+            stage_timings = _capture_stage_timings(headers)
+
         try:
             async for content in forward_request(
                     url=downstream_url,
                     data=data_for_downstream,
-                    use_chunked=False,
+                    use_chunked=req_obj.Prompt.stream,
                     extra_headers=extra_headers,
+                    on_success_headers=capture,
             ):
-                response_body += content
+                if req_obj.Prompt.stream:
+                    _observe_stream_chunk(content, chunk_times)
+                else:
+                    response_body += content
                 yield content
-            _log_non_stream_slo_trace(req_obj, start_time, response_body)
+            if req_obj.Prompt.stream:
+                _log_stream_slo_trace(req_obj, start_time, chunk_times, stage_timings)
+            else:
+                _log_non_stream_slo_trace(
+                    req_obj, start_time, response_body, stage_timings[0] if stage_timings else None
+                )
         finally:
             get_connector_manager().close_session(
                 req_obj.Task.connector_session_id
